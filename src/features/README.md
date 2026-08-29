@@ -27,9 +27,24 @@ The H3 domain is an explicit input. It must be derived from a fixed service area
 not from all incident locations, because using future incident locations to
 construct earlier rows would leak future information.
 
-`coverage_ratio` is currently supplied by the build configuration. A real source
-must compute it from documented source-availability telemetry before the feature
-is used for modeling.
+Historical/offline builds still accept `coverage_ratio` in their build
+configuration. Operational future builds do not trust that value:
+`FutureFeatureBuilder` loads the latest completed per-source measured coverage,
+weights it by expected seconds, and fails closed if any source has no telemetry.
+
+## Scheduled future snapshots
+
+`ScheduledFeatureGenerator.run(now)` aligns to the next configured UTC interval,
+builds exactly one future window, validates every row against
+`forecast-feature-row.schema.json`, and persists the tenant-scoped snapshot. A
+future row contains no `event_count`. All event-derived predictors require both
+`occurred_at` and `received_at` to be before the target, so a late-arriving or
+future event cannot change an already targeted feature row.
+
+The application scheduler should invoke this helper once per feature interval
+and pass its rows to Person 2's operational inference service. Repeating a run
+with the same inputs produces the same version and safely replaces the same
+snapshot record.
 
 ## Provenance manifest
 

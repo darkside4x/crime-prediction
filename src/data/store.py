@@ -146,6 +146,30 @@ class IngestionStore:
                 ),
             )
 
+    def register_camera_source(self, payload: dict[str, Any]) -> None:
+        """Register a camera source as an accepted-event foreign-key parent.
+
+        The full camera definition remains in the restricted video store. This
+        compatibility record contains secret references, never resolved values.
+        """
+        validate_contract("camera-source.schema.json", payload)
+        with self.connect() as connection:
+            connection.execute(
+                """INSERT INTO sources (
+                       tenant_id, source_id, schema_version, definition_json, registered_at
+                   ) VALUES (?, ?, ?, ?, ?)
+                   ON CONFLICT (tenant_id, source_id) DO UPDATE SET
+                       schema_version=excluded.schema_version,
+                       definition_json=excluded.definition_json""",
+                (
+                    payload["tenant_id"],
+                    payload["source_id"],
+                    payload["schema_version"],
+                    json.dumps(payload, sort_keys=True, separators=(",", ":")),
+                    utc_now(),
+                ),
+            )
+
     def start_run(self, source: SourceDefinition) -> str:
         run_id = str(uuid.uuid4())
         with self.connect() as connection:

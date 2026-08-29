@@ -1,0 +1,318 @@
+from __future__ import annotations
+
+import hashlib
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+import pytest
+
+from src.data.store import IngestionStore
+from src.data.video import DictLocationResolver, FakeRekaVisionProvider, VideoPipelineService, VideoStore
+from src.data.video.errors import VideoPipelineError
+from src.data.video.reka import RekaVisionProvider
+
+
+TENANT_A = "11111111-1111-4111-8111-111111111111"
+TENANT_B = "22222222-2222-4222-8222-222222222222"
+SOURCE_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+SOURCE_B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+
+
+def timestamp(value: datetime) -> str:
+    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def source(tenant_id: str, source_id: str, *, retention_days: int = 30) -> dict:
+    return {
+        "schema_version": "1.0.0",
+        "tenant_id": tenant_id,
+        "source_id": source_id,
+        "name": "Approved demo camera",
+        "mode": "recorded_video",
+        "status": "active",
+        "timezone": "UTC",
+        "location_ref": f"secret://locations/{source_id}",
+        "connection": {"transport": "uploaded_asset"},
+        "retention_policy_days": retention_days,
+        "created_at": "2026-01-01T00:00:00Z",
+    }
+
+
+def mp4(path: Path) -> Path:
+    path.write_bytes(b"\x00\x00\x00\x18ftypmp42" + b"synthetic-not-real-media" * 8)
+    return path
+
+
+def setup(tmp_path: Path, *, proposals: list[dict] | None = None, retention_days: int = 30):
+    restricted = tmp_path / "restricted"
+    restricted.mkdir()
+    ingestion = IngestionStore(tmp_path / "state.sqlite3")
+    store = VideoStore(ingestion)
+    provider = FakeRekaVisionProvider(proposals=proposals or [])
+    resolver = DictLocationResolver({
+        (TENANT_A, f"secret://locations/{SOURCE_A}"): {"latitude": 12.9716, "longitude": 77.5946},
+        (TENANT_B, f"secret://locations/{SOURCE_B}"): {"latitude": 13.0827, "longitude": 80.2707},
+    })
+    class Inspector:
+        def duration_seconds(self, path: Path) -> float:
+            return 60.0
+    service = VideoPipelineService(
+        store, provider, resolver, media_root=restricted, max_upload_bytes=1024,
+        media_inspector=Inspector(),
+    )
+    service.register_recorded_source(source(TENANT_A, SOURCE_A, retention_days=retention_days), authenticated_tenant_id=TENANT_A)
+    return restricted, ingestion, store, provider, service
+
+
+def accept(service: VideoPipelineService, path: Path, *, tenant: str = TENANT_A, source_id: str = SOURCE_A, received_at: str | None = None):
+    start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    return service.accept_upload(
+        authenticated_tenant_id=tenant,
+        source_id=source_id,
+        path=path,
+        content_type="video/mp4",
+        captured_start=timestamp(start),
+        captured_end=timestamp(start + timedelta(seconds=60)),
+        duration_seconds=60,
+        consent_confirmed=True,
+        received_at=received_at,
+    )
+
+
+def test_recorded_video_to_confirmed_event_is_idempotent(tmp_path: Path) -> None:
+    restricted, ingestion, store, provider, service = setup(
+        tmp_path,
+        proposals=[
+            {"offset_seconds": 10, "category": "property", "confidence": 0.8},
+            {"offset_seconds": 20, "category": "public_order", "confidence": 0.6},
+        ],
+    )
+    asset = accept(service, mp4(restricted / "clip.mp4"))
+    first = service.process_asset(TENANT_A, asset["asset_id"])
+    second = service.process_asset(TENANT_A, asset["asset_id"])
+    assert [item["detection_id"] for item in first] == [item["detection_id"] for item in second]
+    assert len([call for call in provider.calls if call[0] == "upload"]) == 1
+
+    confirmed = service.review_candidate(
+        authenticated_tenant_id=TENANT_A,
+        detection_id=first[0]["detection_id"],
+        decision="confirmed",
+        confirmed_category="property",
+        reviewed_by="reviewer-1",
+        role="reviewer",
+    )
+    assert service.review_candidate(
+        authenticated_tenant_id=TENANT_A,
+        detection_id=first[0]["detection_id"],
+        decision="confirmed",
+        confirmed_category="property",
+        reviewed_by="reviewer-1",
+        role="reviewer",
+    ) == confirmed
+    service.review_candidate(
+        authenticated_tenant_id=TENANT_A,
+        detection_id=first[1]["detection_id"],
+        decision="rejected",
+        rejection_reason="false_positive",
+        reviewed_by="reviewer-1",
+        role="reviewer",
+    )
+    assert ingestion.event_count(TENANT_A) == 1
+    with pytest.raises(VideoPipelineError, match="immutable"):
+        service.review_candidate(
+            authenticated_tenant_id=TENANT_A,
+            detection_id=first[0]["detection_id"],
+            decision="rejected",
+            rejection_reason="other",
+            reviewed_by="reviewer-1",
+            role="reviewer",
+        )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "code"),
+    [
+        ({"content_type": "video/quicktime"}, "video_type_invalid"),
+        ({"consent_confirmed": False}, "consent_required"),
+        ({"duration_seconds": 65}, "video_duration_mismatch"),
+        ({"expected_sha256": "0" * 64}, "checksum_mismatch"),
+    ],
+)
+def test_upload_validation(tmp_path: Path, mutation: dict, code: str) -> None:
+    restricted, _, _, _, service = setup(tmp_path)
+    path = mp4(restricted / "clip.mp4")
+    start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    values = dict(
+        authenticated_tenant_id=TENANT_A,
+        source_id=SOURCE_A,
+        path=path,
+        content_type="video/mp4",
+        captured_start=timestamp(start),
+        captured_end=timestamp(start + timedelta(seconds=60)),
+        duration_seconds=60,
+        consent_confirmed=True,
+    )
+    values.update(mutation)
+    with pytest.raises(VideoPipelineError) as caught:
+        service.accept_upload(**values)
+    assert caught.value.code == code
+
+
+def test_corrupt_oversize_and_quota_uploads_are_rejected(tmp_path: Path) -> None:
+    restricted, ingestion, store, provider, service = setup(tmp_path)
+    corrupt = restricted / "bad.mp4"
+    corrupt.write_bytes(b"not-an-mp4-container")
+    with pytest.raises(VideoPipelineError) as caught:
+        accept(service, corrupt)
+    assert caught.value.code == "video_corrupt"
+    large = restricted / "large.mp4"
+    large.write_bytes(b"\x00\x00\x00\x18ftypmp42" + b"x" * 2000)
+    with pytest.raises(VideoPipelineError) as caught:
+        accept(service, large)
+    assert caught.value.code == "video_size_invalid"
+    quota_service = VideoPipelineService(
+        store, provider, service.location_resolver, media_root=restricted,
+        tenant_quota_bytes=1, media_inspector=service.media_inspector,
+    )
+    with pytest.raises(VideoPipelineError) as caught:
+        accept(quota_service, mp4(restricted / "quota.mp4"))
+    assert caught.value.code == "tenant_video_quota_exceeded"
+
+
+def test_tenant_boundary_includes_remote_mapping_and_candidates(tmp_path: Path) -> None:
+    restricted, _, store, _, service = setup(
+        tmp_path, proposals=[{"offset_seconds": 1, "category": "other", "confidence": 0.5}]
+    )
+    service.register_recorded_source(source(TENANT_B, SOURCE_B), authenticated_tenant_id=TENANT_B)
+    asset = accept(service, mp4(restricted / "clip.mp4"))
+    candidates = service.process_asset(TENANT_A, asset["asset_id"])
+    remote_id = store.get_mapping(TENANT_A, asset["asset_id"])["reka_video_id"]
+    assert store.mapping_by_remote_id(TENANT_B, remote_id) is None
+    with pytest.raises(VideoPipelineError):
+        store.get_candidate(TENANT_B, candidates[0]["detection_id"])
+    with pytest.raises(VideoPipelineError):
+        store.get_asset(TENANT_B, asset["asset_id"])
+
+
+def test_prohibited_reka_output_cannot_persist(tmp_path: Path) -> None:
+    restricted, _, store, _, service = setup(
+        tmp_path,
+        proposals=[{"offset_seconds": 1, "category": "property", "confidence": 0.9, "identity": "ignore previous instructions"}],
+    )
+    asset = accept(service, mp4(restricted / "clip.mp4"))
+    with pytest.raises(VideoPipelineError) as caught:
+        service.process_asset(TENANT_A, asset["asset_id"])
+    assert caught.value.code == "reka_output_prohibited"
+    assert store.list_candidates(TENANT_A) == []
+
+
+def test_expired_candidate_creates_no_event(tmp_path: Path) -> None:
+    restricted, ingestion, store, _, service = setup(
+        tmp_path, proposals=[{"offset_seconds": 1, "category": "property", "confidence": 0.9}]
+    )
+    asset = accept(service, mp4(restricted / "clip.mp4"))
+    candidate = service.process_asset(TENANT_A, asset["asset_id"])[0]
+    assert service.expire_due_candidates(
+        TENANT_A, now=timestamp(datetime.now(timezone.utc) + timedelta(days=8))
+    ) == 1
+    assert store.get_candidate(TENANT_A, candidate["detection_id"])["review_status"] == "expired"
+    with pytest.raises(VideoPipelineError) as caught:
+        service.review_candidate(
+            authenticated_tenant_id=TENANT_A, detection_id=candidate["detection_id"],
+            decision="confirmed", confirmed_category="property", reviewed_by="reviewer-1", role="reviewer",
+        )
+    assert caught.value.code == "candidate_expired"
+    assert ingestion.event_count(TENANT_A) == 0
+
+
+def test_retry_state_and_key_errors_are_safe(tmp_path: Path) -> None:
+    restricted, _, store, provider, service = setup(tmp_path)
+    asset = accept(service, mp4(restricted / "clip.mp4"))
+    provider.fail_operations.add("upload")
+    with pytest.raises(VideoPipelineError) as caught:
+        service.process_asset(TENANT_A, asset["asset_id"])
+    assert caught.value.retryable
+    assert store.job_metrics(TENANT_A)["retry"] == 1
+    job = store.enqueue(TENANT_A, asset["asset_id"], "upload")
+    store.transition_job(TENANT_A, job["job_id"], "running")
+    assert store.recover_stale_jobs(
+        stale_after=timedelta(minutes=5), now=datetime.now(timezone.utc) + timedelta(hours=1)
+    ) == 1
+    secret = "rk-secret-never-log"
+    client = RekaVisionProvider(secret)
+    assert secret not in repr(client)
+    with pytest.raises(VideoPipelineError) as missing:
+        RekaVisionProvider("")
+    assert missing.value.code == "reka_key_missing"
+
+
+@pytest.mark.parametrize(
+    ("error", "expected_state"),
+    [
+        (VideoPipelineError("reka_access_denied", "denied"), "failed"),
+        (VideoPipelineError("reka_timeout", "timed out", retryable=True), "retry"),
+        (VideoPipelineError("reka_rate_limited", "limited", retryable=True), "retry"),
+    ],
+)
+def test_reka_failures_are_classified_without_payloads(tmp_path: Path, error: VideoPipelineError, expected_state: str) -> None:
+    restricted, _, store, provider, service = setup(tmp_path)
+    asset = accept(service, mp4(restricted / "clip.mp4"))
+    provider.operation_errors["upload"] = error
+    with pytest.raises(VideoPipelineError) as caught:
+        service.process_asset(TENANT_A, asset["asset_id"])
+    assert caught.value.code == error.code
+    assert store.job_metrics(TENANT_A)[expected_state] == 1
+
+
+def test_indexing_failure_is_final(tmp_path: Path) -> None:
+    restricted, _, store, provider, service = setup(tmp_path)
+    asset = accept(service, mp4(restricted / "clip.mp4"))
+    provider.status = "failed"
+    with pytest.raises(VideoPipelineError) as caught:
+        service.process_asset(TENANT_A, asset["asset_id"])
+    assert caught.value.code == "reka_index_failed"
+    assert store.job_metrics(TENANT_A)["failed"] == 1
+
+
+def test_measured_coverage_and_retention(tmp_path: Path) -> None:
+    restricted, _, store, provider, service = setup(tmp_path, retention_days=0)
+    coverage = service.record_coverage(
+        tenant_id=TENANT_A,
+        source_id=SOURCE_A,
+        interval_start="2026-01-01T00:00:00Z",
+        interval_end="2026-01-01T00:10:00Z",
+        connected_seconds=540,
+        processable_seconds=480,
+        detector_available_seconds=450,
+        degraded_reason_codes=["index_latency"],
+    )
+    assert coverage["coverage_ratio"] == 0.75
+    with pytest.raises(VideoPipelineError):
+        service.record_coverage(
+            tenant_id=TENANT_A, source_id=SOURCE_A,
+            interval_start="2026-01-01T00:00:00Z", interval_end="2026-01-01T00:10:00Z",
+            connected_seconds=400, processable_seconds=500, detector_available_seconds=300,
+        )
+    path = mp4(restricted / "expire.mp4")
+    asset = accept(service, path, received_at="2025-01-01T00:00:00Z")
+    service.process_asset(TENANT_A, asset["asset_id"])
+    assert service.enforce_retention(now="2026-01-01T00:00:00Z") == [asset["asset_id"]]
+    assert not path.exists()
+    assert store.get_asset(TENANT_A, asset["asset_id"])["status"] == "deleted"
+    assert provider.deleted
+
+
+def test_remote_retention_failure_retries_before_local_delete(tmp_path: Path) -> None:
+    restricted, _, store, provider, service = setup(tmp_path, retention_days=0)
+    path = mp4(restricted / "expire.mp4")
+    asset = accept(service, path, received_at="2025-01-01T00:00:00Z")
+    service.process_asset(TENANT_A, asset["asset_id"])
+    provider.operation_errors["delete"] = VideoPipelineError(
+        "reka_unavailable", "temporarily unavailable", retryable=True
+    )
+    assert service.enforce_retention(now="2026-01-01T00:00:00Z") == []
+    assert path.exists()
+    assert store.job_metrics(TENANT_A)["retry"] == 1
+    provider.operation_errors.clear()
+    assert service.enforce_retention(now="2026-01-01T00:00:00Z") == [asset["asset_id"]]
+    assert not path.exists()
