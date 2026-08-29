@@ -10,9 +10,9 @@ respects `prefers-reduced-motion` via `<MotionConfig reducedMotion="user">`
 plus `useReducedMotion` guards on parallax/marquee.
 
 ```bash
-npm install
-npm run dev      # http://localhost:5173, proxies /v1 -> http://localhost:8000
-npm run build    # typecheck + production bundle
+pnpm install
+pnpm dev      # http://localhost:5173, proxies /v1 -> http://localhost:8000
+pnpm build    # typecheck + production bundle
 ```
 
 Structure:

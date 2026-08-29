@@ -16,13 +16,13 @@ docker compose up --build
 
 ```bash
 # API (terminal 1)
-pip install fastapi uvicorn h3 "jsonschema[format]"
-uvicorn src.api.app:app --port 8000
+python -m pip install -e ".[api]"
+uvicorn src.api.app:app --env-file .env --port 8000
 
 # Web (terminal 2)
 cd src/web
-npm install
-npm run dev
+pnpm install
+pnpm dev
 # dashboard: http://localhost:5173  (proxies /v1 to :8000)
 ```
 
@@ -41,7 +41,7 @@ a client-supplied `tenant_id` query parameter is rejected.
 
 ```bash
 python -m pytest tests/api        # tenant isolation, contracts, AI fail-safety
-cd src/web && npm run build       # typecheck + production build
+cd src/web && pnpm build          # typecheck + production build
 ```
 
 ## 3-minute presentation script
@@ -61,8 +61,8 @@ cd src/web && npm run build       # typecheck + production build
 
 ## Reka
 
-The demo uses a deterministic fake provider so it runs with no key. With a
-server-side `REKA_API_KEY` a real provider can be dropped into
-`src/api/reka.py` behind the same `RekaProvider` protocol; every response is
-schema-validated and uncited claims are discarded, falling back to
-deterministic facts on any failure.
+Copy `.env.example` to an ignored `.env` and set the server-side
+`REKA_API_KEY`. The API then selects the live `reka-flash` provider; without a
+key it selects the deterministic fake. Every response is schema-validated and
+uncited claims are discarded, falling back to deterministic facts on any
+failure. The browser never receives the API key.
