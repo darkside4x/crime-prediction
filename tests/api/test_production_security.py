@@ -1,19 +1,18 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
+import httpx
 import jwt
+import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi.testclient import TestClient
-import httpx
-import pytest
 
 from src.api import reka
 from src.api.app import create_app
 from src.api.security import InMemoryRateLimiter
 from src.api.settings import Settings
 from src.api.tenancy import OidcAuthenticationProvider
-
 
 TENANT = "00000000-0000-4000-8000-000000000001"
 
@@ -43,7 +42,7 @@ def _provider() -> tuple[OidcAuthenticationProvider, object]:
 
 
 def _token(private, **updates) -> str:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     claims = {
         "sub": "user-123",
         "iss": "https://identity.example/",
@@ -70,7 +69,7 @@ def test_oidc_validates_signature_issuer_audience_expiry_and_memberships() -> No
     assert principal.principal_id == "user-123"
     assert principal.active_tenant_id == TENANT
 
-    expired = _token(private, exp=datetime.now(timezone.utc) - timedelta(minutes=2))
+    expired = _token(private, exp=datetime.now(UTC) - timedelta(minutes=2))
     with pytest.raises(Exception) as error:
         provider.authenticate(expired)
     assert error.value.status_code == 401
@@ -89,6 +88,31 @@ def test_oidc_active_tenant_switch_cannot_escape_verified_memberships() -> None:
         provider.switch_active_tenant(token, "00000000-0000-4000-8000-000000000002")
     assert error.value.status_code == 403
     assert error.value.detail["code"] == "tenant_forbidden"
+
+
+def test_oidc_active_tenant_survives_token_rotation() -> None:
+    provider, private = _provider()
+    second_tenant = "00000000-0000-4000-8000-000000000002"
+    memberships = [
+        {
+            "tenant_id": TENANT,
+            "slug": "tenant-one",
+            "display_name": "Tenant One",
+            "role": "tenant_admin",
+        },
+        {
+            "tenant_id": second_tenant,
+            "slug": "tenant-two",
+            "display_name": "Tenant Two",
+            "role": "viewer",
+        },
+    ]
+    first_token = _token(private, tenant_memberships=memberships, jti="first")
+    provider.switch_active_tenant(first_token, second_tenant)
+
+    rotated_token = _token(private, tenant_memberships=memberships, jti="rotated")
+    assert rotated_token != first_token
+    assert provider.authenticate(rotated_token).active_tenant_id == second_tenant
 
 
 def test_security_middleware_bounds_requests_rate_and_sets_headers() -> None:

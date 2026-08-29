@@ -65,8 +65,9 @@ services:
       OIDC_MEMBERSHIPS_CLAIM: ${OIDC_MEMBERSHIPS_CLAIM:-tenant_memberships}
       API_WORKERS: ${API_WORKERS:-2}
     volumes:
-      - model-registry:/app/data/models
+      - ${MODEL_REGISTRY_HOST_PATH:?Mount the EFS model registry on the host}:/app/data/models
       - api-runtime:/app/data/runtime
+      - clamav-db:/var/lib/clamav:ro
     expose:
       - "8000"
     healthcheck:
@@ -78,6 +79,34 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
+      clamav-updater:
+        condition: service_healthy
+
+  clamav-updater:
+    build:
+      context: ../..
+      dockerfile: docker/api.Dockerfile
+    command: ["freshclam", "--foreground=true", "--checks=12", "--stdout"]
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    volumes:
+      - clamav-db:/var/lib/clamav
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          test -s /var/lib/clamav/daily.cvd ||
+          test -s /var/lib/clamav/daily.cld
+      interval: 30s
+      timeout: 3s
+      retries: 20
+      start_period: 90s
 
   web:
     build:
@@ -133,4 +162,4 @@ secrets:
 
 volumes:
   api-runtime:
-  model-registry:
+  clamav-db:

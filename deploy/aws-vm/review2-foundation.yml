@@ -1,0 +1,627 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Crime prediction review-two private data, queue, secret, and instance-role foundation.
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: review2
+    AllowedPattern: "[a-z0-9-]+"
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+  DatabaseSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+  DatabaseName:
+    Type: String
+    Default: crime_prediction
+    AllowedPattern: "[a-zA-Z][a-zA-Z0-9_]+"
+  DatabaseInstanceClass:
+    Type: String
+    Default: db.t4g.micro
+  MediaRetentionDays:
+    Type: Number
+    Default: 7
+    MinValue: 1
+    MaxValue: 30
+  AllowDatabaseBootstrap:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+
+Conditions:
+  AllowDatabaseBootstrapCondition: !Equals [!Ref AllowDatabaseBootstrap, "true"]
+
+Resources:
+  PlatformKey:
+    Type: AWS::KMS::Key
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Description: !Sub "Crime prediction ${EnvironmentName} media, RDS, and secret encryption"
+      EnableKeyRotation: true
+      PendingWindowInDays: 30
+      KeyPolicy:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AccountAdministration
+            Effect: Allow
+            Principal:
+              AWS: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:root"
+            Action: "kms:*"
+            Resource: "*"
+          - Sid: AwsServiceUse
+            Effect: Allow
+            Principal:
+              Service:
+                - rds.amazonaws.com
+                - secretsmanager.amazonaws.com
+            Action:
+              - kms:CreateGrant
+              - kms:Decrypt
+              - kms:DescribeKey
+              - kms:Encrypt
+              - kms:GenerateDataKey*
+              - kms:ReEncrypt*
+            Resource: "*"
+            Condition:
+              Bool:
+                kms:GrantIsForAWSResource: "true"
+
+  PlatformKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub "alias/crime-prediction-${EnvironmentName}"
+      TargetKeyId: !Ref PlatformKey
+
+  MediaBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - BucketKeyEnabled: true
+            ServerSideEncryptionByDefault:
+              KMSMasterKeyID: !GetAtt PlatformKey.Arn
+              SSEAlgorithm: aws:kms
+      LifecycleConfiguration:
+        Rules:
+          - Id: RestrictedMediaRetention
+            Status: Enabled
+            ExpirationInDays: !Ref MediaRetentionDays
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 1
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 1
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+      Tags:
+        - Key: application
+          Value: crime-prediction
+        - Key: environment
+          Value: !Ref EnvironmentName
+
+  MediaBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref MediaBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource:
+              - !GetAtt MediaBucket.Arn
+              - !Sub "${MediaBucket.Arn}/*"
+            Condition:
+              Bool:
+                aws:SecureTransport: "false"
+          - Sid: DenyIncorrectEncryption
+            Effect: Deny
+            Principal: "*"
+            Action: s3:PutObject
+            Resource: !Sub "${MediaBucket.Arn}/tenants/*"
+            Condition:
+              StringNotEquals:
+                s3:x-amz-server-side-encryption: aws:kms
+          - Sid: DenyIncorrectKmsKey
+            Effect: Deny
+            Principal: "*"
+            Action: s3:PutObject
+            Resource: !Sub "${MediaBucket.Arn}/tenants/*"
+            Condition:
+              StringNotEquals:
+                s3:x-amz-server-side-encryption-aws-kms-key-id: !GetAtt PlatformKey.Arn
+
+  AppSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Review application hosts; no public ingress
+      VpcId: !Ref VpcId
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub "crime-prediction-${EnvironmentName}-app"
+
+  DatabaseSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: PostgreSQL only from the review application security group
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref AppSecurityGroup
+      SecurityGroupEgress: []
+      Tags:
+        - Key: Name
+          Value: !Sub "crime-prediction-${EnvironmentName}-database"
+
+  ModelRegistrySecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: NFS only from review application hosts
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 2049
+          ToPort: 2049
+          SourceSecurityGroupId: !Ref AppSecurityGroup
+      SecurityGroupEgress: []
+      Tags:
+        - Key: Name
+          Value: !Sub "crime-prediction-${EnvironmentName}-model-registry"
+
+  ModelRegistryFileSystem:
+    Type: AWS::EFS::FileSystem
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BackupPolicy:
+        Status: ENABLED
+      Encrypted: true
+      FileSystemPolicy:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyUnencryptedTransport
+            Effect: Deny
+            Principal: "*"
+            Action: elasticfilesystem:ClientMount
+            Resource: "*"
+            Condition:
+              Bool:
+                aws:SecureTransport: "false"
+      FileSystemTags:
+        - Key: Name
+          Value: !Sub "crime-prediction-${EnvironmentName}-models"
+      KmsKeyId: !GetAtt PlatformKey.Arn
+      LifecyclePolicies:
+        - TransitionToIA: AFTER_7_DAYS
+      PerformanceMode: generalPurpose
+      ThroughputMode: bursting
+
+  ModelRegistryAccessPoint:
+    Type: AWS::EFS::AccessPoint
+    Properties:
+      FileSystemId: !Ref ModelRegistryFileSystem
+      PosixUser:
+        Gid: "10001"
+        Uid: "10001"
+      RootDirectory:
+        CreationInfo:
+          OwnerGid: "10001"
+          OwnerUid: "10001"
+          Permissions: "0750"
+        Path: /models
+
+  ModelRegistryMountOne:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref ModelRegistryFileSystem
+      SecurityGroups: [!Ref ModelRegistrySecurityGroup]
+      SubnetId: !Select [0, !Ref DatabaseSubnetIds]
+
+  ModelRegistryMountTwo:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref ModelRegistryFileSystem
+      SecurityGroups: [!Ref ModelRegistrySecurityGroup]
+      SubnetId: !Select [1, !Ref DatabaseSubnetIds]
+
+  ModelRegistryMountThree:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref ModelRegistryFileSystem
+      SecurityGroups: [!Ref ModelRegistrySecurityGroup]
+      SubnetId: !Select [2, !Ref DatabaseSubnetIds]
+
+  DatabaseSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Review database subnets
+      SubnetIds: !Ref DatabaseSubnetIds
+
+  Database:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      AllocatedStorage: 20
+      AutoMinorVersionUpgrade: true
+      BackupRetentionPeriod: 7
+      CopyTagsToSnapshot: true
+      DBInstanceClass: !Ref DatabaseInstanceClass
+      DBName: !Ref DatabaseName
+      DBSubnetGroupName: !Ref DatabaseSubnetGroup
+      DeletionProtection: false
+      EnablePerformanceInsights: true
+      Engine: postgres
+      EngineVersion: "17.11"
+      KmsKeyId: !GetAtt PlatformKey.Arn
+      ManageMasterUserPassword: true
+      MasterUsername: platform_admin
+      MaxAllocatedStorage: 100
+      MultiAZ: false
+      PerformanceInsightsKMSKeyId: !GetAtt PlatformKey.Arn
+      PerformanceInsightsRetentionPeriod: 7
+      PubliclyAccessible: false
+      StorageEncrypted: true
+      StorageType: gp3
+      VPCSecurityGroups:
+        - !Ref DatabaseSecurityGroup
+      Tags:
+        - Key: application
+          Value: crime-prediction
+        - Key: environment
+          Value: !Ref EnvironmentName
+
+  AppDatabaseSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: Generated non-superuser application database credentials
+      KmsKeyId: !GetAtt PlatformKey.Arn
+      Name: !Sub "crime-prediction/${EnvironmentName}/database-app"
+      GenerateSecretString:
+        SecretStringTemplate: '{"username":"crime_app"}'
+        GenerateStringKey: password
+        ExcludeCharacters: '"@/\\''`$&;|<> (){}[]'
+        PasswordLength: 40
+
+  RekaApiSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: Replace this generated placeholder with a newly rotated Reka API key before deployment
+      KmsKeyId: !GetAtt PlatformKey.Arn
+      Name: !Sub "crime-prediction/${EnvironmentName}/reka-api-key"
+      GenerateSecretString:
+        ExcludePunctuation: true
+        PasswordLength: 48
+
+  LocationSecretPlaceholder:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: Example tenant location; replace values before registering a source
+      KmsKeyId: !GetAtt PlatformKey.Arn
+      Name: !Sub "crime-prediction/${EnvironmentName}/tenants/bootstrap/locations/bootstrap"
+      SecretString: '{"latitude":0.0,"longitude":0.0,"placeholder":true}'
+
+  VideoUploadDlq:
+    Type: AWS::SQS::Queue
+    Properties:
+      KmsMasterKeyId: !GetAtt PlatformKey.Arn
+      MessageRetentionPeriod: 1209600
+      SqsManagedSseEnabled: false
+
+  VideoIndexDlq:
+    Type: AWS::SQS::Queue
+    Properties:
+      KmsMasterKeyId: !GetAtt PlatformKey.Arn
+      MessageRetentionPeriod: 1209600
+      SqsManagedSseEnabled: false
+
+  VideoAnalyzeDlq:
+    Type: AWS::SQS::Queue
+    Properties:
+      KmsMasterKeyId: !GetAtt PlatformKey.Arn
+      MessageRetentionPeriod: 1209600
+      SqsManagedSseEnabled: false
+
+  VideoDeleteDlq:
+    Type: AWS::SQS::Queue
+    Properties:
+      KmsMasterKeyId: !GetAtt PlatformKey.Arn
+      MessageRetentionPeriod: 1209600
+      SqsManagedSseEnabled: false
+
+  VideoUploadQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      KmsMasterKeyId: !GetAtt PlatformKey.Arn
+      MessageRetentionPeriod: 345600
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt VideoUploadDlq.Arn
+        maxReceiveCount: 5
+      VisibilityTimeout: 180
+
+  VideoIndexQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      KmsMasterKeyId: !GetAtt PlatformKey.Arn
+      MessageRetentionPeriod: 345600
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt VideoIndexDlq.Arn
+        maxReceiveCount: 5
+      VisibilityTimeout: 180
+
+  VideoAnalyzeQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      KmsMasterKeyId: !GetAtt PlatformKey.Arn
+      MessageRetentionPeriod: 345600
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt VideoAnalyzeDlq.Arn
+        maxReceiveCount: 5
+      VisibilityTimeout: 180
+
+  VideoDeleteQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      KmsMasterKeyId: !GetAtt PlatformKey.Arn
+      MessageRetentionPeriod: 345600
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt VideoDeleteDlq.Arn
+        maxReceiveCount: 5
+      VisibilityTimeout: 180
+
+  PlatformInstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: CrimePredictionRuntime
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: TenantMedia
+                Effect: Allow
+                Action:
+                  - s3:DeleteObject
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource: !Sub "${MediaBucket.Arn}/tenants/*"
+              - Sid: QueueRuntime
+                Effect: Allow
+                Action:
+                  - sqs:ChangeMessageVisibility
+                  - sqs:DeleteMessage
+                  - sqs:GetQueueAttributes
+                  - sqs:ReceiveMessage
+                  - sqs:SendMessage
+                Resource:
+                  - !GetAtt VideoUploadQueue.Arn
+                  - !GetAtt VideoIndexQueue.Arn
+                  - !GetAtt VideoAnalyzeQueue.Arn
+                  - !GetAtt VideoDeleteQueue.Arn
+                  - !GetAtt VideoUploadDlq.Arn
+                  - !GetAtt VideoIndexDlq.Arn
+                  - !GetAtt VideoAnalyzeDlq.Arn
+                  - !GetAtt VideoDeleteDlq.Arn
+              - Sid: RuntimeSecrets
+                Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource:
+                  - !Ref AppDatabaseSecret
+                  - !Ref RekaApiSecret
+                  - !Sub "arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:crime-prediction/${EnvironmentName}/tenants/*"
+              - !If
+                - AllowDatabaseBootstrapCondition
+                - Sid: OneTimeDatabaseBootstrap
+                  Effect: Allow
+                  Action: secretsmanager:GetSecretValue
+                  Resource: !GetAtt Database.MasterUserSecret.SecretArn
+                - !Ref AWS::NoValue
+              - !If
+                - AllowDatabaseBootstrapCondition
+                - Sid: OneTimeDatabaseDsnSeal
+                  Effect: Allow
+                  Action: secretsmanager:PutSecretValue
+                  Resource: !Ref AppDatabaseSecret
+                - !Ref AWS::NoValue
+              - Sid: RuntimeKey
+                Effect: Allow
+                Action:
+                  - kms:Decrypt
+                  - kms:DescribeKey
+                  - kms:Encrypt
+                  - kms:GenerateDataKey
+                  - kms:ReEncrypt*
+                Resource: !GetAtt PlatformKey.Arn
+              - Sid: SharedModelRegistry
+                Effect: Allow
+                Action:
+                  - elasticfilesystem:ClientMount
+                  - elasticfilesystem:ClientWrite
+                Resource: !GetAtt ModelRegistryFileSystem.Arn
+                Condition:
+                  StringEquals:
+                    elasticfilesystem:AccessPointArn: !GetAtt ModelRegistryAccessPoint.Arn
+
+  PlatformInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref PlatformInstanceRole
+
+  AlarmTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      KmsMasterKeyId: alias/aws/sns
+      DisplayName: !Sub "crime-prediction-${EnvironmentName}-alarms"
+
+  UploadDlqAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmActions: [!Ref AlarmTopic]
+      AlarmDescription: Upload jobs entered the dead-letter queue
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt VideoUploadDlq.QueueName
+      EvaluationPeriods: 1
+      MetricName: ApproximateNumberOfMessagesVisible
+      Namespace: AWS/SQS
+      Period: 60
+      Statistic: Maximum
+      Threshold: 0
+      TreatMissingData: notBreaching
+
+  IndexDlqAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmActions: [!Ref AlarmTopic]
+      AlarmDescription: Index jobs entered the dead-letter queue
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt VideoIndexDlq.QueueName
+      EvaluationPeriods: 1
+      MetricName: ApproximateNumberOfMessagesVisible
+      Namespace: AWS/SQS
+      Period: 60
+      Statistic: Maximum
+      Threshold: 0
+      TreatMissingData: notBreaching
+
+  AnalyzeDlqAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmActions: [!Ref AlarmTopic]
+      AlarmDescription: Analyze jobs entered the dead-letter queue
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt VideoAnalyzeDlq.QueueName
+      EvaluationPeriods: 1
+      MetricName: ApproximateNumberOfMessagesVisible
+      Namespace: AWS/SQS
+      Period: 60
+      Statistic: Maximum
+      Threshold: 0
+      TreatMissingData: notBreaching
+
+  DeleteDlqAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmActions: [!Ref AlarmTopic]
+      AlarmDescription: Delete jobs entered the dead-letter queue
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt VideoDeleteDlq.QueueName
+      EvaluationPeriods: 1
+      MetricName: ApproximateNumberOfMessagesVisible
+      Namespace: AWS/SQS
+      Period: 60
+      Statistic: Maximum
+      Threshold: 0
+      TreatMissingData: notBreaching
+
+  DatabaseCpuAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmActions: [!Ref AlarmTopic]
+      AlarmDescription: Review database CPU is sustained above 80 percent
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: DBInstanceIdentifier
+          Value: !Ref Database
+      EvaluationPeriods: 3
+      MetricName: CPUUtilization
+      Namespace: AWS/RDS
+      Period: 300
+      Statistic: Average
+      Threshold: 80
+      TreatMissingData: notBreaching
+
+  DatabaseStorageAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmActions: [!Ref AlarmTopic]
+      AlarmDescription: Review database has less than 2 GiB free storage
+      ComparisonOperator: LessThanThreshold
+      Dimensions:
+        - Name: DBInstanceIdentifier
+          Value: !Ref Database
+      EvaluationPeriods: 1
+      MetricName: FreeStorageSpace
+      Namespace: AWS/RDS
+      Period: 300
+      Statistic: Minimum
+      Threshold: 2147483648
+      TreatMissingData: notBreaching
+
+Outputs:
+  AppDatabaseSecretArn:
+    Value: !Ref AppDatabaseSecret
+  AppSecurityGroupId:
+    Value: !Ref AppSecurityGroup
+  AlarmTopicArn:
+    Value: !Ref AlarmTopic
+  DatabaseAddress:
+    Value: !GetAtt Database.Endpoint.Address
+  DatabaseMasterSecretArn:
+    Value: !GetAtt Database.MasterUserSecret.SecretArn
+  DatabaseName:
+    Value: !Ref DatabaseName
+  DatabasePort:
+    Value: !GetAtt Database.Endpoint.Port
+  InstanceProfileName:
+    Value: !Ref PlatformInstanceProfile
+  LocationSecretPrefix:
+    Value: !Sub "crime-prediction/${EnvironmentName}/tenants"
+  MediaBucketName:
+    Value: !Ref MediaBucket
+  MediaKmsKeyArn:
+    Value: !GetAtt PlatformKey.Arn
+  ModelRegistryAccessPointId:
+    Value: !Ref ModelRegistryAccessPoint
+  ModelRegistryFileSystemId:
+    Value: !Ref ModelRegistryFileSystem
+  RekaApiSecretArn:
+    Value: !Ref RekaApiSecret
+  VideoAnalyzeDlqUrl:
+    Value: !Ref VideoAnalyzeDlq
+  VideoAnalyzeQueueUrl:
+    Value: !Ref VideoAnalyzeQueue
+  VideoDeleteDlqUrl:
+    Value: !Ref VideoDeleteDlq
+  VideoDeleteQueueUrl:
+    Value: !Ref VideoDeleteQueue
+  VideoIndexDlqUrl:
+    Value: !Ref VideoIndexDlq
+  VideoIndexQueueUrl:
+    Value: !Ref VideoIndexQueue
+  VideoUploadDlqUrl:
+    Value: !Ref VideoUploadDlq
+  VideoUploadQueueUrl:
+    Value: !Ref VideoUploadQueue

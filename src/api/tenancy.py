@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime, timezone
-import hashlib
 import os
 import threading
-from typing import Protocol
 import uuid
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from typing import Protocol
 
 from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -54,6 +53,32 @@ class AuthenticationProvider(Protocol):
     def authenticate(self, token: str) -> Principal: ...
 
     def switch_active_tenant(self, token: str, tenant_id: str) -> Principal: ...
+
+
+class ActiveTenantStore(Protocol):
+    """Server-side active-tenant state keyed by a verified principal."""
+
+    def get(self, principal_id: str) -> str | None: ...
+
+    def set(self, principal_id: str, tenant_id: str) -> None: ...
+
+
+class InMemoryActiveTenantStore:
+    """Process-local fallback for tests; production injects PostgreSQL."""
+
+    development_only = True
+
+    def __init__(self) -> None:
+        self._active: dict[str, str] = {}
+        self._lock = threading.Lock()
+
+    def get(self, principal_id: str) -> str | None:
+        with self._lock:
+            return self._active.get(principal_id)
+
+    def set(self, principal_id: str, tenant_id: str) -> None:
+        with self._lock:
+            self._active[principal_id] = tenant_id
 
 
 class DevelopmentAuthenticationProvider:
@@ -132,10 +157,10 @@ class DevelopmentAuthenticationProvider:
 class OidcAuthenticationProvider:
     """Validate asymmetric OIDC access tokens and derive tenant context from signed claims.
 
-    The raw bearer token is never persisted. Active-tenant choices are keyed by a
-    one-way token digest and may only select a membership present in the verified
-    token. A deployment that needs choices to survive token rotation should inject
-    an identity-provider session implementation instead of relying on this cache.
+    The raw bearer token is never persisted. Active-tenant choices are keyed by the
+    verified OIDC subject and may only select a membership present in the verified
+    token. Production injects a durable store so choices survive token rotation and
+    are consistent across API replicas.
     """
 
     development_only = False
@@ -150,6 +175,7 @@ class OidcAuthenticationProvider:
         memberships_claim: str = "tenant_memberships",
         leeway_seconds: int = 30,
         jwks_client: object | None = None,
+        active_tenant_store: ActiveTenantStore | None = None,
     ) -> None:
         if not issuer.startswith("https://") or not jwks_url.startswith("https://"):
             raise ValueError("OIDC issuer and JWKS URL must use HTTPS")
@@ -175,12 +201,7 @@ class OidcAuthenticationProvider:
             lifespan=300,
             timeout=5,
         )
-        self._active: dict[str, str] = {}
-        self._lock = threading.Lock()
-
-    @staticmethod
-    def _token_key(token: str) -> str:
-        return hashlib.sha256(token.encode("utf-8")).hexdigest()
+        self.active_tenant_store = active_tenant_store or InMemoryActiveTenantStore()
 
     def _decode(self, token: str) -> dict:
         try:
@@ -252,10 +273,8 @@ class OidcAuthenticationProvider:
                 status_code=403,
                 detail={"code": "tenant_membership_missing", "message": "No tenant membership is available"},
             )
-        token_key = self._token_key(token)
         requested = claims.get("active_tenant_id")
-        with self._lock:
-            active = self._active.get(token_key)
+        active = self.active_tenant_store.get(subject)
         if active not in seen:
             active = str(requested) if requested in seen else memberships[0].tenant_id
         return Principal(subject[:200], tuple(memberships), active)
@@ -275,8 +294,7 @@ class OidcAuthenticationProvider:
                 status_code=403,
                 detail={"code": "tenant_forbidden", "message": "Tenant membership is required"},
             )
-        with self._lock:
-            self._active[self._token_key(token)] = tenant_id
+        self.active_tenant_store.set(principal.principal_id, tenant_id)
         return self.authenticate(token)
 
 
@@ -294,7 +312,7 @@ def context_for(principal: Principal, request_id: str) -> TenantContext:
         slug=membership.slug,
         display_name=membership.display_name,
         role=membership.role,
-        authenticated_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        authenticated_at=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
     )
 
 

@@ -47,12 +47,55 @@ jobs:
       - run: pnpm audit --audit-level=high
       - run: pnpm build
 
+  browser-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install API dependencies
+        run: python -m pip install -e ".[api,dev,model,platform]"
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.15.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: src/web/pnpm-lock.yaml
+      - name: Install web dependencies and Chromium
+        working-directory: src/web
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm exec playwright install --with-deps chromium
+      - name: Start deterministic review API
+        run: |
+          python -m uvicorn src.api.app:app --host 127.0.0.1 --port 8000 --no-server-header > /tmp/review-api.log 2>&1 &
+          for attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:8000/health >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/review-api.log
+          exit 1
+      - name: Run repeatable two-tenant browser flow
+        working-directory: src/web
+        run: pnpm exec playwright test
+
   container-build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Build hardened images
         run: docker compose build api web
+      - name: Validate AWS review composition
+        run: >-
+          docker compose
+          --env-file deploy/aws-vm/.env.production.example
+          -f deploy/aws-vm/compose.yml config --quiet
       - name: Verify non-root image users
         run: |
           test "$(docker image inspect crime-prediction-api --format '{{.Config.User}}')" = "10001:10001"

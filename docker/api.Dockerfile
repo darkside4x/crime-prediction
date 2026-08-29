@@ -8,7 +8,7 @@ RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-reco
 RUN groupadd --gid 10001 crime && \
     useradd --uid 10001 --gid crime --no-create-home --shell /usr/sbin/nologin crime && \
     mkdir -p /app/data/runtime /var/lib/crime-video-spool && \
-    chown -R crime:crime /app/data /var/lib/crime-video-spool
+    chown -R crime:crime /app/data /var/lib/crime-video-spool /var/lib/clamav
 
 RUN pip install --no-cache-dir \
     "fastapi==0.141.1" "uvicorn==0.35.0" "h3==4.3.1" \

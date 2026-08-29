@@ -83,3 +83,33 @@ def test_database_rate_limit_is_atomic_and_stores_no_raw_key() -> None:
         assert row["request_count"] == 2
     finally:
         database.close()
+
+
+def test_active_tenant_state_is_shared_without_principal_pii() -> None:
+    psycopg = pytest.importorskip("psycopg")
+    from src.data.platform_security import PostgresActiveTenantStore
+    from src.data.postgres import TenantPostgres
+
+    root = Path(__file__).resolve().parents[2]
+    with psycopg.connect(DSN, autocommit=True) as connection:
+        for migration in sorted((root / "migrations" / "postgres").glob("*.sql")):
+            connection.execute(migration.read_text(encoding="utf-8"))
+
+    database = TenantPostgres(DSN)
+    try:
+        first_replica = PostgresActiveTenantStore(database)
+        second_replica = PostgresActiveTenantStore(database)
+        principal = "oidc-user-review-two"
+        tenant = "11111111-1111-4111-8111-111111111111"
+        first_replica.set(principal, tenant)
+        assert second_replica.get(principal) == tenant
+        with database.system_transaction() as cursor:
+            cursor.execute(
+                "SELECT principal_hash,tenant_id FROM principal_active_tenants WHERE tenant_id=%s",
+                (tenant,),
+            )
+            row = cursor.fetchone()
+        assert row["principal_hash"] != principal
+        assert len(row["principal_hash"]) == 64
+    finally:
+        database.close()
