@@ -18,13 +18,13 @@ docker compose up --build
 
 ```bash
 # API (terminal 1)
-pip install fastapi uvicorn h3 "jsonschema[format]"
-uvicorn src.api.app:app --port 8000
+python -m pip install -e ".[api,model]"
+uvicorn src.api.app:app --env-file .env --port 8000
 
 # Web (terminal 2)
 cd src/web
-npm install
-npm run dev
+pnpm install
+pnpm dev
 # dashboard: http://localhost:5173  (proxies /v1 to :8000)
 ```
 
@@ -43,7 +43,7 @@ a client-supplied `tenant_id` query parameter is rejected.
 
 ```bash
 python -m pytest tests/api        # tenant isolation, contracts, AI fail-safety
-cd src/web && npm run build       # typecheck + production build
+cd src/web && pnpm build           # typecheck + production build
 ```
 
 ## 3-minute presentation script
@@ -63,7 +63,7 @@ cd src/web && npm run build       # typecheck + production build
 
 ## Reka
 
-The currently committed copilot uses a deterministic fake provider so the basic map demo runs offline. Phase 2 adds real Reka Vision video management and analysis behind FastAPI.
+The copilot selects live Reka Chat when a server-side key is configured and otherwise uses a deterministic provider so the basic map demo runs offline. Phase 2 adds real Reka Vision video management and analysis behind FastAPI.
 
 One server-side secret is used for both capabilities:
 

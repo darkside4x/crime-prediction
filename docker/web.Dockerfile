@@ -1,9 +1,10 @@
 FROM node:22-slim AS build
 WORKDIR /web
-COPY package.json ./
-RUN npm install --no-audit --no-fund
+RUN corepack enable
+COPY package.json pnpm-lock.yaml ./
+RUN pnpm install --frozen-lockfile
 COPY . .
-RUN npm run build
+RUN pnpm build
 
 FROM nginx:1.27-alpine
 COPY --from=build /web/dist /usr/share/nginx/html
