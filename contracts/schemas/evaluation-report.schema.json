@@ -1,0 +1,117 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://crime-hotspot.local/schemas/evaluation-report.schema.json",
+  "title": "ModelEvaluationReport",
+  "description": "Chronological tenant-scoped model comparison and calibration output.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "tenant_id", "evaluation_id", "model_version", "data_version", "generated_at", "target", "primary_metric", "selection", "metrics", "calibration", "slices", "spatial_displacement", "limitations"],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "tenant_id": {"type": "string", "format": "uuid"},
+    "evaluation_id": {"type": "string", "format": "uuid"},
+    "model_version": {"type": "string", "minLength": 1, "maxLength": 128},
+    "data_version": {"type": "string", "minLength": 1, "maxLength": 128},
+    "generated_at": {"type": "string", "format": "date-time"},
+    "target": {"enum": ["next_window_count", "next_window_occurrence"]},
+    "primary_metric": {"enum": ["poisson_deviance", "mae", "pr_auc", "brier_score"]},
+    "selection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["selected_model", "baseline_model", "selection_split", "minimum_relative_gain", "observed_relative_gain", "reason", "test_evaluated_after_selection"],
+      "properties": {
+        "selected_model": {"$ref": "#/$defs/modelName"},
+        "baseline_model": {"$ref": "#/$defs/modelName"},
+        "selection_split": {"const": "validation"},
+        "minimum_relative_gain": {"type": "number", "minimum": 0},
+        "observed_relative_gain": {"type": "number"},
+        "reason": {"type": "string", "minLength": 1, "maxLength": 1000},
+        "test_evaluated_after_selection": {"const": true}
+      }
+    },
+    "metrics": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/metric"}},
+    "calibration": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["model", "split", "bin_lower", "bin_upper", "row_count", "mean_predicted_probability", "observed_event_rate"],
+        "properties": {
+          "model": {"$ref": "#/$defs/modelName"},
+          "split": {"enum": ["validation", "test"]},
+          "bin_lower": {"type": "number", "minimum": 0, "maximum": 1},
+          "bin_upper": {"type": "number", "minimum": 0, "maximum": 1},
+          "row_count": {"type": "integer", "minimum": 1},
+          "mean_predicted_probability": {"type": "number", "minimum": 0, "maximum": 1},
+          "observed_event_rate": {"type": "number", "minimum": 0, "maximum": 1}
+        }
+      }
+    },
+    "slices": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["dimension", "value", "row_count", "metrics"],
+        "properties": {
+          "dimension": {"enum": ["category", "cell", "time_of_day_utc", "coverage_band"]},
+          "value": {"type": "string", "minLength": 1, "maxLength": 128},
+          "row_count": {"type": "integer", "minimum": 1},
+          "metrics": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/metricValue"}}
+        }
+      }
+    },
+    "spatial_displacement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["definition", "highest_error_cells"],
+      "properties": {
+        "definition": {"type": "string", "minLength": 1, "maxLength": 500},
+        "highest_error_cells": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["cell_id", "row_count", "mae"],
+            "properties": {
+              "cell_id": {"type": "string", "pattern": "^[0-9a-f]{15}$"},
+              "row_count": {"type": "integer", "minimum": 1},
+              "mae": {"type": "number", "minimum": 0}
+            }
+          }
+        }
+      }
+    },
+    "limitations": {"type": "array", "minItems": 1, "maxItems": 20, "items": {"type": "string", "minLength": 1, "maxLength": 500}}
+  },
+  "$defs": {
+    "modelName": {"enum": ["historical_rate", "previous_period", "regularized_poisson", "lightgbm_poisson", "lightgbm_tweedie"]},
+    "metricValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "value", "definition"],
+      "properties": {
+        "name": {"enum": ["mae", "poisson_deviance", "top_k_capture", "pr_auc", "brier_score"]},
+        "value": {"type": "number"},
+        "definition": {"type": "string", "minLength": 1, "maxLength": 500},
+        "ci_lower": {"type": "number"},
+        "ci_upper": {"type": "number"}
+      }
+    },
+    "metric": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model", "split", "name", "value", "definition"],
+      "properties": {
+        "model": {"$ref": "#/$defs/modelName"},
+        "split": {"enum": ["validation", "test", "rolling_origin"]},
+        "name": {"enum": ["mae", "poisson_deviance", "top_k_capture", "pr_auc", "brier_score"]},
+        "value": {"type": "number"},
+        "definition": {"type": "string", "minLength": 1, "maxLength": 500},
+        "ci_lower": {"type": "number"},
+        "ci_upper": {"type": "number"}
+      }
+    }
+  }
+}

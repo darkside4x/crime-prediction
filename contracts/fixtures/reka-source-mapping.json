@@ -1,0 +1,27 @@
+{
+  "schema_version": "2.0.0",
+  "tenant_id": "00000000-0000-4000-8000-000000000001",
+  "source_id": "10000000-0000-4000-8000-000000000001",
+  "source_profile_version": "profile-synthetic-v1",
+  "mappings": [
+    {
+      "source_field": "event_time",
+      "target_field": "occurred_at",
+      "confidence": 0.95,
+      "transformation": "Parse the declared UTC ISO-8601 timestamp."
+    },
+    {
+      "source_field": "notes",
+      "target_field": "ignore",
+      "confidence": 1,
+      "transformation": "Drop free text before ingestion."
+    }
+  ],
+  "unmapped_source_fields": [],
+  "warnings": [
+    "Human approval is required before this deterministic mapping is activated."
+  ],
+  "requires_human_approval": true,
+  "reka_model": "reka-flash",
+  "prompt_version": "1.0.0"
+}

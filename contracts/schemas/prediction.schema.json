@@ -4,9 +4,9 @@
   "title": "AggregatePrediction",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "tenant_id", "cell_id", "window_start", "window_end", "category", "risk", "risk_band", "expected_count", "uncertainty", "drivers", "model_version", "data_as_of"],
+  "required": ["schema_version", "tenant_id", "cell_id", "window_start", "window_end", "category", "risk", "risk_band", "expected_count", "uncertainty", "drivers", "model_version", "data_version", "data_as_of"],
   "properties": {
-    "schema_version": {"const": "1.0.0"},
+    "schema_version": {"const": "2.0.0"},
     "tenant_id": {"type": "string", "format": "uuid"},
     "cell_id": {"type": "string", "pattern": "^[0-9a-f]{15}$"},
     "window_start": {"type": "string", "format": "date-time"},
@@ -38,6 +38,7 @@
       }
     },
     "model_version": {"type": "string", "minLength": 1, "maxLength": 128},
+    "data_version": {"type": "string", "minLength": 1, "maxLength": 128},
     "data_as_of": {"type": "string", "format": "date-time"},
     "suppressed": {"type": "boolean", "default": false}
   }

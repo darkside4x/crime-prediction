@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://crime-hotspot.local/schemas/feature-table-manifest.schema.json",
+  "title": "FeatureTableManifest",
+  "description": "Tenant-scoped provenance for one leakage-safe feature-table artifact.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "tenant_id", "dataset_version", "feature_schema_version", "artifact", "source_versions", "generated_at", "data_as_of", "interval_minutes", "row_count", "interval_start_min", "interval_start_max", "categories", "cell_count", "generation_command", "code_version", "parameters"],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "tenant_id": {"type": "string", "format": "uuid"},
+    "dataset_version": {"type": "string", "minLength": 1, "maxLength": 128},
+    "feature_schema_version": {"const": "2.0.0"},
+    "artifact": {"$ref": "#/$defs/artifact"},
+    "source_versions": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["source_id", "source_version"],
+        "properties": {
+          "source_id": {"type": "string", "format": "uuid"},
+          "source_version": {"type": "string", "minLength": 1, "maxLength": 128}
+        }
+      }
+    },
+    "generated_at": {"type": "string", "format": "date-time"},
+    "data_as_of": {"type": "string", "format": "date-time"},
+    "interval_minutes": {"type": "integer", "minimum": 1},
+    "row_count": {"type": "integer", "minimum": 1},
+    "interval_start_min": {"type": "string", "format": "date-time"},
+    "interval_start_max": {"type": "string", "format": "date-time"},
+    "categories": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 80}},
+    "cell_count": {"type": "integer", "minimum": 1},
+    "generation_command": {"type": "string", "minLength": 1, "maxLength": 1000},
+    "code_version": {"type": "string", "minLength": 1, "maxLength": 128},
+    "parameters": {"type": "object", "additionalProperties": {"type": ["string", "number", "integer", "boolean", "null"]}}
+  },
+  "$defs": {
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "format", "sha256"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1, "maxLength": 512},
+        "format": {"const": "parquet"},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    }
+  }
+}

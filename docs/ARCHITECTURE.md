@@ -87,7 +87,7 @@ Every feature must be computable using data available strictly before `interval_
 
 ```json
 {
-  "schema_version": "1.0.0",
+  "schema_version": "2.0.0",
   "tenant_id": "00000000-0000-4000-8000-000000000001",
   "cell_id": "H3_CELL",
   "window_start": "2026-08-30T00:00:00Z",
@@ -99,6 +99,7 @@ Every feature must be computable using data available strictly before `interval_
   "uncertainty": {"lower": 0.16, "upper": 0.55},
   "drivers": [{"feature": "recent_7d_count", "direction": "higher"}],
   "model_version": "...",
+  "data_version": "...",
   "data_as_of": "..."
 }
 ```

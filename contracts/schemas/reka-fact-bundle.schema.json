@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://crime-hotspot.local/schemas/reka-fact-bundle.schema.json",
+  "title": "RekaAggregateFactBundle",
+  "description": "Deterministic, display-safe aggregate facts that Reka may summarize but never calculate or modify.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "tenant_id", "bundle_id", "bundle_version", "model_version", "data_version", "data_as_of", "generated_at", "scope", "facts", "limitations"],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "tenant_id": {"type": "string", "format": "uuid"},
+    "bundle_id": {"type": "string", "pattern": "^factbundle_[0-9a-f]{16,64}$"},
+    "bundle_version": {"type": "string", "minLength": 1, "maxLength": 128},
+    "model_version": {"type": "string", "minLength": 1, "maxLength": 128},
+    "data_version": {"type": "string", "minLength": 1, "maxLength": 128},
+    "data_as_of": {"type": "string", "format": "date-time"},
+    "generated_at": {"type": "string", "format": "date-time"},
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["aggregation", "window_start", "window_end", "category"],
+      "properties": {
+        "aggregation": {"enum": ["tenant", "category", "time_window", "suppressed_cell_group", "model_evaluation"]},
+        "window_start": {"type": "string", "format": "date-time"},
+        "window_end": {"type": "string", "format": "date-time"},
+        "category": {"type": "string", "minLength": 1, "maxLength": 80}
+      }
+    },
+    "facts": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 200,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["fact_id", "kind", "label", "value", "unit", "definition", "source_artifact", "data_as_of", "model_version", "suppressed"],
+        "properties": {
+          "fact_id": {"type": "string", "pattern": "^fact_[0-9a-f]{16,64}$"},
+          "kind": {"enum": ["metric", "prediction_summary", "comparison", "calibration", "freshness", "limitation"]},
+          "label": {"type": "string", "minLength": 1, "maxLength": 160},
+          "value": {"type": ["number", "string", "boolean", "null"]},
+          "unit": {"enum": ["count", "probability", "percentage", "hours", "timestamp", "score", "text", "none"]},
+          "definition": {"type": "string", "minLength": 1, "maxLength": 500},
+          "source_artifact": {"enum": ["predictions", "evaluation_report", "model_card", "source_health"]},
+          "data_as_of": {"type": "string", "format": "date-time"},
+          "model_version": {"type": "string", "minLength": 1, "maxLength": 128},
+          "suppressed": {"type": "boolean"}
+        },
+        "allOf": [
+          {
+            "if": {"properties": {"suppressed": {"const": true}}, "required": ["suppressed"]},
+            "then": {"properties": {"value": {"type": "null"}}}
+          }
+        ]
+      }
+    },
+    "limitations": {"type": "array", "minItems": 1, "maxItems": 20, "items": {"type": "string", "minLength": 1, "maxLength": 500}}
+  }
+}

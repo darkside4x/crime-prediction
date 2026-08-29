@@ -4,11 +4,12 @@
   "title": "RekaSourceMappingProposal",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "tenant_id", "source_id", "mappings", "unmapped_source_fields", "warnings", "requires_human_approval", "reka_model", "prompt_version"],
+  "required": ["schema_version", "tenant_id", "source_id", "source_profile_version", "mappings", "unmapped_source_fields", "warnings", "requires_human_approval", "reka_model", "prompt_version"],
   "properties": {
-    "schema_version": {"const": "1.0.0"},
+    "schema_version": {"const": "2.0.0"},
     "tenant_id": {"type": "string", "format": "uuid"},
     "source_id": {"type": "string", "format": "uuid"},
+    "source_profile_version": {"type": "string", "minLength": 1, "maxLength": 128},
     "mappings": {
       "type": "array",
       "maxItems": 100,

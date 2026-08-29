@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://crime-hotspot.local/schemas/model-bundle.schema.json",
+  "title": "TenantModelBundle",
+  "description": "Metadata and payload integrity for one tenant-scoped fitted estimator.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "tenant_id", "model_version", "data_version", "feature_schema_version", "estimator", "target", "features", "trained_at", "window_minutes", "serializer", "payload", "runtime"],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "tenant_id": {"type": "string", "format": "uuid"},
+    "model_version": {"type": "string", "minLength": 1, "maxLength": 128},
+    "data_version": {"type": "string", "minLength": 1, "maxLength": 128},
+    "feature_schema_version": {"const": "2.0.0"},
+    "estimator": {"enum": ["historical_rate", "previous_period", "regularized_poisson", "lightgbm_poisson", "lightgbm_tweedie"]},
+    "target": {"enum": ["next_window_count", "next_window_occurrence"]},
+    "features": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 100}},
+    "trained_at": {"type": "string", "format": "date-time"},
+    "window_minutes": {"type": "integer", "minimum": 1},
+    "serializer": {"enum": ["json_parameters", "lightgbm_text"]},
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "size_bytes"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1, "maxLength": 512},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "size_bytes": {"type": "integer", "minimum": 1}
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["python_version", "dependency_lock_sha256"],
+      "properties": {
+        "python_version": {"type": "string", "pattern": "^3\\.12(\\.[0-9]+)?$"},
+        "dependency_lock_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"estimator": {"enum": ["lightgbm_poisson", "lightgbm_tweedie"]}}, "required": ["estimator"]},
+      "then": {"properties": {"serializer": {"const": "lightgbm_text"}}}
+    },
+    {
+      "if": {"properties": {"estimator": {"enum": ["historical_rate", "previous_period", "regularized_poisson"]}}, "required": ["estimator"]},
+      "then": {"properties": {"serializer": {"const": "json_parameters"}}}
+    }
+  ]
+}

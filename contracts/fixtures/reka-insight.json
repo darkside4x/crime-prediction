@@ -1,0 +1,21 @@
+{
+  "schema_version": "2.0.0",
+  "tenant_id": "00000000-0000-4000-8000-000000000001",
+  "request_id": "50000000-0000-4000-8000-000000000001",
+  "answer": "The selected baseline recorded a Poisson deviance of 0.82 on the untouched test window. This is a forecast evaluation result, not a causal claim.",
+  "claims": [
+    {
+      "text": "The untouched-test Poisson deviance was 0.82.",
+      "fact_ids": ["fact_0123456789abcdef"]
+    }
+  ],
+  "limitations": [
+    "Historical reports may reflect reporting and enforcement patterns."
+  ],
+  "data_as_of": "2026-08-29T23:59:59Z",
+  "data_version": "features-demo-one-20260830-v1",
+  "model_version": "demo-one-historical-rate-v1",
+  "reka_model": "reka-flash",
+  "prompt_version": "1.0.0",
+  "refusal_code": "not_applicable"
+}

@@ -1,0 +1,44 @@
+{
+  "schema_version": "1.0.0",
+  "tenant_id": "00000000-0000-4000-8000-000000000001",
+  "model_version": "demo-one-historical-rate-v1",
+  "data_version": "features-demo-one-20260830-v1",
+  "generated_at": "2026-08-30T00:15:00Z",
+  "model_name": "historical_rate",
+  "target": "next_window_count",
+  "prediction_unit": "Expected aggregate incident count for one tenant, H3 cell, category, and six-hour UTC window.",
+  "training_period": {
+    "start": "2026-08-01T00:00:00Z",
+    "end": "2026-08-25T18:00:00Z"
+  },
+  "evaluation_period": {
+    "start": "2026-08-26T00:00:00Z",
+    "end": "2026-08-30T00:00:00Z"
+  },
+  "primary_metric": {
+    "name": "poisson_deviance",
+    "value": 0.82,
+    "split": "test",
+    "definition": "Mean Poisson deviance on the untouched chronological test window; lower is better."
+  },
+  "baseline_comparison": {
+    "baseline_model": "historical_rate",
+    "baseline_value": 0.82,
+    "selected_value": 0.82,
+    "relative_gain": 0,
+    "selected_model_beats_baseline": false
+  },
+  "intended_uses": [
+    "Aggregate area-level planning and model evaluation with human interpretation."
+  ],
+  "prohibited_uses": [
+    "Individual criminality assessment, suspect identification, or automated enforcement decisions."
+  ],
+  "limitations": [
+    "Forecasts may reproduce reporting and enforcement patterns present in historical data."
+  ],
+  "uncertainty_method": "Prediction intervals are computed deterministically from held-out residual behavior and documented with the run.",
+  "suppression_policy": "Cells and windows below the configured aggregate support threshold are marked suppressed and expose no numeric value to Reka.",
+  "feature_interpretation": "Drivers describe model associations and must never be described as causes.",
+  "human_review_required": true
+}

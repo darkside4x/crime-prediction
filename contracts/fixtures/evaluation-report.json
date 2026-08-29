@@ -1,0 +1,73 @@
+{
+  "schema_version": "1.0.0",
+  "tenant_id": "00000000-0000-4000-8000-000000000001",
+  "evaluation_id": "40000000-0000-4000-8000-000000000001",
+  "model_version": "demo-one-historical-rate-v1",
+  "data_version": "features-demo-one-20260830-v1",
+  "generated_at": "2026-08-30T00:15:00Z",
+  "target": "next_window_count",
+  "primary_metric": "poisson_deviance",
+  "selection": {
+    "selected_model": "historical_rate",
+    "baseline_model": "historical_rate",
+    "selection_split": "validation",
+    "minimum_relative_gain": 0.01,
+    "observed_relative_gain": 0,
+    "reason": "No candidate achieved the required validation gain, so the simpler baseline was retained.",
+    "test_evaluated_after_selection": true
+  },
+  "metrics": [
+    {
+      "model": "historical_rate",
+      "split": "test",
+      "name": "poisson_deviance",
+      "value": 0.82,
+      "definition": "Mean Poisson deviance on the untouched chronological test window. Lower is better."
+    },
+    {
+      "model": "historical_rate",
+      "split": "test",
+      "name": "top_k_capture",
+      "value": 0.34,
+      "definition": "Share of observed test incidents captured by the highest-ranked 10% of aggregate rows."
+    }
+  ],
+  "calibration": [
+    {
+      "model": "historical_rate",
+      "split": "test",
+      "bin_lower": 0.2,
+      "bin_upper": 0.4,
+      "row_count": 20,
+      "mean_predicted_probability": 0.27,
+      "observed_event_rate": 0.25
+    }
+  ],
+  "slices": [
+    {
+      "dimension": "category",
+      "value": "property",
+      "row_count": 40,
+      "metrics": [
+        {
+          "name": "mae",
+          "value": 0.39,
+          "definition": "Mean absolute count error for this aggregate slice."
+        }
+      ]
+    }
+  ],
+  "spatial_displacement": {
+    "definition": "Cells ranked by mean absolute error on the untouched test window; this is an error audit, not an enforcement recommendation.",
+    "highest_error_cells": [
+      {
+        "cell_id": "8861892581fffff",
+        "row_count": 10,
+        "mae": 0.5
+      }
+    ]
+  },
+  "limitations": [
+    "Synthetic fixture metrics are illustrative and must not be presented as measured system performance."
+  ]
+}

@@ -1,0 +1,36 @@
+{
+  "schema_version": "1.0.0",
+  "tenant_id": "00000000-0000-4000-8000-000000000001",
+  "model_version": "demo-one-historical-rate-v1",
+  "data_version": "features-demo-one-20260830-v1",
+  "feature_schema_version": "2.0.0",
+  "estimator": "historical_rate",
+  "target": "next_window_count",
+  "features": [
+    "lag_1",
+    "lag_2",
+    "lag_7",
+    "lag_14",
+    "rolling_7_mean",
+    "rolling_14_mean",
+    "neighbor_lag_1",
+    "recent_trend",
+    "hour_sin",
+    "hour_cos",
+    "day_of_week_sin",
+    "day_of_week_cos",
+    "coverage_ratio"
+  ],
+  "trained_at": "2026-08-30T00:15:00Z",
+  "window_minutes": 360,
+  "serializer": "json_parameters",
+  "payload": {
+    "path": "artifacts/tenant=00000000-0000-4000-8000-000000000001/models/demo-one-historical-rate-v1/parameters.json",
+    "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "size_bytes": 1024
+  },
+  "runtime": {
+    "python_version": "3.12.5",
+    "dependency_lock_sha256": "9999999999999999999999999999999999999999999999999999999999999999"
+  }
+}

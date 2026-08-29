@@ -1,0 +1,22 @@
+{
+  "schema_version": "2.0.0",
+  "tenant_id": "00000000-0000-4000-8000-000000000001",
+  "cell_id": "8861892581fffff",
+  "interval_start": "2026-08-30T00:00:00Z",
+  "category": "property",
+  "event_count": 1,
+  "lag_1": 0,
+  "lag_2": 1,
+  "lag_7": 2,
+  "lag_14": 1,
+  "rolling_7_mean": 0.43,
+  "rolling_14_mean": 0.36,
+  "neighbor_lag_1": 0.5,
+  "recent_trend": 0.07,
+  "hour_sin": 0,
+  "hour_cos": 1,
+  "day_of_week_sin": 0.781831,
+  "day_of_week_cos": 0.62349,
+  "coverage_ratio": 1,
+  "data_as_of": "2026-08-29T23:59:59Z"
+}

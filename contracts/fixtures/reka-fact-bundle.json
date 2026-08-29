@@ -1,0 +1,45 @@
+{
+  "schema_version": "1.0.0",
+  "tenant_id": "00000000-0000-4000-8000-000000000001",
+  "bundle_id": "factbundle_0123456789abcdef",
+  "bundle_version": "1.0.0",
+  "model_version": "demo-one-historical-rate-v1",
+  "data_version": "features-demo-one-20260830-v1",
+  "data_as_of": "2026-08-29T23:59:59Z",
+  "generated_at": "2026-08-30T00:15:00Z",
+  "scope": {
+    "aggregation": "model_evaluation",
+    "window_start": "2026-08-26T00:00:00Z",
+    "window_end": "2026-08-30T06:00:00Z",
+    "category": "property"
+  },
+  "facts": [
+    {
+      "fact_id": "fact_0123456789abcdef",
+      "kind": "metric",
+      "label": "Untouched-test Poisson deviance",
+      "value": 0.82,
+      "unit": "score",
+      "definition": "Mean Poisson deviance on the untouched chronological test window; lower is better.",
+      "source_artifact": "evaluation_report",
+      "data_as_of": "2026-08-29T23:59:59Z",
+      "model_version": "demo-one-historical-rate-v1",
+      "suppressed": false
+    },
+    {
+      "fact_id": "fact_fedcba9876543210",
+      "kind": "prediction_summary",
+      "label": "Low-support aggregate",
+      "value": null,
+      "unit": "count",
+      "definition": "The aggregate did not meet the configured publication threshold.",
+      "source_artifact": "predictions",
+      "data_as_of": "2026-08-29T23:59:59Z",
+      "model_version": "demo-one-historical-rate-v1",
+      "suppressed": true
+    }
+  ],
+  "limitations": [
+    "Reka may summarize these supplied facts but must not calculate, alter, or fill missing values."
+  ]
+}

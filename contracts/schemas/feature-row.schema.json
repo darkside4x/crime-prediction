@@ -4,9 +4,9 @@
   "title": "FeatureRow",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "tenant_id", "cell_id", "interval_start", "category", "event_count", "lag_1", "lag_2", "rolling_7_mean", "hour_sin", "hour_cos", "day_of_week_sin", "day_of_week_cos", "coverage_ratio", "data_as_of"],
+  "required": ["schema_version", "tenant_id", "cell_id", "interval_start", "category", "event_count", "lag_1", "lag_2", "lag_7", "lag_14", "rolling_7_mean", "rolling_14_mean", "neighbor_lag_1", "recent_trend", "hour_sin", "hour_cos", "day_of_week_sin", "day_of_week_cos", "coverage_ratio", "data_as_of"],
   "properties": {
-    "schema_version": {"const": "1.0.0"},
+    "schema_version": {"const": "2.0.0"},
     "tenant_id": {"type": "string", "format": "uuid"},
     "cell_id": {"type": "string", "pattern": "^[0-9a-f]{15}$"},
     "interval_start": {"type": "string", "format": "date-time"},

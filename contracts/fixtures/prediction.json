@@ -1,0 +1,25 @@
+{
+  "schema_version": "2.0.0",
+  "tenant_id": "00000000-0000-4000-8000-000000000001",
+  "cell_id": "8861892581fffff",
+  "window_start": "2026-08-30T00:00:00Z",
+  "window_end": "2026-08-30T06:00:00Z",
+  "category": "property",
+  "risk": 0.27,
+  "risk_band": "typical",
+  "expected_count": 0.31,
+  "uncertainty": {
+    "lower": 0.08,
+    "upper": 0.71
+  },
+  "drivers": [
+    {
+      "feature": "rolling_7_mean",
+      "direction": "higher"
+    }
+  ],
+  "model_version": "demo-one-historical-rate-v1",
+  "data_version": "features-demo-one-20260830-v1",
+  "data_as_of": "2026-08-29T23:59:59Z",
+  "suppressed": false
+}

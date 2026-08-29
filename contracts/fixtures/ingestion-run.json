@@ -1,0 +1,17 @@
+{
+  "schema_version": "1.0.0",
+  "tenant_id": "00000000-0000-4000-8000-000000000001",
+  "source_id": "10000000-0000-4000-8000-000000000001",
+  "run_id": "20000000-0000-4000-8000-000000000001",
+  "mode": "recorded_replay",
+  "status": "completed",
+  "checkpoint": 1,
+  "accepted_count": 1,
+  "duplicate_count": 0,
+  "rejected_count": 0,
+  "last_received_at": "2026-08-20T01:01:00Z",
+  "last_event_at": "2026-08-20T01:00:00Z",
+  "last_error_code": null,
+  "started_at": "2026-08-20T01:00:00Z",
+  "finished_at": "2026-08-20T01:02:00Z"
+}

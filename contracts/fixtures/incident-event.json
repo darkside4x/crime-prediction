@@ -1,0 +1,18 @@
+{
+  "schema_version": "1.0.0",
+  "tenant_id": "00000000-0000-4000-8000-000000000001",
+  "source_id": "10000000-0000-4000-8000-000000000001",
+  "external_event_id": "synthetic-event-0001",
+  "occurred_at": "2026-08-20T01:00:00Z",
+  "received_at": "2026-08-20T01:01:00Z",
+  "category": "property",
+  "location": {
+    "latitude": 12.9716,
+    "longitude": 77.5946,
+    "accuracy_meters": 100
+  },
+  "source_sequence": 1,
+  "attributes": {
+    "synthetic": true
+  }
+}

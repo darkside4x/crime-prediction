@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://crime-hotspot.local/schemas/model-run-manifest.schema.json",
+  "title": "ModelRunManifest",
+  "description": "Reproducible tenant-scoped training run and artifact provenance.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "tenant_id", "run_id", "model_version", "data_version", "target", "generated_at", "random_seed", "code_version", "config", "input", "split", "candidates", "selected_model", "selection_rule", "artifacts", "generation_command"],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "tenant_id": {"type": "string", "format": "uuid"},
+    "run_id": {"type": "string", "format": "uuid"},
+    "model_version": {"type": "string", "minLength": 1, "maxLength": 128},
+    "data_version": {"type": "string", "minLength": 1, "maxLength": 128},
+    "target": {"enum": ["next_window_count", "next_window_occurrence"]},
+    "generated_at": {"type": "string", "format": "date-time"},
+    "random_seed": {"type": "integer", "minimum": 0},
+    "code_version": {"type": "string", "minLength": 1, "maxLength": 128},
+    "config": {"$ref": "#/$defs/artifact"},
+    "input": {"$ref": "#/$defs/artifact"},
+    "split": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["strategy", "train_start", "train_end", "validation_start", "validation_end", "test_start", "test_end", "train_rows", "validation_rows", "test_rows"],
+      "properties": {
+        "strategy": {"enum": ["chronological_holdout", "rolling_origin_with_chronological_holdout"]},
+        "train_start": {"type": "string", "format": "date-time"},
+        "train_end": {"type": "string", "format": "date-time"},
+        "validation_start": {"type": "string", "format": "date-time"},
+        "validation_end": {"type": "string", "format": "date-time"},
+        "test_start": {"type": "string", "format": "date-time"},
+        "test_end": {"type": "string", "format": "date-time"},
+        "train_rows": {"type": "integer", "minimum": 1},
+        "validation_rows": {"type": "integer", "minimum": 1},
+        "test_rows": {"type": "integer", "minimum": 1}
+      }
+    },
+    "candidates": {"type": "array", "minItems": 2, "uniqueItems": true, "items": {"enum": ["historical_rate", "previous_period", "regularized_poisson", "lightgbm_poisson", "lightgbm_tweedie"]}},
+    "selected_model": {"enum": ["historical_rate", "previous_period", "regularized_poisson", "lightgbm_poisson", "lightgbm_tweedie"]},
+    "selection_rule": {"type": "string", "minLength": 1, "maxLength": 1000},
+    "artifacts": {"type": "array", "minItems": 3, "items": {"$ref": "#/$defs/namedArtifact"}},
+    "generation_command": {"type": "string", "minLength": 1, "maxLength": 1000}
+  },
+  "$defs": {
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1, "maxLength": 512},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "namedArtifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "path", "sha256"],
+      "properties": {
+        "kind": {"enum": ["model_bundle", "predictions", "evaluation_report", "model_card", "reka_fact_bundle"]},
+        "path": {"type": "string", "minLength": 1, "maxLength": 512},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    }
+  }
+}

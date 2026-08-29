@@ -1,0 +1,62 @@
+{
+  "schema_version": "1.0.0",
+  "tenant_id": "00000000-0000-4000-8000-000000000001",
+  "run_id": "30000000-0000-4000-8000-000000000001",
+  "model_version": "demo-one-historical-rate-v1",
+  "data_version": "features-demo-one-20260830-v1",
+  "target": "next_window_count",
+  "generated_at": "2026-08-30T00:15:00Z",
+  "random_seed": 20260829,
+  "code_version": "3cbb731",
+  "config": {
+    "path": "configs/model/default.json",
+    "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "input": {
+    "path": "artifacts/tenant=00000000-0000-4000-8000-000000000001/features/features.parquet",
+    "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "split": {
+    "strategy": "rolling_origin_with_chronological_holdout",
+    "train_start": "2026-08-01T00:00:00Z",
+    "train_end": "2026-08-20T18:00:00Z",
+    "validation_start": "2026-08-21T00:00:00Z",
+    "validation_end": "2026-08-25T18:00:00Z",
+    "test_start": "2026-08-26T00:00:00Z",
+    "test_end": "2026-08-30T00:00:00Z",
+    "train_rows": 160,
+    "validation_rows": 40,
+    "test_rows": 40
+  },
+  "candidates": ["historical_rate", "previous_period", "regularized_poisson", "lightgbm_poisson"],
+  "selected_model": "historical_rate",
+  "selection_rule": "Select the simplest model unless validation Poisson deviance improves by at least 1%; do not use the test block for selection.",
+  "artifacts": [
+    {
+      "kind": "model_bundle",
+      "path": "artifacts/tenant=00000000-0000-4000-8000-000000000001/models/demo-one-historical-rate-v1/model.json",
+      "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    },
+    {
+      "kind": "predictions",
+      "path": "artifacts/tenant=00000000-0000-4000-8000-000000000001/models/demo-one-historical-rate-v1/predictions.parquet",
+      "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+    },
+    {
+      "kind": "evaluation_report",
+      "path": "artifacts/tenant=00000000-0000-4000-8000-000000000001/models/demo-one-historical-rate-v1/evaluation.json",
+      "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    },
+    {
+      "kind": "model_card",
+      "path": "artifacts/tenant=00000000-0000-4000-8000-000000000001/models/demo-one-historical-rate-v1/model-card.json",
+      "sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    },
+    {
+      "kind": "reka_fact_bundle",
+      "path": "artifacts/tenant=00000000-0000-4000-8000-000000000001/models/demo-one-historical-rate-v1/reka-facts.json",
+      "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    }
+  ],
+  "generation_command": "uv run python -m src.models.cli evaluate --config configs/model/default.json"
+}

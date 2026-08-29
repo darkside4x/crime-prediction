@@ -1,0 +1,31 @@
+{
+  "schema_version": "1.0.0",
+  "tenant_id": "00000000-0000-4000-8000-000000000001",
+  "dataset_version": "features-demo-one-20260830-v1",
+  "feature_schema_version": "2.0.0",
+  "artifact": {
+    "path": "artifacts/tenant=00000000-0000-4000-8000-000000000001/features/features.parquet",
+    "format": "parquet",
+    "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "source_versions": [
+    {
+      "source_id": "10000000-0000-4000-8000-000000000001",
+      "source_version": "synthetic-v1"
+    }
+  ],
+  "generated_at": "2026-08-30T00:05:00Z",
+  "data_as_of": "2026-08-29T23:59:59Z",
+  "interval_minutes": 360,
+  "row_count": 240,
+  "interval_start_min": "2026-08-01T00:00:00Z",
+  "interval_start_max": "2026-08-30T00:00:00Z",
+  "categories": ["property"],
+  "cell_count": 4,
+  "generation_command": "uv run python -m src.features.cli build --config configs/features/demo.json",
+  "code_version": "3cbb731",
+  "parameters": {
+    "h3_resolution": 8,
+    "window_hours": 6
+  }
+}
