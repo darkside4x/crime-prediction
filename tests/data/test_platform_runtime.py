@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -19,9 +20,10 @@ from src.data.video import (
     VideoPipelineService,
     VideoStore,
 )
-from src.data.video.capture import LiveCaptureWorker
+from src.data.video.capture import LiveCaptureWorker, resolve_camera_connection
 from src.data.video.coverage import CoverageObservation, persist_measured_snapshot
 from src.data.video.errors import VideoPipelineError
+from src.data.video.runtime import PlatformSettings
 
 TENANT = "11111111-1111-4111-8111-111111111111"
 SOURCE = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
@@ -65,7 +67,12 @@ def _setup(tmp_path: Path, *, fail_upload: bool = False):
         store,
         provider,
         DictLocationResolver(
-            {(TENANT, f"secret://locations/{SOURCE}"): {"latitude": 12.9, "longitude": 77.5}}
+            {
+                (TENANT, f"secret://locations/{SOURCE}"): {
+                    "latitude": 12.9,
+                    "longitude": 77.5,
+                }
+            }
         ),
         media_root=root,
         media_inspector=Inspector(),
@@ -94,7 +101,11 @@ def test_separate_workers_resume_persisted_chain_after_restart(tmp_path: Path) -
     broker.publish(JobMessage(TENANT, upload["job_id"], "upload"))
 
     upload_worker = VideoJobWorker(
-        store=store, broker=broker, service=service, operations=("upload",), worker_id="upload-1"
+        store=store,
+        broker=broker,
+        service=service,
+        operations=("upload",),
+        worker_id="upload-1",
     )
     assert upload_worker.poll_once()[0].state == "completed"
     assert len([call for call in provider.calls if call[0] == "upload"]) == 1
@@ -155,31 +166,47 @@ class FakeS3:
         self.uploads: list[tuple] = []
         self.downloads: list[tuple] = []
         self.deletes: list[dict] = []
+        self.objects: dict[tuple[str, str], tuple[bytes, dict[str, str]]] = {}
 
     def upload_file(self, *args, **kwargs):
         self.uploads.append((args, kwargs))
+        self.objects[(args[1], args[2])] = (
+            Path(args[0]).read_bytes(),
+            dict(kwargs["ExtraArgs"]["Metadata"]),
+        )
 
-    def download_file(self, bucket, key, target):
-        self.downloads.append((bucket, key, target))
-        Path(target).write_bytes(b"materialized")
+    def head_object(self, **kwargs):
+        return {"Metadata": self.objects[(kwargs["Bucket"], kwargs["Key"])][1]}
+
+    def download_file(self, bucket, key, target, ExtraArgs=None):
+        self.downloads.append((bucket, key, target, ExtraArgs))
+        Path(target).write_bytes(self.objects[(bucket, key)][0])
 
     def delete_object(self, **kwargs):
         self.deletes.append(kwargs)
 
 
-def test_s3_storage_is_tenant_prefixed_kms_encrypted_and_reference_safe(tmp_path: Path) -> None:
+def test_s3_storage_is_tenant_prefixed_kms_encrypted_and_reference_safe(
+    tmp_path: Path,
+) -> None:
     client = FakeS3()
     storage = S3MediaStorage(
-        bucket="restricted", kms_key_id="alias/video", region_name="ap-south-1", client=client
+        bucket="restricted",
+        kms_key_id="alias/video",
+        region_name="ap-south-1",
+        client=client,
     )
     path = tmp_path / "clip.mp4"
     path.write_bytes(b"media")
-    ref = storage.store(path, tenant_id=TENANT, asset_id=SOURCE, sha256="a" * 64)
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    ref = storage.store(path, tenant_id=TENANT, asset_id=SOURCE, sha256=digest)
     args, kwargs = client.uploads[0]
     assert args[2].startswith(f"tenants/{TENANT}/video-assets/{SOURCE}/")
     assert kwargs["ExtraArgs"]["ServerSideEncryption"] == "aws:kms"
     assert kwargs["ExtraArgs"]["SSEKMSKeyId"] == "alias/video"
     assert "restricted" not in ref and args[2] not in ref
+    with storage.materialize(ref, tenant_id=TENANT, asset_id=SOURCE) as materialized:
+        assert materialized.read_bytes() == b"media"
     with (
         pytest.raises(VideoPipelineError),
         storage.materialize(
@@ -191,20 +218,111 @@ def test_s3_storage_is_tenant_prefixed_kms_encrypted_and_reference_safe(tmp_path
         pass
 
 
+def test_s3_storage_rejects_tampered_objects_and_enforces_bucket_owner(
+    tmp_path: Path,
+) -> None:
+    client = FakeS3()
+    storage = S3MediaStorage(
+        bucket="restricted",
+        kms_key_id="alias/video",
+        expected_bucket_owner="123456789012",
+        region_name="ap-south-1",
+        client=client,
+    )
+    path = tmp_path / "clip.mp4"
+    path.write_bytes(b"trusted-media")
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    ref = storage.store(path, tenant_id=TENANT, asset_id=SOURCE, sha256=digest)
+    _, kwargs = client.uploads[0]
+    assert kwargs["ExtraArgs"]["ExpectedBucketOwner"] == "123456789012"
+    key = next(iter(client.objects))
+    _, metadata = client.objects[key]
+    client.objects[key] = (b"tampered-media", metadata)
+    with (
+        pytest.raises(VideoPipelineError, match="checksum verification") as caught,
+        storage.materialize(ref, tenant_id=TENANT, asset_id=SOURCE),
+    ):
+        pass
+    assert caught.value.code == "media_integrity_mismatch"
+
+
+def test_camera_connection_hides_credentials_and_rejects_embedded_userinfo() -> None:
+    class Secrets:
+        def __init__(self) -> None:
+            self.values = {
+                "secret://endpoint": {"stream_url": "rtsps://camera.example/live"},
+                "secret://credentials": {
+                    "username": "operator",
+                    "password": "never-print-me",
+                },
+            }
+
+        def resolve_json(self, ref: str) -> dict:
+            return self.values[ref]
+
+    source = {
+        "connection": {
+            "transport": "rtsp",
+            "endpoint_ref": "secret://endpoint",
+            "credential_ref": "secret://credentials",
+        }
+    }
+    secrets = Secrets()
+    connection = resolve_camera_connection(source, secrets)
+    assert "never-print-me" not in repr(connection)
+    secrets.values["secret://endpoint"] = {
+        "stream_url": "rtsps://embedded:credential@camera.example/live"
+    }
+    with pytest.raises(VideoPipelineError) as caught:
+        resolve_camera_connection(source, secrets)
+    assert caught.value.code == "camera_endpoint_invalid"
+
+
+def test_platform_settings_repr_never_contains_secrets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    values = {
+        "DATABASE_URL": "postgresql://crime_app:database-secret@db.example/crime",
+        "VIDEO_QUEUE_URL": "https://sqs.ap-south-1.amazonaws.com/123/jobs",
+        "VIDEO_QUEUE_DLQ_URL": "https://sqs.ap-south-1.amazonaws.com/123/jobs-dlq",
+        "VIDEO_MEDIA_BUCKET": "restricted",
+        "VIDEO_MEDIA_KMS_KEY_ID": "alias/video",
+        "VIDEO_MEDIA_BUCKET_OWNER": "123456789012",
+        "LOCATION_SECRET_PREFIX": "crime/production/tenants",
+        "AWS_REGION": "ap-south-1",
+        "REKA_API_KEY": "reka-secret-value",
+    }
+    for name, value in values.items():
+        monkeypatch.setenv(name, value)
+    rendered = repr(PlatformSettings.from_environment())
+    assert "database-secret" not in rendered
+    assert "reka-secret-value" not in rendered
+
+
 def test_coverage_is_measured_available_seconds_over_expected(tmp_path: Path) -> None:
     _, _, service, _ = _setup(tmp_path)
     telemetry = InMemoryCoverageTelemetry()
     telemetry.record(
         CoverageObservation(
-            TENANT, SOURCE, "2026-01-01T00:00:00Z", 300,
-            connected=True, frame_processable=True, detector_available=True,
+            TENANT,
+            SOURCE,
+            "2026-01-01T00:00:00Z",
+            300,
+            connected=True,
+            frame_processable=True,
+            detector_available=True,
             processing_latency_ms=250,
         )
     )
     telemetry.record(
         CoverageObservation(
-            TENANT, SOURCE, "2026-01-01T00:05:00Z", 300,
-            connected=True, frame_processable=True, detector_available=False,
+            TENANT,
+            SOURCE,
+            "2026-01-01T00:05:00Z",
+            300,
+            connected=True,
+            frame_processable=True,
+            detector_available=False,
             reka_available=False,
         )
     )
@@ -222,7 +340,9 @@ def test_coverage_is_measured_available_seconds_over_expected(tmp_path: Path) ->
     assert "reka_unavailable" in snapshot["degraded_reason_codes"]
 
 
-def test_hls_live_capture_creates_bounded_segment_and_durable_upload_job(tmp_path: Path) -> None:
+def test_hls_live_capture_creates_bounded_segment_and_durable_upload_job(
+    tmp_path: Path,
+) -> None:
     store, _, service, _ = _setup(tmp_path)
     live_source = {
         **_source(),
@@ -271,11 +391,13 @@ class FakeSqs:
         self.deleted: list[dict] = []
         self.visibility: list[dict] = []
         self.messages: list[dict] = []
+        self.receives: list[dict] = []
 
     def send_message(self, **kwargs):
         self.sent.append(kwargs)
 
     def receive_message(self, **kwargs):
+        self.receives.append(kwargs)
         return {"Messages": self.messages}
 
     def delete_message(self, **kwargs):
@@ -285,7 +407,12 @@ class FakeSqs:
         self.visibility.append(kwargs)
 
     def get_queue_attributes(self, **kwargs):
-        return {"Attributes": {"ApproximateNumberOfMessages": "2", "ApproximateNumberOfMessagesNotVisible": "1"}}
+        return {
+            "Attributes": {
+                "ApproximateNumberOfMessages": "2",
+                "ApproximateNumberOfMessagesNotVisible": "1",
+            }
+        }
 
 
 def test_sqs_delivery_is_minimal_retryable_and_explicitly_dead_lettered() -> None:
@@ -300,7 +427,9 @@ def test_sqs_delivery_is_minimal_retryable_and_explicitly_dead_lettered() -> Non
     message = JobMessage(TENANT, SOURCE, "upload")
     broker.publish(message)
     assert set(json.loads(client.sent[0]["MessageBody"])) == {
-        "tenant_id", "job_id", "operation"
+        "tenant_id",
+        "job_id",
+        "operation",
     }
     client.messages = [
         {
@@ -316,3 +445,33 @@ def test_sqs_delivery_is_minimal_retryable_and_explicitly_dead_lettered() -> Non
     assert client.sent[-1]["QueueUrl"].endswith("jobs-dlq")
     assert client.deleted[-1]["ReceiptHandle"] == "receipt-1"
     assert broker.depth() == 3
+
+
+def test_sqs_operation_queues_route_each_stage_without_worker_contention() -> None:
+    client = FakeSqs()
+    queues = {
+        operation: f"https://sqs.example/{operation}"
+        for operation in ("upload", "index", "analyze", "delete")
+    }
+    broker = SqsJobBroker(
+        queue_url=queues["upload"],
+        queue_urls=queues,
+        dead_letter_queue_url="https://sqs.example/jobs-dlq",
+        region_name="ap-south-1",
+        wait_seconds=0,
+        client=client,
+    )
+    index_message = JobMessage(TENANT, SOURCE, "index")
+    broker.publish(index_message)
+    assert client.sent[-1]["QueueUrl"] == queues["index"]
+    client.messages = [
+        {
+            "Body": index_message.body(),
+            "ReceiptHandle": "index-receipt",
+            "Attributes": {"ApproximateReceiveCount": "1"},
+        }
+    ]
+    delivery = broker.receive(operations=("index",))[0]
+    assert client.receives[-1]["QueueUrl"] == queues["index"]
+    broker.acknowledge(delivery)
+    assert client.deleted[-1]["QueueUrl"] == queues["index"]

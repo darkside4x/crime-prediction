@@ -10,7 +10,7 @@ from pathlib import Path
 from .capture import AwsSecretsManagerResolver, FfmpegSegmenter, LiveCaptureWorker
 from .coverage import PostgresCoverageTelemetry
 from .errors import VideoPipelineError
-from .runtime import PlatformSettings, create_platform_runtime
+from .runtime import PlatformSettings, _secret_value, create_platform_runtime
 from .worker import VideoJobWorker
 
 
@@ -23,7 +23,7 @@ class WorkerLocationResolver:
 
 
 def migrate() -> None:
-    database_url = os.getenv("DATABASE_URL", "").strip()
+    database_url = _secret_value("DATABASE_URL")
     if not database_url:
         raise ValueError("DATABASE_URL is required")
     try:

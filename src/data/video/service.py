@@ -7,6 +7,7 @@ import json
 import math
 import subprocess
 import uuid
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -21,7 +22,14 @@ from .reka import VisionProvider
 from .storage import LocalMediaStorage, MediaScanner, MediaStorage, NoOpMediaScanner
 from .store import VideoStore
 
-ALLOWED_CATEGORIES = {"property", "violence", "public_order", "traffic_safety", "other", "unmapped"}
+ALLOWED_CATEGORIES = {
+    "property",
+    "violence",
+    "public_order",
+    "traffic_safety",
+    "other",
+    "unmapped",
+}
 REVIEW_ROLES = {"reviewer", "tenant_admin", "platform_operator"}
 NAMESPACE = uuid.UUID("e3978285-344f-40c8-b807-d44464a23ed3")
 
@@ -30,9 +38,13 @@ def _parse_utc(value: str, name: str) -> datetime:
     try:
         parsed = datetime.fromisoformat(value)
     except (AttributeError, ValueError) as error:
-        raise VideoPipelineError("timestamp_invalid", f"{name} must be a valid ISO 8601 timestamp") from error
+        raise VideoPipelineError(
+            "timestamp_invalid", f"{name} must be a valid ISO 8601 timestamp"
+        ) from error
     if parsed.tzinfo is None or parsed.utcoffset() is None:
-        raise VideoPipelineError("timestamp_timezone_missing", f"{name} must include a timezone")
+        raise VideoPipelineError(
+            "timestamp_timezone_missing", f"{name} must include a timezone"
+        )
     return parsed.astimezone(UTC)
 
 
@@ -63,8 +75,14 @@ class FfprobeMediaInspector:
         try:
             completed = subprocess.run(
                 [
-                    "ffprobe", "-v", "error", "-show_entries", "format=duration,format_name",
-                    "-of", "json", str(path),
+                    "ffprobe",
+                    "-v",
+                    "error",
+                    "-show_entries",
+                    "format=duration,format_name",
+                    "-of",
+                    "json",
+                    str(path),
                 ],
                 check=True,
                 capture_output=True,
@@ -76,8 +94,16 @@ class FfprobeMediaInspector:
             if "mp4" not in str(format_data["format_name"]).split(","):
                 raise ValueError("not mp4")
             return float(format_data["duration"])
-        except (OSError, subprocess.SubprocessError, KeyError, ValueError, json.JSONDecodeError) as error:
-            raise VideoPipelineError("video_probe_failed", "Server could not validate MP4 duration") from error
+        except (
+            OSError,
+            subprocess.SubprocessError,
+            KeyError,
+            ValueError,
+            json.JSONDecodeError,
+        ) as error:
+            raise VideoPipelineError(
+                "video_probe_failed", "Server could not validate MP4 duration"
+            ) from error
 
 
 @dataclass
@@ -87,7 +113,9 @@ class DictLocationResolver:
     def resolve(self, tenant_id: str, location_ref: str) -> dict[str, float]:
         value = self.locations.get((tenant_id, location_ref))
         if value is None:
-            raise VideoPipelineError("location_unavailable", "Source location could not be resolved")
+            raise VideoPipelineError(
+                "location_unavailable", "Source location could not be resolved"
+            )
         return dict(value)
 
 
@@ -121,9 +149,13 @@ class VideoPipelineService:
         self.media_storage = media_storage or LocalMediaStorage(self.media_root)
         self.media_scanner = media_scanner or NoOpMediaScanner()
 
-    def register_source(self, payload: dict[str, Any], *, authenticated_tenant_id: str) -> dict[str, Any]:
+    def register_source(
+        self, payload: dict[str, Any], *, authenticated_tenant_id: str
+    ) -> dict[str, Any]:
         if payload.get("tenant_id") != authenticated_tenant_id:
-            raise VideoPipelineError("tenant_mismatch", "Source does not belong to authenticated tenant")
+            raise VideoPipelineError(
+                "tenant_mismatch", "Source does not belong to authenticated tenant"
+            )
         validate_contract("camera-source.schema.json", payload)
         transport = payload["connection"]["transport"]
         valid = (
@@ -132,10 +164,18 @@ class VideoPipelineService:
             payload["mode"] == "live_camera" and transport in {"rtsp", "onvif", "hls"}
         )
         if not valid:
-            raise VideoPipelineError("source_mode_invalid", "Camera mode and transport are incompatible")
+            raise VideoPipelineError(
+                "source_mode_invalid", "Camera mode and transport are incompatible"
+            )
         self.store.put_source(payload)
         self.store.ingestion_store.register_camera_source(payload)
-        self.store.audit(authenticated_tenant_id, "source.register", "source", payload["source_id"], "success")
+        self.store.audit(
+            authenticated_tenant_id,
+            "source.register",
+            "source",
+            payload["source_id"],
+            "success",
+        )
         return dict(payload)
 
     def register_live_source(
@@ -143,14 +183,24 @@ class VideoPipelineService:
     ) -> dict[str, Any]:
         """Backward-compatible live-source entrypoint."""
         if payload.get("mode") != "live_camera":
-            raise VideoPipelineError("source_mode_invalid", "Expected a live-camera source")
-        return self.register_source(payload, authenticated_tenant_id=authenticated_tenant_id)
+            raise VideoPipelineError(
+                "source_mode_invalid", "Expected a live-camera source"
+            )
+        return self.register_source(
+            payload, authenticated_tenant_id=authenticated_tenant_id
+        )
 
-    def register_recorded_source(self, payload: dict[str, Any], *, authenticated_tenant_id: str) -> dict[str, Any]:
+    def register_recorded_source(
+        self, payload: dict[str, Any], *, authenticated_tenant_id: str
+    ) -> dict[str, Any]:
         """Backward-compatible recorded-source entrypoint."""
         if payload.get("mode") != "recorded_video":
-            raise VideoPipelineError("source_mode_invalid", "Expected a recorded-video source")
-        return self.register_source(payload, authenticated_tenant_id=authenticated_tenant_id)
+            raise VideoPipelineError(
+                "source_mode_invalid", "Expected a recorded-video source"
+            )
+        return self.register_source(
+            payload, authenticated_tenant_id=authenticated_tenant_id
+        )
 
     def accept_upload(
         self,
@@ -168,43 +218,79 @@ class VideoPipelineService:
         kind: str | None = None,
     ) -> dict[str, Any]:
         source = self.store.get_source(authenticated_tenant_id, source_id)
-        expected_kind = "recorded_upload" if source["mode"] == "recorded_video" else "live_segment"
+        expected_kind = (
+            "recorded_upload" if source["mode"] == "recorded_video" else "live_segment"
+        )
         asset_kind = kind or expected_kind
         if asset_kind != expected_kind:
             raise VideoPipelineError(
-                "asset_kind_invalid", "Video asset kind does not match its camera source"
+                "asset_kind_invalid",
+                "Video asset kind does not match its camera source",
             )
         if not consent_confirmed:
-            raise VideoPipelineError("consent_required", "Lawful-use and consent confirmation is required")
+            raise VideoPipelineError(
+                "consent_required", "Lawful-use and consent confirmation is required"
+            )
         if content_type != "video/mp4" or path.suffix.lower() != ".mp4":
-            raise VideoPipelineError("video_type_invalid", "Only MP4 video is accepted in this phase")
+            raise VideoPipelineError(
+                "video_type_invalid", "Only MP4 video is accepted in this phase"
+            )
         resolved = path.resolve()
         if not resolved.is_file() or not resolved.is_relative_to(self.media_root):
-            raise VideoPipelineError("video_path_invalid", "Video must be inside the restricted media directory")
+            raise VideoPipelineError(
+                "video_path_invalid",
+                "Video must be inside the restricted media directory",
+            )
         size = resolved.stat().st_size
         if size < 12 or size > self.max_upload_bytes:
-            raise VideoPipelineError("video_size_invalid", "Video size is outside configured bounds")
+            raise VideoPipelineError(
+                "video_size_invalid", "Video size is outside configured bounds"
+            )
         with resolved.open("rb") as handle:
             header = handle.read(12)
         if header[4:8] != b"ftyp":
-            raise VideoPipelineError("video_corrupt", "MP4 container signature is invalid")
+            raise VideoPipelineError(
+                "video_corrupt", "MP4 container signature is invalid"
+            )
         probed_duration = self.media_inspector.duration_seconds(resolved)
-        if not math.isfinite(probed_duration) or probed_duration <= 0 or probed_duration > self.max_duration_seconds:
-            raise VideoPipelineError("video_duration_invalid", "Video duration is outside configured bounds")
+        if (
+            not math.isfinite(probed_duration)
+            or probed_duration <= 0
+            or probed_duration > self.max_duration_seconds
+        ):
+            raise VideoPipelineError(
+                "video_duration_invalid", "Video duration is outside configured bounds"
+            )
         start = _parse_utc(captured_start, "captured_start")
         end = _parse_utc(captured_end, "captured_end")
         if end <= start or abs((end - start).total_seconds() - probed_duration) > 2:
-            raise VideoPipelineError("video_duration_mismatch", "Capture timestamps do not match probed duration")
+            raise VideoPipelineError(
+                "video_duration_mismatch",
+                "Capture timestamps do not match probed duration",
+            )
         if duration_seconds is not None and abs(duration_seconds - probed_duration) > 2:
-            raise VideoPipelineError("video_duration_mismatch", "Declared and probed video durations do not match")
+            raise VideoPipelineError(
+                "video_duration_mismatch",
+                "Declared and probed video durations do not match",
+            )
         checksum = _sha256(resolved)
         if expected_sha256 is not None and checksum != expected_sha256.lower():
-            raise VideoPipelineError("checksum_mismatch", "Video checksum did not match")
-        if self.store.tenant_asset_bytes(authenticated_tenant_id) + size > self.tenant_quota_bytes:
-            raise VideoPipelineError("tenant_video_quota_exceeded", "Tenant video storage quota would be exceeded")
+            raise VideoPipelineError(
+                "checksum_mismatch", "Video checksum did not match"
+            )
+        if (
+            self.store.tenant_asset_bytes(authenticated_tenant_id) + size
+            > self.tenant_quota_bytes
+        ):
+            raise VideoPipelineError(
+                "tenant_video_quota_exceeded",
+                "Tenant video storage quota would be exceeded",
+            )
         received = _parse_utc(received_at or utc_now(), "received_at")
         retention_until = received + timedelta(days=source["retention_policy_days"])
-        asset_id = str(uuid.uuid5(NAMESPACE, f"{authenticated_tenant_id}:{source_id}:{checksum}"))
+        asset_id = str(
+            uuid.uuid5(NAMESPACE, f"{authenticated_tenant_id}:{source_id}:{checksum}")
+        )
         payload = {
             "schema_version": "1.0.0",
             "tenant_id": authenticated_tenant_id,
@@ -222,16 +308,34 @@ class VideoPipelineService:
             "retention_until": _utc(retention_until),
         }
         validate_contract("video-asset.schema.json", payload)
-        self.media_scanner.scan(resolved)
-        storage_ref = self.media_storage.store(
-            resolved,
-            tenant_id=authenticated_tenant_id,
-            asset_id=asset_id,
-            sha256=checksum,
-        )
-        self.store.put_asset(payload, storage_ref)
-        self.store.audit(authenticated_tenant_id, "video.accept", "asset", asset_id, "success")
-        return payload
+        storage_ref: str | None = None
+        metadata_persisted = False
+        try:
+            self.media_scanner.scan(resolved)
+            storage_ref = self.media_storage.store(
+                resolved,
+                tenant_id=authenticated_tenant_id,
+                asset_id=asset_id,
+                sha256=checksum,
+            )
+            self.store.put_asset(payload, storage_ref)
+            metadata_persisted = True
+            self.store.audit(
+                authenticated_tenant_id, "video.accept", "asset", asset_id, "success"
+            )
+            return payload
+        except Exception:
+            if storage_ref is not None and not metadata_persisted:
+                with suppress(VideoPipelineError):
+                    self.media_storage.delete(
+                        storage_ref,
+                        tenant_id=authenticated_tenant_id,
+                        asset_id=asset_id,
+                    )
+            raise
+        finally:
+            if not getattr(self.media_storage, "development_only", False):
+                resolved.unlink(missing_ok=True)
 
     def process_asset(self, tenant_id: str, asset_id: str) -> list[dict[str, Any]]:
         """Run the idempotent upload/index/analyze chain once.
@@ -249,7 +353,11 @@ class VideoPipelineService:
         job = self.store.enqueue(tenant_id, asset_id, operation)
         if job["state"] == "completed":
             if operation == "analyze":
-                return [value for value in self.store.list_candidates(tenant_id) if value["asset_id"] == asset_id]
+                return [
+                    value
+                    for value in self.store.list_candidates(tenant_id)
+                    if value["asset_id"] == asset_id
+                ]
             if operation == "index":
                 mapping = self.store.get_mapping(tenant_id, asset_id)
                 return mapping["indexing_status"] if mapping else None
@@ -260,16 +368,24 @@ class VideoPipelineService:
         try:
             result = self._execute(tenant_id, asset_id, operation)
             if operation == "index" and result in {"pending", "indexing"}:
-                self.store.transition_job(tenant_id, job["job_id"], "retry", "reka_index_pending")
+                self.store.transition_job(
+                    tenant_id, job["job_id"], "retry", "reka_index_pending"
+                )
             else:
                 self.store.transition_job(tenant_id, job["job_id"], "completed")
-            self.store.audit(tenant_id, f"reka.{operation}", "asset", asset_id, "success")
+            self.store.audit(
+                tenant_id, f"reka.{operation}", "asset", asset_id, "success"
+            )
             return result
         except VideoPipelineError as error:
             updated = self.store.get_job(tenant_id, job["job_id"])
             retry = error.retryable and updated["attempts"] < updated["max_attempts"]
-            self.store.transition_job(tenant_id, job["job_id"], "retry" if retry else "failed", error.code)
-            self.store.audit(tenant_id, f"reka.{operation}", "asset", asset_id, "failure", error.code)
+            self.store.transition_job(
+                tenant_id, job["job_id"], "retry" if retry else "failed", error.code
+            )
+            self.store.audit(
+                tenant_id, f"reka.{operation}", "asset", asset_id, "failure", error.code
+            )
             raise
 
     def _execute(self, tenant_id: str, asset_id: str, operation: str) -> Any:
@@ -288,27 +404,55 @@ class VideoPipelineService:
                     captured_start=asset["captured_start"],
                 )
             if not isinstance(video_id, str) or not video_id:
-                raise VideoPipelineError("reka_response_invalid", "Reka upload returned no video identifier")
-            self.store.put_mapping(tenant_id, asset["source_id"], asset_id, video_id, "pending")
+                raise VideoPipelineError(
+                    "reka_response_invalid", "Reka upload returned no video identifier"
+                )
+            self.store.put_mapping(
+                tenant_id, asset["source_id"], asset_id, video_id, "pending"
+            )
             self.store.update_asset_status(tenant_id, asset_id, "processing")
             return None
         if mapping is None:
-            raise VideoPipelineError("reka_mapping_missing", "Video has not been uploaded")
+            raise VideoPipelineError(
+                "reka_mapping_missing", "Video has not been uploaded"
+            )
         if operation == "index":
             status = self.provider.indexing_status(mapping["reka_video_id"])
             if status not in {"pending", "indexing", "indexed", "failed"}:
-                raise VideoPipelineError("reka_response_invalid", "Reka returned an invalid indexing status")
-            self.store.put_mapping(tenant_id, asset["source_id"], asset_id, mapping["reka_video_id"], status)
+                raise VideoPipelineError(
+                    "reka_response_invalid", "Reka returned an invalid indexing status"
+                )
+            self.store.put_mapping(
+                tenant_id,
+                asset["source_id"],
+                asset_id,
+                mapping["reka_video_id"],
+                status,
+            )
             if status == "failed":
-                raise VideoPipelineError("reka_index_failed", "Reka video indexing failed")
+                raise VideoPipelineError(
+                    "reka_index_failed", "Reka video indexing failed"
+                )
             return status
         if operation == "analyze":
             if mapping["indexing_status"] != "indexed":
-                raise VideoPipelineError("reka_index_pending", "Video indexing is not complete", retryable=True)
-            proposals = self.provider.propose_candidates(mapping["reka_video_id"], prompt_version=self.prompt_version)
+                raise VideoPipelineError(
+                    "reka_index_pending",
+                    "Video indexing is not complete",
+                    retryable=True,
+                )
+            proposals = self.provider.propose_candidates(
+                mapping["reka_video_id"], prompt_version=self.prompt_version
+            )
             if not isinstance(proposals, list) or len(proposals) > 100:
-                raise VideoPipelineError("reka_output_invalid", "Reka returned malformed or excessive candidate proposals")
-            candidates = [self._candidate(asset, mapping["reka_video_id"], proposal) for proposal in proposals]
+                raise VideoPipelineError(
+                    "reka_output_invalid",
+                    "Reka returned malformed or excessive candidate proposals",
+                )
+            candidates = [
+                self._candidate(asset, mapping["reka_video_id"], proposal)
+                for proposal in proposals
+            ]
             for candidate, semantic_key in candidates:
                 self.store.put_candidate(candidate, semantic_key)
             self.store.update_asset_status(tenant_id, asset_id, "processed")
@@ -318,7 +462,9 @@ class VideoPipelineService:
                 self.provider.delete(mapping["reka_video_id"])
                 self.store.mark_remote_deleted(tenant_id, asset_id)
             storage_ref = self._asset_storage_ref(tenant_id, asset_id)
-            self.media_storage.delete(storage_ref, tenant_id=tenant_id, asset_id=asset_id)
+            self.media_storage.delete(
+                storage_ref, tenant_id=tenant_id, asset_id=asset_id
+            )
             self.store.update_asset_status(tenant_id, asset_id, "deleted")
             return None
         raise ValueError("Unsupported operation")
@@ -326,7 +472,9 @@ class VideoPipelineService:
     def execute_operation(self, tenant_id: str, asset_id: str, operation: str) -> Any:
         """Execute one already-claimed durable job operation."""
         if operation not in {"upload", "index", "analyze", "delete"}:
-            raise VideoPipelineError("job_operation_invalid", "Unsupported video job operation")
+            raise VideoPipelineError(
+                "job_operation_invalid", "Unsupported video job operation"
+            )
         return self._execute(tenant_id, asset_id, operation)
 
     def _asset_storage_ref(self, tenant_id: str, asset_id: str) -> str:
@@ -335,28 +483,58 @@ class VideoPipelineService:
             return str(getter(tenant_id, asset_id))
         return f"file://{self.store.asset_path(tenant_id, asset_id).resolve()}"
 
-    def _candidate(self, asset: dict[str, Any], remote_id: str, proposal: dict[str, Any]) -> tuple[dict[str, Any], str]:
-        if not isinstance(proposal, dict) or set(proposal) != {"offset_seconds", "category", "confidence"}:
-            raise VideoPipelineError("reka_output_prohibited", "Candidate output contained prohibited or missing fields")
+    def _candidate(
+        self, asset: dict[str, Any], remote_id: str, proposal: dict[str, Any]
+    ) -> tuple[dict[str, Any], str]:
+        if not isinstance(proposal, dict) or set(proposal) != {
+            "offset_seconds",
+            "category",
+            "confidence",
+        }:
+            raise VideoPipelineError(
+                "reka_output_prohibited",
+                "Candidate output contained prohibited or missing fields",
+            )
         offset = proposal["offset_seconds"]
         category = proposal["category"]
         confidence = proposal["confidence"]
-        if isinstance(offset, bool) or not isinstance(offset, (int, float)) or not math.isfinite(offset) or offset < 0:
-            raise VideoPipelineError("reka_output_invalid", "Candidate timestamp offset is invalid")
+        if (
+            isinstance(offset, bool)
+            or not isinstance(offset, (int, float))
+            or not math.isfinite(offset)
+            or offset < 0
+        ):
+            raise VideoPipelineError(
+                "reka_output_invalid", "Candidate timestamp offset is invalid"
+            )
         if category not in ALLOWED_CATEGORIES:
-            raise VideoPipelineError("reka_output_invalid", "Candidate category is invalid")
-        if isinstance(confidence, bool) or not isinstance(confidence, (int, float)) or not math.isfinite(confidence) or not 0 <= confidence <= 1:
-            raise VideoPipelineError("reka_output_invalid", "Candidate confidence is invalid")
+            raise VideoPipelineError(
+                "reka_output_invalid", "Candidate category is invalid"
+            )
+        if (
+            isinstance(confidence, bool)
+            or not isinstance(confidence, (int, float))
+            or not math.isfinite(confidence)
+            or not 0 <= confidence <= 1
+        ):
+            raise VideoPipelineError(
+                "reka_output_invalid", "Candidate confidence is invalid"
+            )
         start = _parse_utc(asset["captured_start"], "captured_start")
         end = _parse_utc(asset["captured_end"], "captured_end")
         occurred = start + timedelta(seconds=float(offset))
         if occurred > end:
-            raise VideoPipelineError("reka_output_invalid", "Candidate timestamp falls outside the video")
+            raise VideoPipelineError(
+                "reka_output_invalid", "Candidate timestamp falls outside the video"
+            )
         occurred_text = _utc(occurred)
         semantic_key = f"{asset['tenant_id']}:{asset['asset_id']}:{remote_id}:{self.prompt_version}:{occurred_text}:{category}"
         detection_id = str(uuid.uuid5(NAMESPACE, semantic_key))
         now = datetime.now(UTC)
-        expires = min(now + self.review_ttl, _parse_utc(asset["retention_until"], "retention_until"))
+        expires = min(
+            now + self.review_ttl,
+            _parse_utc(asset["retention_until"], "retention_until"),
+        )
         candidate = {
             "schema_version": "1.0.0",
             "tenant_id": asset["tenant_id"],
@@ -388,8 +566,12 @@ class VideoPipelineService:
         reviewed_at: str | None = None,
     ) -> dict[str, Any]:
         if role not in REVIEW_ROLES:
-            raise VideoPipelineError("review_forbidden", "Role is not permitted to review candidates")
-        existing = self.store.get_review_for_candidate(authenticated_tenant_id, detection_id)
+            raise VideoPipelineError(
+                "review_forbidden", "Role is not permitted to review candidates"
+            )
+        existing = self.store.get_review_for_candidate(
+            authenticated_tenant_id, detection_id
+        )
         if existing:
             same = existing["decision"] == decision
             if decision == "confirmed":
@@ -398,19 +580,32 @@ class VideoPipelineService:
                 same = same and existing.get("rejection_reason") == rejection_reason
             if same:
                 return existing
-            raise VideoPipelineError("review_already_final", "Candidate already has an immutable final review")
+            raise VideoPipelineError(
+                "review_already_final",
+                "Candidate already has an immutable final review",
+            )
         candidate = self.store.get_candidate(authenticated_tenant_id, detection_id)
         when = _parse_utc(reviewed_at or utc_now(), "reviewed_at")
-        if candidate["review_status"] == "expired" or when >= _parse_utc(candidate["expires_at"], "expires_at"):
-            raise VideoPipelineError("candidate_expired", "Expired candidate cannot be reviewed")
+        if candidate["review_status"] == "expired" or when >= _parse_utc(
+            candidate["expires_at"], "expires_at"
+        ):
+            raise VideoPipelineError(
+                "candidate_expired", "Expired candidate cannot be reviewed"
+            )
         if decision not in {"confirmed", "rejected"}:
-            raise VideoPipelineError("review_decision_invalid", "Decision must be confirmed or rejected")
+            raise VideoPipelineError(
+                "review_decision_invalid", "Decision must be confirmed or rejected"
+            )
         external_id = f"video-candidate:{detection_id}"
         promoted_event: dict[str, Any] | None = None
         review: dict[str, Any] = {
             "schema_version": "1.0.0",
             "tenant_id": authenticated_tenant_id,
-            "review_id": str(uuid.uuid5(NAMESPACE, f"review:{authenticated_tenant_id}:{detection_id}")),
+            "review_id": str(
+                uuid.uuid5(
+                    NAMESPACE, f"review:{authenticated_tenant_id}:{detection_id}"
+                )
+            ),
             "detection_id": detection_id,
             "decision": decision,
             "reviewed_by": reviewed_by,
@@ -418,10 +613,19 @@ class VideoPipelineService:
         }
         if decision == "confirmed":
             if confirmed_category not in ALLOWED_CATEGORIES - {"unmapped"}:
-                raise VideoPipelineError("confirmed_category_invalid", "Confirmed category is invalid")
-            review.update(confirmed_category=confirmed_category, promoted_external_event_id=external_id)
-            source = self.store.get_source(authenticated_tenant_id, candidate["source_id"])
-            location = self.location_resolver.resolve(authenticated_tenant_id, source["location_ref"])
+                raise VideoPipelineError(
+                    "confirmed_category_invalid", "Confirmed category is invalid"
+                )
+            review.update(
+                confirmed_category=confirmed_category,
+                promoted_external_event_id=external_id,
+            )
+            source = self.store.get_source(
+                authenticated_tenant_id, candidate["source_id"]
+            )
+            location = self.location_resolver.resolve(
+                authenticated_tenant_id, source["location_ref"]
+            )
             promoted_event = {
                 "schema_version": "1.0.0",
                 "tenant_id": authenticated_tenant_id,
@@ -431,12 +635,23 @@ class VideoPipelineService:
                 "received_at": _utc(when),
                 "category": confirmed_category,
                 "location": location,
-                "attributes": {"reporting_channel": "reka_vision_confirmed", "source_quality": candidate["confidence"]},
+                "attributes": {
+                    "reporting_channel": "reka_vision_confirmed",
+                    "source_quality": candidate["confidence"],
+                },
             }
             validate_contract("incident-event.schema.json", promoted_event)
         else:
-            if rejection_reason not in {"false_positive", "insufficient_evidence", "duplicate", "outside_scope", "other"}:
-                raise VideoPipelineError("rejection_reason_invalid", "A valid rejection reason is required")
+            if rejection_reason not in {
+                "false_positive",
+                "insufficient_evidence",
+                "duplicate",
+                "outside_scope",
+                "other",
+            }:
+                raise VideoPipelineError(
+                    "rejection_reason_invalid", "A valid rejection reason is required"
+                )
             review["rejection_reason"] = rejection_reason
         validate_contract("candidate-review.schema.json", review)
         if promoted_event is not None:
@@ -445,7 +660,13 @@ class VideoPipelineService:
             )
         else:
             self.store.put_review(review)
-        self.store.audit(authenticated_tenant_id, "candidate.review", "candidate", detection_id, "success")
+        self.store.audit(
+            authenticated_tenant_id,
+            "candidate.review",
+            "candidate",
+            detection_id,
+            "success",
+        )
         return review
 
     def record_coverage(
@@ -464,8 +685,18 @@ class VideoPipelineService:
         start = _parse_utc(interval_start, "interval_start")
         end = _parse_utc(interval_end, "interval_end")
         expected = int((end - start).total_seconds())
-        if expected <= 0 or not 0 <= detector_available_seconds <= processable_seconds <= connected_seconds <= expected:
-            raise VideoPipelineError("coverage_duration_invalid", "Coverage durations must be ordered within the interval")
+        if (
+            expected <= 0
+            or not 0
+            <= detector_available_seconds
+            <= processable_seconds
+            <= connected_seconds
+            <= expected
+        ):
+            raise VideoPipelineError(
+                "coverage_duration_invalid",
+                "Coverage durations must be ordered within the interval",
+            )
         payload = {
             "schema_version": "1.0.0",
             "tenant_id": tenant_id,
@@ -488,7 +719,10 @@ class VideoPipelineService:
         cutoff = _parse_utc(now or utc_now(), "now")
         count = 0
         for candidate in self.store.list_candidates(tenant_id):
-            if candidate["review_status"] == "awaiting_review" and _parse_utc(candidate["expires_at"], "expires_at") <= cutoff:
+            if (
+                candidate["review_status"] == "awaiting_review"
+                and _parse_utc(candidate["expires_at"], "expires_at") <= cutoff
+            ):
                 candidate["review_status"] = "expired"
                 validate_contract("candidate-detection.schema.json", candidate)
                 self.store.update_candidate(candidate)
@@ -504,12 +738,18 @@ class VideoPipelineService:
             try:
                 expired = self.store.expired_assets(cutoff)
             except TypeError as error:
-                raise ValueError("tenant_id is required for production retention") from error
+                raise ValueError(
+                    "tenant_id is required for production retention"
+                ) from error
         else:
             try:
                 expired = self.store.expired_assets(cutoff, tenant_id=tenant_id)
             except TypeError:
-                expired = [item for item in self.store.expired_assets(cutoff) if item[0] == tenant_id]
+                expired = [
+                    item
+                    for item in self.store.expired_assets(cutoff)
+                    if item[0] == tenant_id
+                ]
         for asset_tenant_id, asset_id in expired:
             job = self.store.enqueue(asset_tenant_id, asset_id, "delete")
             if job["state"] == "completed":
@@ -518,13 +758,32 @@ class VideoPipelineService:
             try:
                 self.execute_operation(asset_tenant_id, asset_id, "delete")
                 self.store.transition_job(asset_tenant_id, job["job_id"], "completed")
-                self.store.audit(asset_tenant_id, "reka.delete", "asset", asset_id, "success")
+                self.store.audit(
+                    asset_tenant_id, "reka.delete", "asset", asset_id, "success"
+                )
                 deleted.append(asset_id)
             except (VideoPipelineError, OSError) as error:
                 if isinstance(error, OSError):
-                    error = VideoPipelineError("local_retention_failed", "Local transient deletion failed", retryable=True)
+                    error = VideoPipelineError(
+                        "local_retention_failed",
+                        "Local transient deletion failed",
+                        retryable=True,
+                    )
                 updated = self.store.get_job(asset_tenant_id, job["job_id"])
-                state = "retry" if error.retryable and updated["attempts"] < updated["max_attempts"] else "failed"
-                self.store.transition_job(asset_tenant_id, job["job_id"], state, error.code)
-                self.store.audit(asset_tenant_id, "reka.delete", "asset", asset_id, "failure", error.code)
+                state = (
+                    "retry"
+                    if error.retryable and updated["attempts"] < updated["max_attempts"]
+                    else "failed"
+                )
+                self.store.transition_job(
+                    asset_tenant_id, job["job_id"], state, error.code
+                )
+                self.store.audit(
+                    asset_tenant_id,
+                    "reka.delete",
+                    "asset",
+                    asset_id,
+                    "failure",
+                    error.code,
+                )
         return deleted

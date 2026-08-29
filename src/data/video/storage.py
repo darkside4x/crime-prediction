@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import re
 import shutil
 import subprocess
 import tempfile
@@ -18,9 +20,13 @@ class MediaScanner(Protocol):
 
 
 class MediaStorage(Protocol):
-    def store(self, path: Path, *, tenant_id: str, asset_id: str, sha256: str) -> str: ...
+    def store(
+        self, path: Path, *, tenant_id: str, asset_id: str, sha256: str
+    ) -> str: ...
     @contextmanager
-    def materialize(self, storage_ref: str, *, tenant_id: str, asset_id: str) -> Iterator[Path]: ...
+    def materialize(
+        self, storage_ref: str, *, tenant_id: str, asset_id: str
+    ) -> Iterator[Path]: ...
     def delete(self, storage_ref: str, *, tenant_id: str, asset_id: str) -> None: ...
 
 
@@ -39,7 +45,9 @@ class ClamAVCommandScanner:
 
     development_only = False
 
-    def __init__(self, executable: str = "clamscan", *, timeout_seconds: float = 120) -> None:
+    def __init__(
+        self, executable: str = "clamscan", *, timeout_seconds: float = 120
+    ) -> None:
         self.executable = executable
         self.timeout_seconds = timeout_seconds
 
@@ -60,10 +68,14 @@ class ClamAVCommandScanner:
                 retryable=True,
             ) from error
         if result.returncode == 1:
-            raise VideoPipelineError("malware_detected", "Uploaded media failed malware scanning")
+            raise VideoPipelineError(
+                "malware_detected", "Uploaded media failed malware scanning"
+            )
         if result.returncode != 0:
             raise VideoPipelineError(
-                "malware_scan_failed", "Uploaded media could not be scanned", retryable=True
+                "malware_scan_failed",
+                "Uploaded media could not be scanned",
+                retryable=True,
             )
 
 
@@ -79,20 +91,30 @@ class LocalMediaStorage:
     def store(self, path: Path, *, tenant_id: str, asset_id: str, sha256: str) -> str:
         resolved = path.resolve()
         if not resolved.is_file() or not resolved.is_relative_to(self.root):
-            raise VideoPipelineError("video_path_invalid", "Video escaped the restricted media root")
+            raise VideoPipelineError(
+                "video_path_invalid", "Video escaped the restricted media root"
+            )
         return f"file://{resolved}"
 
     @contextmanager
-    def materialize(self, storage_ref: str, *, tenant_id: str, asset_id: str) -> Iterator[Path]:
+    def materialize(
+        self, storage_ref: str, *, tenant_id: str, asset_id: str
+    ) -> Iterator[Path]:
         if not storage_ref.startswith("file://"):
-            raise VideoPipelineError("storage_ref_invalid", "Local media reference is invalid")
+            raise VideoPipelineError(
+                "storage_ref_invalid", "Local media reference is invalid"
+            )
         path = Path(storage_ref[7:]).resolve()
         if not path.is_file() or not path.is_relative_to(self.root):
-            raise VideoPipelineError("storage_ref_invalid", "Local media reference escaped its root")
+            raise VideoPipelineError(
+                "storage_ref_invalid", "Local media reference escaped its root"
+            )
         yield path
 
     def delete(self, storage_ref: str, *, tenant_id: str, asset_id: str) -> None:
-        with self.materialize(storage_ref, tenant_id=tenant_id, asset_id=asset_id) as path:
+        with self.materialize(
+            storage_ref, tenant_id=tenant_id, asset_id=asset_id
+        ) as path:
             path.unlink(missing_ok=True)
 
 
@@ -107,6 +129,7 @@ class S3MediaStorage:
         *,
         bucket: str,
         kms_key_id: str,
+        expected_bucket_owner: str | None = None,
         region_name: str,
         client: object | None = None,
     ) -> None:
@@ -116,16 +139,34 @@ class S3MediaStorage:
             try:
                 import boto3
             except ImportError as error:  # pragma: no cover
-                raise RuntimeError("Install the platform extra: pip install -e '.[platform]'") from error
+                raise RuntimeError(
+                    "Install the platform extra: pip install -e '.[platform]'"
+                ) from error
             client = boto3.client("s3", region_name=region_name)
         self.client = client
         self.bucket = bucket
         self.kms_key_id = kms_key_id
+        if expected_bucket_owner is not None and not re.fullmatch(
+            r"[0-9]{12}", expected_bucket_owner
+        ):
+            raise ValueError(
+                "Expected S3 bucket owner must be a 12-digit AWS account ID"
+            )
+        self.expected_bucket_owner = expected_bucket_owner
+
+    def _owner_args(self) -> dict[str, str]:
+        return (
+            {"ExpectedBucketOwner": self.expected_bucket_owner}
+            if self.expected_bucket_owner is not None
+            else {}
+        )
 
     @staticmethod
     def _key(tenant_id: str, asset_id: str) -> str:
         if "/" in tenant_id or "/" in asset_id or ".." in tenant_id or ".." in asset_id:
-            raise ValueError("Tenant and asset identifiers cannot contain path separators")
+            raise ValueError(
+                "Tenant and asset identifiers cannot contain path separators"
+            )
         return f"tenants/{tenant_id}/video-assets/{asset_id}/original.mp4"
 
     def store(self, path: Path, *, tenant_id: str, asset_id: str, sha256: str) -> str:
@@ -141,33 +182,64 @@ class S3MediaStorage:
                     "BucketKeyEnabled": True,
                     "ContentType": "video/mp4",
                     "Metadata": {"sha256": sha256},
+                    **self._owner_args(),
                 },
             )
         except Exception as error:
             raise VideoPipelineError(
-                "media_storage_unavailable", "Encrypted media storage was unavailable", retryable=True
+                "media_storage_unavailable",
+                "Encrypted media storage was unavailable",
+                retryable=True,
             ) from error
         return f"{self.reference_prefix}{tenant_id}/{asset_id}"
 
     def _validate_ref(self, storage_ref: str, tenant_id: str, asset_id: str) -> str:
         expected = f"{self.reference_prefix}{tenant_id}/{asset_id}"
         if storage_ref != expected:
-            raise VideoPipelineError("storage_ref_invalid", "Media reference did not match tenant asset")
+            raise VideoPipelineError(
+                "storage_ref_invalid", "Media reference did not match tenant asset"
+            )
         return self._key(tenant_id, asset_id)
 
     @contextmanager
-    def materialize(self, storage_ref: str, *, tenant_id: str, asset_id: str) -> Iterator[Path]:
+    def materialize(
+        self, storage_ref: str, *, tenant_id: str, asset_id: str
+    ) -> Iterator[Path]:
         key = self._validate_ref(storage_ref, tenant_id, asset_id)
         directory = Path(tempfile.mkdtemp(prefix="crime-video-worker-"))
         target = directory / "input.mp4"
         try:
-            self.client.download_file(self.bucket, key, str(target))
+            head = self.client.head_object(
+                Bucket=self.bucket,
+                Key=key,
+                **self._owner_args(),
+            )
+            expected_sha256 = str(head.get("Metadata", {}).get("sha256", "")).lower()
+            if not re.fullmatch(r"[0-9a-f]{64}", expected_sha256):
+                raise VideoPipelineError(
+                    "media_integrity_invalid",
+                    "Encrypted media checksum metadata was invalid",
+                )
+            self.client.download_file(
+                self.bucket,
+                key,
+                str(target),
+                ExtraArgs=self._owner_args() or None,
+            )
+            digest = hashlib.sha256(target.read_bytes()).hexdigest()
+            if digest != expected_sha256:
+                raise VideoPipelineError(
+                    "media_integrity_mismatch",
+                    "Encrypted media failed checksum verification",
+                )
             yield target
         except VideoPipelineError:
             raise
         except Exception as error:
             raise VideoPipelineError(
-                "media_materialization_failed", "Encrypted media could not be materialized", retryable=True
+                "media_materialization_failed",
+                "Encrypted media could not be materialized",
+                retryable=True,
             ) from error
         finally:
             shutil.rmtree(directory, ignore_errors=True)
@@ -175,7 +247,7 @@ class S3MediaStorage:
     def delete(self, storage_ref: str, *, tenant_id: str, asset_id: str) -> None:
         key = self._validate_ref(storage_ref, tenant_id, asset_id)
         try:
-            self.client.delete_object(Bucket=self.bucket, Key=key)
+            self.client.delete_object(Bucket=self.bucket, Key=key, **self._owner_args())
         except Exception as error:
             raise VideoPipelineError(
                 "media_delete_failed", "Encrypted media deletion failed", retryable=True

@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:17.6-alpine
+        image: postgres:17.11-alpine3.24
         env:
           POSTGRES_DB: crime_prediction
           POSTGRES_USER: postgres

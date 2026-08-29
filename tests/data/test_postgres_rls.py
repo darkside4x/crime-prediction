@@ -54,3 +54,32 @@ def test_database_rls_denies_known_cross_tenant_id() -> None:
                 )
     finally:
         database.close()
+
+
+def test_database_rate_limit_is_atomic_and_stores_no_raw_key() -> None:
+    psycopg = pytest.importorskip("psycopg")
+    from src.data.platform_security import PostgresRateLimiter
+    from src.data.postgres import TenantPostgres
+
+    root = Path(__file__).resolve().parents[2]
+    with psycopg.connect(DSN, autocommit=True) as connection:
+        for migration in sorted((root / "migrations" / "postgres").glob("*.sql")):
+            connection.execute(migration.read_text(encoding="utf-8"))
+
+    database = TenantPostgres(DSN)
+    try:
+        limiter = PostgresRateLimiter(database, requests=2, window_seconds=60)
+        raw_key = "token:raw-credential-must-not-be-stored"
+        assert limiter.allow(raw_key, now=120.0) == (True, 0)
+        assert limiter.allow(raw_key, now=121.0) == (True, 0)
+        assert limiter.allow(raw_key, now=122.0) == (False, 58)
+        with database.system_transaction() as cursor:
+            cursor.execute(
+                "SELECT key_hash,request_count FROM api_rate_limit_buckets WHERE window_start=120"
+            )
+            row = cursor.fetchone()
+        assert row["key_hash"] != raw_key
+        assert len(row["key_hash"]) == 64
+        assert row["request_count"] == 2
+    finally:
+        database.close()

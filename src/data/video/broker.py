@@ -23,14 +23,22 @@ class JobMessage:
             uuid.UUID(self.tenant_id)
             uuid.UUID(self.job_id)
         except (TypeError, ValueError) as error:
-            raise VideoPipelineError("job_message_invalid", "Job identifiers must be UUIDs") from error
+            raise VideoPipelineError(
+                "job_message_invalid", "Job identifiers must be UUIDs"
+            ) from error
         if self.operation not in OPERATIONS:
-            raise VideoPipelineError("job_message_invalid", "Job operation is not allowlisted")
+            raise VideoPipelineError(
+                "job_message_invalid", "Job operation is not allowlisted"
+            )
 
     def body(self) -> str:
         self.validate()
         return json.dumps(
-            {"tenant_id": self.tenant_id, "job_id": self.job_id, "operation": self.operation},
+            {
+                "tenant_id": self.tenant_id,
+                "job_id": self.job_id,
+                "operation": self.operation,
+            },
             sort_keys=True,
             separators=(",", ":"),
         )
@@ -41,11 +49,14 @@ class Delivery:
     message: JobMessage
     receipt: str
     receive_count: int
+    queue_url: str | None = None
 
 
 class JobBroker(Protocol):
     def publish(self, message: JobMessage, *, delay_seconds: int = 0) -> None: ...
-    def receive(self, *, operations: tuple[str, ...], limit: int = 1) -> list[Delivery]: ...
+    def receive(
+        self, *, operations: tuple[str, ...], limit: int = 1
+    ) -> list[Delivery]: ...
     def acknowledge(self, delivery: Delivery) -> None: ...
     def retry(self, delivery: Delivery, *, delay_seconds: int) -> None: ...
     def heartbeat(self, delivery: Delivery, *, visibility_seconds: int) -> None: ...
@@ -62,31 +73,45 @@ class SqsJobBroker:
         queue_url: str,
         dead_letter_queue_url: str,
         region_name: str,
+        queue_urls: dict[str, str] | None = None,
         visibility_seconds: int = 120,
         wait_seconds: int = 10,
         client: object | None = None,
     ) -> None:
         if not queue_url or not dead_letter_queue_url:
             raise ValueError("SQS source and dead-letter queue URLs are required")
+        if queue_urls is not None and (
+            set(queue_urls) != {"upload", "index", "analyze", "delete"}
+            or any(not value for value in queue_urls.values())
+        ):
+            raise ValueError(
+                "Operation queue URLs must define upload, index, analyze, and delete"
+            )
         if client is None:
             try:
                 import boto3
             except ImportError as error:  # pragma: no cover
-                raise RuntimeError("Install the platform extra: pip install -e '.[platform]'") from error
+                raise RuntimeError(
+                    "Install the platform extra: pip install -e '.[platform]'"
+                ) from error
             client = boto3.client("sqs", region_name=region_name)
         self.client = client
         self.queue_url = queue_url
+        self.queue_urls = dict(queue_urls or {})
         self.dead_letter_queue_url = dead_letter_queue_url
         self.visibility_seconds = visibility_seconds
         self.wait_seconds = min(max(wait_seconds, 0), 20)
 
+    def _queue_for(self, operation: str) -> str:
+        return self.queue_urls.get(operation, self.queue_url)
+
     def publish(self, message: JobMessage, *, delay_seconds: int = 0) -> None:
         kwargs: dict[str, Any] = {
-            "QueueUrl": self.queue_url,
+            "QueueUrl": self._queue_for(message.operation),
             "MessageBody": message.body(),
             "DelaySeconds": min(max(int(delay_seconds), 0), 900),
         }
-        if self.queue_url.endswith(".fifo"):
+        if kwargs["QueueUrl"].endswith(".fifo"):
             kwargs.update(
                 MessageGroupId=f"{message.tenant_id}:{message.operation}",
                 MessageDeduplicationId=message.job_id,
@@ -97,57 +122,89 @@ class SqsJobBroker:
         allowed = set(operations)
         if not allowed <= OPERATIONS:
             raise ValueError("Worker operation set is invalid")
-        response = self.client.receive_message(
-            QueueUrl=self.queue_url,
-            MaxNumberOfMessages=min(max(limit, 1), 10),
-            WaitTimeSeconds=self.wait_seconds,
-            VisibilityTimeout=self.visibility_seconds,
-            AttributeNames=["ApproximateReceiveCount"],
-        )
         deliveries: list[Delivery] = []
-        for raw in response.get("Messages", []):
-            try:
-                payload = json.loads(raw["Body"])
-                if set(payload) != {"tenant_id", "job_id", "operation"}:
-                    raise ValueError("unexpected fields")
-                message = JobMessage(**payload)
-                message.validate()
-            except (KeyError, TypeError, ValueError, json.JSONDecodeError, VideoPipelineError):
-                poison = Delivery(
-                    JobMessage(
-                        "00000000-0000-4000-8000-000000000000",
-                        "00000000-0000-4000-8000-000000000000",
-                        "capture",
-                    ),
-                    raw["ReceiptHandle"],
-                    int(raw.get("Attributes", {}).get("ApproximateReceiveCount", 1)),
-                )
-                self.dead_letter(poison, error_code="job_message_invalid")
-                continue
-            delivery = Delivery(
-                message,
-                raw["ReceiptHandle"],
-                int(raw.get("Attributes", {}).get("ApproximateReceiveCount", 1)),
+        queues: list[tuple[str | None, str]] = (
+            [(operation, self._queue_for(operation)) for operation in operations]
+            if self.queue_urls
+            else [(None, self.queue_url)]
+        )
+        for expected_operation, queue_url in queues:
+            if len(deliveries) >= limit:
+                break
+            response = self.client.receive_message(
+                QueueUrl=queue_url,
+                MaxNumberOfMessages=min(max(limit - len(deliveries), 1), 10),
+                WaitTimeSeconds=self.wait_seconds if len(queues) == 1 else 0,
+                VisibilityTimeout=self.visibility_seconds,
+                AttributeNames=["ApproximateReceiveCount"],
             )
-            if message.operation not in allowed:
-                self.retry(delivery, delay_seconds=1)
-                continue
-            deliveries.append(delivery)
+            for raw in response.get("Messages", []):
+                delivery = self._decode(raw, queue_url)
+                if delivery is None:
+                    continue
+                if (
+                    expected_operation is not None
+                    and delivery.message.operation != expected_operation
+                ):
+                    self.dead_letter(
+                        delivery, error_code="job_queue_operation_mismatch"
+                    )
+                    continue
+                if delivery.message.operation not in allowed:
+                    self.retry(delivery, delay_seconds=1)
+                    continue
+                deliveries.append(delivery)
         return deliveries
 
+    def _decode(self, raw: dict[str, Any], queue_url: str) -> Delivery | None:
+        try:
+            payload = json.loads(raw["Body"])
+            if set(payload) != {"tenant_id", "job_id", "operation"}:
+                raise ValueError("unexpected fields")
+            message = JobMessage(**payload)
+            message.validate()
+        except (
+            KeyError,
+            TypeError,
+            ValueError,
+            json.JSONDecodeError,
+            VideoPipelineError,
+        ):
+            poison = Delivery(
+                JobMessage(
+                    "00000000-0000-4000-8000-000000000000",
+                    "00000000-0000-4000-8000-000000000000",
+                    "capture",
+                ),
+                raw["ReceiptHandle"],
+                int(raw.get("Attributes", {}).get("ApproximateReceiveCount", 1)),
+                queue_url,
+            )
+            self.dead_letter(poison, error_code="job_message_invalid")
+            return None
+        return Delivery(
+            message,
+            raw["ReceiptHandle"],
+            int(raw.get("Attributes", {}).get("ApproximateReceiveCount", 1)),
+            queue_url,
+        )
+
     def acknowledge(self, delivery: Delivery) -> None:
-        self.client.delete_message(QueueUrl=self.queue_url, ReceiptHandle=delivery.receipt)
+        self.client.delete_message(
+            QueueUrl=delivery.queue_url or self._queue_for(delivery.message.operation),
+            ReceiptHandle=delivery.receipt,
+        )
 
     def retry(self, delivery: Delivery, *, delay_seconds: int) -> None:
         self.client.change_message_visibility(
-            QueueUrl=self.queue_url,
+            QueueUrl=delivery.queue_url or self._queue_for(delivery.message.operation),
             ReceiptHandle=delivery.receipt,
             VisibilityTimeout=min(max(int(delay_seconds), 0), 43200),
         )
 
     def heartbeat(self, delivery: Delivery, *, visibility_seconds: int) -> None:
         self.client.change_message_visibility(
-            QueueUrl=self.queue_url,
+            QueueUrl=delivery.queue_url or self._queue_for(delivery.message.operation),
             ReceiptHandle=delivery.receipt,
             VisibilityTimeout=min(max(int(visibility_seconds), 1), 43200),
         )
@@ -163,7 +220,10 @@ class SqsJobBroker:
             sort_keys=True,
             separators=(",", ":"),
         )
-        kwargs: dict[str, Any] = {"QueueUrl": self.dead_letter_queue_url, "MessageBody": body}
+        kwargs: dict[str, Any] = {
+            "QueueUrl": self.dead_letter_queue_url,
+            "MessageBody": body,
+        }
         if self.dead_letter_queue_url.endswith(".fifo"):
             kwargs.update(
                 MessageGroupId=f"{delivery.message.tenant_id}:{delivery.message.operation}",
@@ -173,14 +233,20 @@ class SqsJobBroker:
         self.acknowledge(delivery)
 
     def depth(self) -> int:
-        response = self.client.get_queue_attributes(
-            QueueUrl=self.queue_url,
-            AttributeNames=["ApproximateNumberOfMessages", "ApproximateNumberOfMessagesNotVisible"],
-        )
-        values = response.get("Attributes", {})
-        return int(values.get("ApproximateNumberOfMessages", 0)) + int(
-            values.get("ApproximateNumberOfMessagesNotVisible", 0)
-        )
+        total = 0
+        for queue_url in set(self.queue_urls.values()) or {self.queue_url}:
+            response = self.client.get_queue_attributes(
+                QueueUrl=queue_url,
+                AttributeNames=[
+                    "ApproximateNumberOfMessages",
+                    "ApproximateNumberOfMessagesNotVisible",
+                ],
+            )
+            values = response.get("Attributes", {})
+            total += int(values.get("ApproximateNumberOfMessages", 0)) + int(
+                values.get("ApproximateNumberOfMessagesNotVisible", 0)
+            )
+        return total
 
 
 class DatabaseJobBroker:
