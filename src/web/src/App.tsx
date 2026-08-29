@@ -1,10 +1,12 @@
+import { lazy, Suspense } from "react";
 import { motion, useScroll, useSpring } from "motion/react";
 import Hero from "./components/Hero";
 import Marquee from "./components/Marquee";
 import HowItWorks from "./components/HowItWorks";
-import ConsoleShell from "./console/ConsoleShell";
 import { AuthProvider } from "./console/AuthContext";
 import { useHashRoute } from "./console/router";
+
+const ConsoleShell = lazy(() => import("./console/ConsoleShell"));
 
 function Landing() {
   const { scrollYProgress } = useScroll();
@@ -83,7 +85,13 @@ export default function App() {
 
   return (
     <AuthProvider>
-      {inConsole ? <ConsoleShell /> : <Landing />}
+      {inConsole ? (
+        <Suspense fallback={<p className="muted">Loading secure console…</p>}>
+          <ConsoleShell />
+        </Suspense>
+      ) : (
+        <Landing />
+      )}
     </AuthProvider>
   );
 }

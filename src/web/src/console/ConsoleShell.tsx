@@ -1,12 +1,13 @@
-import { useState } from "react";
+import { lazy, Suspense, useState } from "react";
 import { useAuth } from "./AuthContext";
 import { consoleRoute, navigate, useHashRoute, type ConsoleRoute } from "./router";
 import SignIn from "./SignIn";
-import ForecastView from "./ForecastView";
-import SourcesView from "./SourcesView";
-import ProcessingView from "./ProcessingView";
-import ReviewView from "./ReviewView";
-import ModelCardView from "./ModelCardView";
+
+const ForecastView = lazy(() => import("./ForecastView"));
+const SourcesView = lazy(() => import("./SourcesView"));
+const ProcessingView = lazy(() => import("./ProcessingView"));
+const ReviewView = lazy(() => import("./ReviewView"));
+const ModelCardView = lazy(() => import("./ModelCardView"));
 
 const NAV: Array<{ route: ConsoleRoute; label: string; minRole: "viewer" | "reviewer" | "tenant_admin" }> = [
   { route: "map", label: "Forecast map", minRole: "viewer" },
@@ -104,16 +105,20 @@ export default function ConsoleShell() {
               <strong>{session.role}</strong>. This area requires elevated access.
             </p>
           </div>
-        ) : route === "map" ? (
-          <ForecastView />
-        ) : route === "sources" ? (
-          <SourcesView />
-        ) : route === "processing" ? (
-          <ProcessingView />
-        ) : route === "review" ? (
-          <ReviewView />
         ) : (
-          <ModelCardView />
+          <Suspense fallback={<p className="muted">Loading tenant view…</p>}>
+            {route === "map" ? (
+              <ForecastView />
+            ) : route === "sources" ? (
+              <SourcesView />
+            ) : route === "processing" ? (
+              <ProcessingView />
+            ) : route === "review" ? (
+              <ReviewView />
+            ) : (
+              <ModelCardView />
+            )}
+          </Suspense>
         )}
       </main>
     </div>
