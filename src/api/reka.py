@@ -169,7 +169,7 @@ class RekaAPIProvider:
                 api_key=api_key,
                 base_url=base_url.rstrip("/"),
                 timeout=timeout_seconds,
-                max_retries=1,
+                max_retries=0,
             )
         self._client = client
 
