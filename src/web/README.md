@@ -1,33 +1,48 @@
-# Web dashboard (Person 3)
+# Frontend (Person 3) — Phase 2 console
 
-React 19 + TypeScript + Vite + MapLibre GL + TanStack Query + Motion
-(`motion/react`).
+React 19 + Vite + TypeScript + MapLibre + TanStack Query + Motion. Red/near-black theme.
 
-Design: red/near-black display style inspired by acmvit.in — big Archivo Black
-type, marquee ticker, scroll-triggered (`whileInView`) and scroll-linked
-(`useScroll` + `useSpring` progress bar, hero parallax) animations. All motion
-respects `prefers-reduced-motion` via `<MotionConfig reducedMotion="user">`
-plus `useReducedMotion` guards on parallax/marquee.
+## Structure
+
+- `#/` — public landing page (hero, pipeline, limitations) with a CTA into the console.
+- `#/console` — authenticated product:
+  - **Sign-in** — development bearer tokens; roles and tenancy resolved server-side.
+  - **Forecast map** (viewer+) — H3 cells for a future window/category with uncertainty,
+    suppression (grey dashed, never "low risk"), freshness/stale chip, fallback-model chip,
+    detail panel with drivers and full provenance, grounded copilot.
+  - **Review queue** (reviewer) — unconfirmed candidates, immutable confirm/reject with
+    idempotency keys and `review_final` handling.
+  - **Sources & upload** (tenant admin) — recorded-video registration, MP4 validation,
+    honest `video_service_unavailable` degraded state with retry.
+  - **Processing & coverage** — `/ready` health plus measured coverage snapshots.
+  - **Model card** — baseline comparison rendered honestly (baseline ships if not beaten).
+
+## Types are generated, never handwritten
+
+- `src/api/types.gen.ts` ← `contracts/openapi.json` (openapi-typescript)
+- `src/api/contracts.gen.ts` ← `contracts/schemas/*.schema.json` (json-schema-to-typescript)
+
+Regenerate after API changes: `npm run typegen` (from `src/web`, repo root on PYTHONPATH).
+
+## Run
 
 ```bash
-pnpm install
-pnpm dev      # http://localhost:5173, proxies /v1 -> http://localhost:8000
-pnpm build    # typecheck + production bundle
+# backend
+PYTHONPATH=. uvicorn src.api.app:app --port 8000
+# frontend
+cd src/web && pnpm install && pnpm dev   # http://localhost:5173
 ```
 
-Structure:
+Dev personas: `demo-token-one` (tenant admin, Demo One + viewer of Demo Two),
+`demo-reviewer-one`, `demo-viewer-one`, `demo-token-two` (viewer, Demo Two).
 
-- `src/api.ts` — typed client for the FastAPI surface (bearer-token tenants)
-- `components/Hero.tsx` — parallax hero, staggered line reveal
-- `components/Marquee.tsx` — looping ticker
-- `components/HowItWorks.tsx` — scroll-triggered pipeline cards
-- `components/Dashboard.tsx` — controls (tenant/window/category), model card, limitations
-- `components/RiskMap.tsx` — MapLibre H3 choropleth with suppression styling
-- `components/CellDetails.tsx` — risk, uncertainty, trend bars, drivers
-- `components/Copilot.tsx` — grounded AI panel with citations and refusal states
+## Tests
 
-## Reka boundary
+```bash
+npx tsc -b          # types
+npx playwright install && npm run e2e   # two-tenant browser flow (needs API on :8000)
+```
 
-The browser never calls Reka directly. Recorded video is uploaded to the tenant-authenticated FastAPI service, which uses the server-only `REKA_API_KEY` for Reka Vision upload/index/search/Q&A/tagging/highlights. The UI displays safe processing status and reviewed candidate records; it must not receive the key, opaque Reka video IDs, presigned Reka URLs, or secret references.
-
-Numeric future H3 forecasts come from the local forecasting API. Reka-proposed candidates, human-confirmed incidents, and future forecasts must remain visually and textually distinct.
+Tenant switches go through `PUT /v1/me/active-tenant/{id}` and clear the entire query
+cache so no tenant A state can render under tenant B. Reduced motion is honored globally
+via `MotionConfig reducedMotion="user"`.

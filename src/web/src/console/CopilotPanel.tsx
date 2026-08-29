@@ -1,9 +1,12 @@
 import { useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { useMutation } from "@tanstack/react-query";
-import { api, type CopilotInsight } from "../api";
+import { api, type CopilotInsight } from "../api/client";
+import { useAuth } from "./AuthContext";
 
-export default function Copilot({ token }: { token: string }) {
+export default function CopilotPanel() {
+  const { session } = useAuth();
+  const token = session!.token;
   const [question, setQuestion] = useState("");
   const [insight, setInsight] = useState<CopilotInsight | null>(null);
 
@@ -15,11 +18,11 @@ export default function Copilot({ token }: { token: string }) {
   const refused = insight && insight.refusal_code !== "not_applicable";
 
   return (
-    <div className="panel">
+    <div className="panel copilot-panel">
       <h4>Analyst copilot · grounded</h4>
       <p className="hint">
-        Ask aggregate questions. Answers cite published facts and show data
-        freshness. The AI never computes risk.
+        Ask aggregate questions. Answers cite published facts and show data freshness. The AI
+        never computes risk.
       </p>
       <form
         className="copilot-form"
@@ -34,7 +37,11 @@ export default function Copilot({ token }: { token: string }) {
           placeholder="How did the model do on the test window?"
           aria-label="Copilot question"
         />
-        <motion.button className="chip active" whileTap={{ scale: 0.94 }} disabled={mutation.isPending}>
+        <motion.button
+          className="chip chip-accent"
+          whileTap={{ scale: 0.94 }}
+          disabled={mutation.isPending}
+        >
           {mutation.isPending ? "…" : "ASK"}
         </motion.button>
       </form>
@@ -48,14 +55,17 @@ export default function Copilot({ token }: { token: string }) {
             style={{ marginTop: 12 }}
           >
             <div className={`copilot-answer${refused ? " refusal" : ""}`}>{insight.answer}</div>
-            {insight.claims.map((claim, i) => (
-              <p className="citation" key={i}>
+            {insight.claims.map((claim, index) => (
+              <p className="citation" key={index}>
                 ◆ {claim.text} [{claim.fact_ids.join(", ")}]
               </p>
             ))}
             <p className="citation">
               model {insight.model_version} · data as of {insight.data_as_of} ·{" "}
-              {insight.reka_model} · {insight.refusal_code === "not_applicable" ? "grounded" : `refused: ${insight.refusal_code}`}
+              {insight.reka_model} ·{" "}
+              {insight.refusal_code === "not_applicable"
+                ? "grounded"
+                : `refused: ${insight.refusal_code}`}
             </p>
           </motion.div>
         )}

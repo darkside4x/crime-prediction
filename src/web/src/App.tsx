@@ -2,9 +2,11 @@ import { motion, useScroll, useSpring } from "motion/react";
 import Hero from "./components/Hero";
 import Marquee from "./components/Marquee";
 import HowItWorks from "./components/HowItWorks";
-import Dashboard from "./components/Dashboard";
+import ConsoleShell from "./console/ConsoleShell";
+import { AuthProvider } from "./console/AuthContext";
+import { useHashRoute } from "./console/router";
 
-export default function App() {
+function Landing() {
   const { scrollYProgress } = useScroll();
   const progress = useSpring(scrollYProgress, { stiffness: 120, damping: 30, restDelta: 0.001 });
 
@@ -15,14 +17,39 @@ export default function App() {
         <a className="nav-logo" href="#top">HOT<span>SPOT</span></a>
         <div className="nav-links">
           <a href="#how">Pipeline</a>
-          <a href="#dashboard">Risk map</a>
+          <a href="#/console">Console</a>
           <a href="#limits">Limitations</a>
         </div>
       </nav>
       <Hero />
       <Marquee />
       <HowItWorks />
-      <Dashboard />
+      <section className="console-cta" id="dashboard">
+        <div className="container">
+          <motion.h2
+            className="section-title"
+            initial={{ opacity: 0, y: 40 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true, amount: 0.4 }}
+            transition={{ duration: 0.7 }}
+          >
+            THE <span className="accent">CONSOLE</span>
+          </motion.h2>
+          <p>
+            Sign in to the authenticated console for the forecast map, candidate review,
+            recorded-video sources, coverage health, and the model card — scoped to your
+            tenant and role.
+          </p>
+          <motion.a
+            className="btn btn-red"
+            href="#/console"
+            whileHover={{ scale: 1.04 }}
+            whileTap={{ scale: 0.96 }}
+          >
+            Open the console
+          </motion.a>
+        </div>
+      </section>
       <footer className="footer" id="limits">
         <div className="container">
           <motion.div
@@ -47,5 +74,16 @@ export default function App() {
         </div>
       </footer>
     </>
+  );
+}
+
+export default function App() {
+  const hash = useHashRoute();
+  const inConsole = hash.startsWith("#/console");
+
+  return (
+    <AuthProvider>
+      {inConsole ? <ConsoleShell /> : <Landing />}
+    </AuthProvider>
   );
 }

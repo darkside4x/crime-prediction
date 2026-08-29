@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MotionConfig } from "motion/react";
 import App from "./App";
+import ErrorBoundary from "./ErrorBoundary";
 import "maplibre-gl/dist/maplibre-gl.css";
 import "./theme.css";
 
@@ -12,10 +13,12 @@ const queryClient = new QueryClient({
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <QueryClientProvider client={queryClient}>
-      <MotionConfig reducedMotion="user">
-        <App />
-      </MotionConfig>
-    </QueryClientProvider>
+    <ErrorBoundary>
+      <QueryClientProvider client={queryClient}>
+        <MotionConfig reducedMotion="user">
+          <App />
+        </MotionConfig>
+      </QueryClientProvider>
+    </ErrorBoundary>
   </React.StrictMode>,
 );

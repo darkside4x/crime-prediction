@@ -6,16 +6,20 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "e2e": "playwright test",
+    "typegen": "python3 -m src.api.openapi --output ../../contracts/openapi.json && npx openapi-typescript ../../contracts/openapi.json -o src/api/types.gen.ts"
   },
   "dependencies": {
     "@tanstack/react-query": "5.90.2",
+    "h3-js": "4.2.1",
     "maplibre-gl": "5.6.0",
     "motion": "12.23.12",
     "react": "19.1.1",
     "react-dom": "19.1.1"
   },
   "devDependencies": {
+    "@playwright/test": "1.55.0",
     "@types/react": "19.1.9",
     "@types/react-dom": "19.1.7",
     "@vitejs/plugin-react": "4.7.0",
