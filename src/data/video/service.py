@@ -8,7 +8,7 @@ import math
 import subprocess
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -18,8 +18,8 @@ from src.data.store import utc_now
 
 from .errors import VideoPipelineError
 from .reka import VisionProvider
+from .storage import LocalMediaStorage, MediaScanner, MediaStorage, NoOpMediaScanner
 from .store import VideoStore
-
 
 ALLOWED_CATEGORIES = {"property", "violence", "public_order", "traffic_safety", "other", "unmapped"}
 REVIEW_ROLES = {"reviewer", "tenant_admin", "platform_operator"}
@@ -28,16 +28,16 @@ NAMESPACE = uuid.UUID("e3978285-344f-40c8-b807-d44464a23ed3")
 
 def _parse_utc(value: str, name: str) -> datetime:
     try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(value)
     except (AttributeError, ValueError) as error:
         raise VideoPipelineError("timestamp_invalid", f"{name} must be a valid ISO 8601 timestamp") from error
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         raise VideoPipelineError("timestamp_timezone_missing", f"{name} must include a timezone")
-    return parsed.astimezone(timezone.utc)
+    return parsed.astimezone(UTC)
 
 
 def _utc(value: datetime) -> str:
-    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+    return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
 
 
 def _sha256(path: Path) -> str:
@@ -105,6 +105,8 @@ class VideoPipelineService:
         prompt_version: str = "candidate-v1",
         review_ttl: timedelta = timedelta(days=7),
         media_inspector: MediaInspector | None = None,
+        media_storage: MediaStorage | None = None,
+        media_scanner: MediaScanner | None = None,
     ) -> None:
         self.store = store
         self.provider = provider
@@ -116,6 +118,8 @@ class VideoPipelineService:
         self.prompt_version = prompt_version
         self.review_ttl = review_ttl
         self.media_inspector = media_inspector or FfprobeMediaInspector()
+        self.media_storage = media_storage or LocalMediaStorage(self.media_root)
+        self.media_scanner = media_scanner or NoOpMediaScanner()
 
     def register_recorded_source(self, payload: dict[str, Any], *, authenticated_tenant_id: str) -> dict[str, Any]:
         if payload.get("tenant_id") != authenticated_tenant_id:
@@ -123,6 +127,19 @@ class VideoPipelineService:
         validate_contract("camera-source.schema.json", payload)
         if payload["mode"] != "recorded_video" or payload["connection"]["transport"] != "uploaded_asset":
             raise VideoPipelineError("source_mode_invalid", "This worker accepts recorded-video sources only")
+        self.store.put_source(payload)
+        self.store.ingestion_store.register_camera_source(payload)
+        self.store.audit(authenticated_tenant_id, "source.register", "source", payload["source_id"], "success")
+        return dict(payload)
+
+    def register_live_source(
+        self, payload: dict[str, Any], *, authenticated_tenant_id: str
+    ) -> dict[str, Any]:
+        if payload.get("tenant_id") != authenticated_tenant_id:
+            raise VideoPipelineError("tenant_mismatch", "Source does not belong to authenticated tenant")
+        validate_contract("camera-source.schema.json", payload)
+        if payload["mode"] != "live_camera" or payload["connection"]["transport"] not in {"hls", "rtsp", "onvif"}:
+            raise VideoPipelineError("source_mode_invalid", "Live sources require HLS, RTSP, or ONVIF")
         self.store.put_source(payload)
         self.store.ingestion_store.register_camera_source(payload)
         self.store.audit(authenticated_tenant_id, "source.register", "source", payload["source_id"], "success")
@@ -179,7 +196,7 @@ class VideoPipelineService:
             "tenant_id": authenticated_tenant_id,
             "asset_id": asset_id,
             "source_id": source_id,
-            "kind": "recorded_upload",
+            "kind": "live_segment" if source["mode"] == "live_camera" else "recorded_upload",
             "status": "ready",
             "storage_ref": f"secret://video-assets/{asset_id}",
             "content_type": content_type,
@@ -191,7 +208,14 @@ class VideoPipelineService:
             "retention_until": _utc(retention_until),
         }
         validate_contract("video-asset.schema.json", payload)
-        self.store.put_asset(payload, resolved)
+        self.media_scanner.scan(resolved)
+        storage_ref = self.media_storage.store(
+            resolved,
+            tenant_id=authenticated_tenant_id,
+            asset_id=asset_id,
+            sha256=checksum,
+        )
+        self.store.put_asset(payload, storage_ref)
         self.store.audit(authenticated_tenant_id, "video.accept", "asset", asset_id, "success")
         return payload
 
@@ -240,11 +264,15 @@ class VideoPipelineService:
         if operation == "upload":
             if mapping:
                 return None
-            video_id = self.provider.upload(
-                self.store.asset_path(tenant_id, asset_id),
-                video_name=f"{asset_id}.mp4",
-                captured_start=asset["captured_start"],
-            )
+            storage_ref = self._asset_storage_ref(tenant_id, asset_id)
+            with self.media_storage.materialize(
+                storage_ref, tenant_id=tenant_id, asset_id=asset_id
+            ) as local_path:
+                video_id = self.provider.upload(
+                    local_path,
+                    video_name=f"{asset_id}.mp4",
+                    captured_start=asset["captured_start"],
+                )
             if not isinstance(video_id, str) or not video_id:
                 raise VideoPipelineError("reka_response_invalid", "Reka upload returned no video identifier")
             self.store.put_mapping(tenant_id, asset["source_id"], asset_id, video_id, "pending")
@@ -271,7 +299,27 @@ class VideoPipelineService:
                 self.store.put_candidate(candidate, semantic_key)
             self.store.update_asset_status(tenant_id, asset_id, "processed")
             return [candidate for candidate, _ in candidates]
+        if operation == "delete":
+            if mapping and not mapping.get("remote_deleted_at"):
+                self.provider.delete(mapping["reka_video_id"])
+                self.store.mark_remote_deleted(tenant_id, asset_id)
+            storage_ref = self._asset_storage_ref(tenant_id, asset_id)
+            self.media_storage.delete(storage_ref, tenant_id=tenant_id, asset_id=asset_id)
+            self.store.update_asset_status(tenant_id, asset_id, "deleted")
+            return None
         raise ValueError("Unsupported operation")
+
+    def execute_operation(self, tenant_id: str, asset_id: str, operation: str) -> Any:
+        """Execute one already-claimed durable job operation."""
+        if operation not in {"upload", "index", "analyze", "delete"}:
+            raise VideoPipelineError("job_operation_invalid", "Unsupported video job operation")
+        return self._execute(tenant_id, asset_id, operation)
+
+    def _asset_storage_ref(self, tenant_id: str, asset_id: str) -> str:
+        getter = getattr(self.store, "asset_storage_ref", None)
+        if getter is not None:
+            return str(getter(tenant_id, asset_id))
+        return f"file://{self.store.asset_path(tenant_id, asset_id).resolve()}"
 
     def _candidate(self, asset: dict[str, Any], remote_id: str, proposal: dict[str, Any]) -> tuple[dict[str, Any], str]:
         if not isinstance(proposal, dict) or set(proposal) != {"offset_seconds", "category", "confidence"}:
@@ -293,7 +341,7 @@ class VideoPipelineService:
         occurred_text = _utc(occurred)
         semantic_key = f"{asset['tenant_id']}:{asset['asset_id']}:{remote_id}:{self.prompt_version}:{occurred_text}:{category}"
         detection_id = str(uuid.uuid5(NAMESPACE, semantic_key))
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         expires = min(now + self.review_ttl, _parse_utc(asset["retention_until"], "retention_until"))
         candidate = {
             "schema_version": "1.0.0",
@@ -344,6 +392,7 @@ class VideoPipelineService:
         if decision not in {"confirmed", "rejected"}:
             raise VideoPipelineError("review_decision_invalid", "Decision must be confirmed or rejected")
         external_id = f"video-candidate:{detection_id}"
+        promoted_event: dict[str, Any] | None = None
         review: dict[str, Any] = {
             "schema_version": "1.0.0",
             "tenant_id": authenticated_tenant_id,
@@ -359,7 +408,7 @@ class VideoPipelineService:
             review.update(confirmed_category=confirmed_category, promoted_external_event_id=external_id)
             source = self.store.get_source(authenticated_tenant_id, candidate["source_id"])
             location = self.location_resolver.resolve(authenticated_tenant_id, source["location_ref"])
-            event = {
+            promoted_event = {
                 "schema_version": "1.0.0",
                 "tenant_id": authenticated_tenant_id,
                 "source_id": candidate["source_id"],
@@ -370,14 +419,18 @@ class VideoPipelineService:
                 "location": location,
                 "attributes": {"reporting_channel": "reka_vision_confirmed", "source_quality": candidate["confidence"]},
             }
-            validate_contract("incident-event.schema.json", event)
-            self.store.ingestion_store.insert_event(event, _payload_hash(event))
+            validate_contract("incident-event.schema.json", promoted_event)
         else:
             if rejection_reason not in {"false_positive", "insufficient_evidence", "duplicate", "outside_scope", "other"}:
                 raise VideoPipelineError("rejection_reason_invalid", "A valid rejection reason is required")
             review["rejection_reason"] = rejection_reason
         validate_contract("candidate-review.schema.json", review)
-        self.store.put_review(review)
+        if promoted_event is not None:
+            self.store.put_review_and_event(
+                review, promoted_event, _payload_hash(promoted_event)
+            )
+        else:
+            self.store.put_review(review)
         self.store.audit(authenticated_tenant_id, "candidate.review", "candidate", detection_id, "success")
         return review
 
@@ -428,31 +481,36 @@ class VideoPipelineService:
                 count += 1
         return count
 
-    def enforce_retention(self, *, now: str | None = None) -> list[str]:
+    def enforce_retention(
+        self, *, tenant_id: str | None = None, now: str | None = None
+    ) -> list[str]:
         deleted: list[str] = []
-        for tenant_id, asset_id in self.store.expired_assets(now or utc_now()):
-            job = self.store.enqueue(tenant_id, asset_id, "delete")
+        cutoff = now or utc_now()
+        if tenant_id is None:
+            try:
+                expired = self.store.expired_assets(cutoff)
+            except TypeError as error:
+                raise ValueError("tenant_id is required for production retention") from error
+        else:
+            try:
+                expired = self.store.expired_assets(cutoff, tenant_id=tenant_id)
+            except TypeError:
+                expired = [item for item in self.store.expired_assets(cutoff) if item[0] == tenant_id]
+        for asset_tenant_id, asset_id in expired:
+            job = self.store.enqueue(asset_tenant_id, asset_id, "delete")
             if job["state"] == "completed":
                 continue
-            job = self.store.transition_job(tenant_id, job["job_id"], "running")
+            job = self.store.transition_job(asset_tenant_id, job["job_id"], "running")
             try:
-                mapping = self.store.get_mapping(tenant_id, asset_id)
-                if mapping and not mapping["remote_deleted_at"]:
-                    self.provider.delete(mapping["reka_video_id"])
-                    self.store.mark_remote_deleted(tenant_id, asset_id)
-                local_path = self.store.asset_path(tenant_id, asset_id).resolve()
-                if not local_path.is_relative_to(self.media_root):
-                    raise VideoPipelineError("retention_path_invalid", "Stored media path escaped restricted root")
-                local_path.unlink(missing_ok=True)
-                self.store.update_asset_status(tenant_id, asset_id, "deleted")
-                self.store.transition_job(tenant_id, job["job_id"], "completed")
-                self.store.audit(tenant_id, "reka.delete", "asset", asset_id, "success")
+                self.execute_operation(asset_tenant_id, asset_id, "delete")
+                self.store.transition_job(asset_tenant_id, job["job_id"], "completed")
+                self.store.audit(asset_tenant_id, "reka.delete", "asset", asset_id, "success")
                 deleted.append(asset_id)
             except (VideoPipelineError, OSError) as error:
                 if isinstance(error, OSError):
                     error = VideoPipelineError("local_retention_failed", "Local transient deletion failed", retryable=True)
-                updated = self.store.get_job(tenant_id, job["job_id"])
+                updated = self.store.get_job(asset_tenant_id, job["job_id"])
                 state = "retry" if error.retryable and updated["attempts"] < updated["max_attempts"] else "failed"
-                self.store.transition_job(tenant_id, job["job_id"], state, error.code)
-                self.store.audit(tenant_id, "reka.delete", "asset", asset_id, "failure", error.code)
+                self.store.transition_job(asset_tenant_id, job["job_id"], state, error.code)
+                self.store.audit(asset_tenant_id, "reka.delete", "asset", asset_id, "failure", error.code)
         return deleted

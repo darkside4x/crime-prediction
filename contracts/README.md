@@ -58,6 +58,11 @@ Every schema has a synthetic fixture with the same basename under `contracts/fix
 
 ## Changelog
 
+### 2026-08-30 — Live HLS transport
+
+- Added `hls` as an explicit live-camera transport alongside RTSP and ONVIF.
+- Live endpoints and credentials remain restricted `secret://` references.
+
 ### 2026-08-29 — Phase 1 implementation target
 
 - Added recorded/live camera, video asset, candidate detection, immutable review, and coverage contracts.

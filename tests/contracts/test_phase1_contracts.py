@@ -92,6 +92,17 @@ def test_live_camera_requires_secret_endpoint_and_credentials() -> None:
     assert list(validator("camera-source").iter_errors(source))
 
 
+def test_live_camera_allows_secret_backed_hls_transport() -> None:
+    source = load_json(FIXTURES / "camera-source.json")
+    source["mode"] = "live_camera"
+    source["connection"] = {
+        "transport": "hls",
+        "endpoint_ref": "secret://tenant/demo-one/cameras/entrance/endpoint",
+        "credential_ref": "secret://tenant/demo-one/cameras/entrance/credential",
+    }
+    validator("camera-source").validate(source)
+
+
 def test_coverage_fixture_obeys_frozen_formula() -> None:
     coverage = load_json(FIXTURES / "coverage-snapshot.json")
     durations = [

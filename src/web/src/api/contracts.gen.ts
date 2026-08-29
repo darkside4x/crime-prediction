@@ -651,7 +651,7 @@ export type CameraSource = {
   timezone: string;
   location_ref: string;
   connection: {
-    transport: "uploaded_asset" | "rtsp" | "onvif";
+    transport: "uploaded_asset" | "hls" | "rtsp" | "onvif";
     endpoint_ref?: string;
     credential_ref?: string;
   };

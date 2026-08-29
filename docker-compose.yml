@@ -1,10 +1,39 @@
 services:
+  postgres:
+    image: postgres:17.6-alpine
+    environment:
+      POSTGRES_DB: crime_prediction
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: local-postgres-admin-only
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d crime_prediction"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./docker/postgres-init:/docker-entrypoint-initdb.d:ro
+
+  migrate:
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    command: ["python", "-c", "from src.data.video.cli import migrate; migrate()"]
+    environment:
+      DATABASE_URL: postgresql://crime_app:local-development-only@postgres:5432/crime_prediction
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   api:
     build:
       context: .
       dockerfile: docker/api.Dockerfile
     environment:
       CORS_ORIGINS: http://localhost:5173,http://localhost:8080
+      DATABASE_URL: postgresql://crime_app:local-development-only@postgres:5432/crime_prediction
     ports:
       - "8000:8000"
     healthcheck:
@@ -12,6 +41,9 @@ services:
       interval: 10s
       timeout: 3s
       retries: 5
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
 
   web:
     build:
@@ -22,3 +54,6 @@ services:
     depends_on:
       api:
         condition: service_healthy
+
+volumes:
+  postgres-data:

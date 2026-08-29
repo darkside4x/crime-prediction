@@ -123,6 +123,29 @@ def test_forecast_endpoint_is_bounded_schema_valid_and_tenant_scoped(client):
     assert invalid_bbox.json()["code"] == "invalid_bbox"
 
 
+def test_forecast_uses_injected_measured_coverage_not_cell_seed():
+    measured_calls: list[tuple[str, str]] = []
+
+    def measured(tenant_id: str, before: str) -> float:
+        measured_calls.append((tenant_id, before))
+        return 0.82
+
+    client = TestClient(
+        create_app(
+            provider=reka.FakeRekaProvider(),
+            settings=Settings(),
+            coverage_provider=measured,
+        )
+    )
+    window = _future_window()
+    response = client.get(
+        f"/v1/forecasts?window_start={window}&category=property&page_size=5", headers=ONE
+    )
+    assert response.status_code == 200
+    assert {item["coverage_ratio"] for item in response.json()["items"]} == {0.82}
+    assert len(measured_calls) == 1
+
+
 def test_review_role_matrix_and_immutable_idempotent_decision(client):
     assert client.get("/v1/candidate-detections", headers=VIEWER).status_code == 403
     listing = client.get("/v1/candidate-detections", headers=REVIEWER)

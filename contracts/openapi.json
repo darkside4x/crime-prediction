@@ -62,7 +62,7 @@
             "type": "string"
           },
           "transport": {
-            "pattern": "^(rtsp|onvif)$",
+            "pattern": "^(hls|rtsp|onvif)$",
             "title": "Transport",
             "type": "string"
           }

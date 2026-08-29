@@ -171,6 +171,7 @@ class IngestionService:
 
             return self.store.finish_run(
                 run_id,
+                tenant_id=source.tenant_id,
                 status="completed",
                 checkpoint=checkpoint,
                 accepted_count=accepted_count,
@@ -184,6 +185,7 @@ class IngestionService:
             error_code = error.code if isinstance(error, IngestionError) else "unexpected_ingestion_failure"
             self.store.finish_run(
                 run_id,
+                tenant_id=source.tenant_id,
                 status="failed",
                 checkpoint=checkpoint,
                 accepted_count=accepted_count,

@@ -17,10 +17,10 @@ model finding.
 
 ## Restricted-store boundary
 
-The SQLite state database contains raw coordinates and may contain quarantined
-source payloads. It belongs under ignored `artifacts/` or `data/`, must never be
-committed, and must not be served by an application endpoint. Logs and CLI output
-contain counts and reason codes, not source payloads.
+Production uses `PostgresIngestionStore` and `PostgresVideoStore`. Their pooled
+transactions execute `SET LOCAL app.tenant_id` before every tenant query, and
+the tables in `migrations/postgres/` force row-level security. SQLite remains an
+explicit development/test adapter under ignored `artifacts/` or `data/`.
 
 Only these optional event attributes survive ingestion:
 
@@ -43,10 +43,15 @@ Every other attribute is dropped before the canonical event is persisted.
   `POST /v1/qa/chat`, and performs remote deletion. Construct it only in backend
   composition code with `REKA_API_KEY`; the key is never part of a source or job.
 - `FakeRekaVisionProvider` is deterministic and network-free for tests.
-- `VideoStore` keeps the asset path, secret references and Reka video ID inside
-  the restricted boundary. Every lookup includes the authenticated tenant.
-- Upload, index, analysis and delete jobs are idempotent and durable. Retryable
-  failures enter `retry`; `recover_stale_jobs` recovers abandoned running jobs.
+- `S3MediaStorage` uses tenant-prefixed keys, KMS encryption, checksums and opaque
+  `secret://` references. `ClamAVCommandScanner` is required by production
+  composition; local storage and the no-op scanner are development-only.
+- `SqsJobBroker` and isolated upload/index/analyze/delete workers use persisted
+  leases, heartbeats, bounded exponential backoff, explicit DLQ transfer and
+  restart recovery. The database-backed broker is the local durable adapter.
+- `LiveCaptureWorker` resolves RTSP/ONVIF endpoints through Secrets Manager,
+  creates bounded FFmpeg segments, retries reconnects and applies queue-depth
+  backpressure rather than continuously uploading a feed.
 - Reka output must contain exactly offset, allowlisted aggregate category and
   confidence. Identity, plate, face, coordinate, guilt, transcript, prompt
   injection and arbitrary metadata fields fail before persistence.
@@ -55,10 +60,15 @@ Every other attribute is dropped before the canonical event is persisted.
 - Retention deletes the Reka copy before deleting the exact local transient
   file, while retaining non-sensitive job/audit records.
 
-The production DDL and row-level-security policies are in
-`migrations/postgres/002_person1_video_pipeline.sql`. Each transaction must set
-`SET LOCAL app.tenant_id` from authenticated server context. The SQLite store is
-the durable local-demo implementation, not a substitute for production RLS.
+Production DDL and row-level-security policies are in `migrations/postgres/`.
+Run `crime-platform-migrate`, then start one process per operation, for example
+`crime-video-worker --operation upload`. Set `TEST_POSTGRES_DSN` to run the
+database-level cross-tenant denial test.
+
+Coverage now comes from persisted capture/detector observations. The snapshot
+formula is `detector_available_seconds / expected_seconds`; missing measurements
+fail closed to zero at the forecast API boundary instead of using seeded demo
+values.
 
 The upload API owned by Person 2 should first save a bounded stream under the
 configured restricted media root, then call `accept_upload`. It must not accept
