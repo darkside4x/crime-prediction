@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://crime-hotspot.local/schemas/reka-insight.schema.json",
+  "title": "RekaGroundedInsight",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "tenant_id", "request_id", "answer", "claims", "limitations", "data_as_of", "model_version", "reka_model", "prompt_version"],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "tenant_id": {"type": "string", "format": "uuid"},
+    "request_id": {"type": "string", "format": "uuid"},
+    "answer": {"type": "string", "minLength": 1, "maxLength": 4000},
+    "claims": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["text", "fact_ids"],
+        "properties": {
+          "text": {"type": "string", "minLength": 1, "maxLength": 500},
+          "fact_ids": {"type": "array", "minItems": 1, "maxItems": 10, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 128}}
+        }
+      }
+    },
+    "limitations": {"type": "array", "items": {"type": "string", "maxLength": 300}, "maxItems": 10},
+    "data_as_of": {"type": "string", "format": "date-time"},
+    "model_version": {"type": "string", "minLength": 1, "maxLength": 128},
+    "reka_model": {"type": "string", "minLength": 1, "maxLength": 100},
+    "prompt_version": {"type": "string", "minLength": 1, "maxLength": 50},
+    "refusal_code": {"enum": ["unsafe_request", "insufficient_facts", "cross_tenant_request", "provider_unavailable", "not_applicable"]}
+  }
+}

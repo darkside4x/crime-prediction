@@ -10,6 +10,8 @@ These schemas are the initial integration boundary. They use JSON Schema 2020-12
 | `feature-row.schema.json` | downstream tenant/cell/time modeling row with no raw event identity or coordinates |
 | `ingestion-run.schema.json` | replay/live run progress, checkpoint, and rejection summary |
 | `prediction.schema.json` | aggregate tenant-scoped prediction returned by the application API |
+| `reka-source-mapping.schema.json` | human-reviewable Reka proposal for mapping a source into the incident schema |
+| `reka-insight.schema.json` | grounded Reka explanation whose claims cite supplied aggregate fact IDs |
 
 ## Versioning
 

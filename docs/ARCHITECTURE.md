@@ -30,8 +30,12 @@ Recorded replay now / tenant-owned live adapters later
                          v
        Versioned model bundle and model card
                          |
-                         v
-       Tenant-aware FastAPI application API
+             +-----------+-----------+
+             |                       |
+             v                       v
+ Tenant-aware FastAPI API     Reka AI gateway
+             |              (tools + validated JSON)
+             +-----------+-----------+
                          |
                          v
  React + TypeScript + MapLibre + Motion dashboard
@@ -51,6 +55,8 @@ Tenant source -> adapter -> durable inbox -> validator/idempotency -> raw restri
                                                     |
                                   tenant-authenticated API and UI
 ```
+
+Reka is off the numeric prediction path. If Reka is unavailable, ingestion, training, risk APIs, and the map continue to work; only AI-assisted onboarding and copilot features degrade.
 
 ## 3. Canonical contracts
 
@@ -81,6 +87,7 @@ Every feature must be computable using data available strictly before `interval_
 
 ```json
 {
+  "schema_version": "1.0.0",
   "tenant_id": "00000000-0000-4000-8000-000000000001",
   "cell_id": "H3_CELL",
   "window_start": "2026-08-30T00:00:00Z",
@@ -139,7 +146,58 @@ Initial adapter: recorded JSONL/CSV replay with speed, start time, end time, and
 - Event time drives features; received time drives freshness and operational alerts.
 - Late data inside a configured watermark recomputes affected aggregates; older data is retained for the next batch rebuild and does not silently rewrite published forecasts.
 
-## 5. Modeling plan
+## 5. Reka AI architecture
+
+### Approved use cases
+
+1. **Source onboarding assistant:** given column names, declared types, category values, and a small redacted sample, propose a mapping to the canonical incident schema. A person must approve it before activation.
+2. **Category normalization:** propose mappings from source labels to the tenant taxonomy with confidence and an explicit `unmapped` option. Deterministic rules execute the approved mapping.
+3. **Analyst copilot:** answer natural-language questions by calling allowlisted, read-only aggregate tools such as `get_risk_summary`, `get_source_health`, `get_model_card`, and `compare_time_windows`.
+4. **Grounded narrative:** turn already-computed metrics, uncertainty, data freshness, and model-card limitations into a short structured explanation.
+5. **Hackathon paper assistant:** optionally synthesize uploaded public research papers separately from tenant operational data, keeping citations and distinguishing paper claims from system decisions.
+
+### Explicitly prohibited uses
+
+- Generating, adjusting, ranking, or overriding numeric risk scores.
+- Inferring intent, guilt, dangerousness, protected attributes, or individual identity.
+- Recommending patrols, enforcement, detention, investigation, or resource allocation.
+- Querying raw events or exact coordinates through tools.
+- Combining tenants, retaining conversation memory across tenants, or using tenant data for provider training without an explicit reviewed agreement.
+
+### Request flow
+
+```text
+Authenticated user question
+        |
+        v
+Tenant context + policy check + prompt-injection screening
+        |
+        v
+Reka gateway (server-side API key, timeout, quota, audit id)
+        |
+        v
+Allowlisted read-only tools -> suppressed aggregate facts only
+        |
+        v
+JSON Schema validation + citation/fact binding + output policy check
+        |
+        v
+Stream safe presentation text to the tenant UI
+```
+
+The gateway uses Reka's OpenAI-compatible Chat Completions API. At startup or deployment validation it may call `/v1/models`; production requests use the configured `REKA_MODEL` rather than assuming availability. Start with `reka-flash` for the hosted demo and keep `reka-edge` as an optional local/private deployment path, subject to available hardware.
+
+### Reliability and audit contract
+
+- Configuration: `REKA_BASE_URL=https://api.reka.ai/v1`, server-only `REKA_API_KEY`, configurable `REKA_MODEL`, prompt version, request timeout, and per-tenant quota.
+- Prefer low temperature and structured JSON for schema mapping and explanations.
+- Validate outputs using `contracts/schemas/reka-insight.schema.json` or `reka-source-mapping.schema.json`.
+- Bind every factual statement to an input `fact_id`; discard uncited generated claims.
+- Log request id, tenant id, user id/hash per policy, use case, prompt/model versions, tool names, input/output token counts, latency, outcome, and source data/model versions. Do not log prompt payloads containing tenant data by default.
+- Retry only transient failures with a strict bound. A timeout returns the underlying deterministic metrics and a clear “AI explanation unavailable” state.
+- Do not send conversation history from one tenant or selected tenant context into another.
+
+## 6. Modeling plan
 
 Use models in this order:
 
@@ -151,7 +209,7 @@ Only attempt a graph neural network, ConvLSTM, or transformer after the baseline
 
 For sparse data, predict counts and rank cells. If the judges require classification, derive `count > 0` and calibrate probabilities on a validation window. Never use random train/test splitting.
 
-## 6. Evaluation
+## 7. Evaluation
 
 - Split chronologically: train, validation, then untouched test.
 - Prefer expanding-window or rolling-origin validation.
@@ -164,7 +222,7 @@ For sparse data, predict counts and rank cells. If the judges require classifica
 
 Accuracy alone is not sufficient. A map that merely reproduces historic reporting or enforcement intensity must be described as such.
 
-## 7. Tech stack
+## 8. Tech stack
 
 | Layer | Choice | Why |
 |---|---|---|
@@ -178,6 +236,9 @@ Accuracy alone is not sufficient. A map that merely reproduces historic reportin
 | Validation | Pandera or Pydantic | explicit data contracts |
 | ML | scikit-learn + LightGBM | strong tabular baselines and fast iteration |
 | Explainability | LightGBM contributions or SHAP on sampled rows | cell-level drivers without slowing the API |
+| Sponsored AI | Reka Chat Completions API through the OpenAI Python SDK | schema mapping, grounded explanations, tool-using copilot |
+| Reka model | `REKA_MODEL`, initially `reka-flash`; optional `reka-edge` local path | runtime-selectable and aligned with account availability |
+| AI validation | Pydantic + JSON Schema | reject malformed or ungrounded AI output |
 | API | FastAPI + Pydantic | typed and self-documenting |
 | UI | React, TypeScript, Vite, MapLibre GL, TanStack Query, Motion (`motion/react`) | typed interactive map with purposeful state transitions |
 | Tests | Pytest + Vitest/Playwright smoke test | proportionate verification |
@@ -194,7 +255,7 @@ Add Postgres/PostGIS and a broker only when live source durability, concurrent t
 - Loading skeletons preserve layout; streaming updates do not steal focus or reset map position.
 - Animations are interruptible and the application remains usable if JavaScript animation is unavailable.
 
-## 8. API surface
+## 9. API surface
 
 - `GET /health`
 - `GET /v1/me/tenants` - authorized tenant choices
@@ -207,10 +268,13 @@ Add Postgres/PostGIS and a broker only when live source durability, concurrent t
 - `GET /v1/risk?window_start=...&category=...&bbox=...`
 - `GET /v1/cells/{cell_id}/explanation?window_start=...&category=...`
 - `GET /v1/model-card`
+- `POST /v1/ai/source-mappings:propose` - redacted schema/sample to validated draft mapping
+- `POST /v1/ai/copilot/messages` - streamed tenant-scoped copilot response
+- `GET /v1/ai/audit/{request_id}` - authorized trace metadata, not hidden reasoning
 
-The API reads tenant-partitioned precomputed prediction Parquet files for the demo. This is faster, more stable, and easier to reproduce than performing inference on every map pan. Source-changing endpoints require an owner/admin role and create tenant-scoped audit records.
+The API reads tenant-partitioned precomputed prediction Parquet files for the demo. This is faster, more stable, and easier to reproduce than performing inference on every map pan. Source-changing endpoints require an owner/admin role and create tenant-scoped audit records. AI endpoints are separately rate-limited and never accept raw incident payloads.
 
-## 9. Safety and privacy gates
+## 10. Safety and privacy gates
 
 - Aggregate to H3 before feature generation; suppress cells/windows below a documented minimum count.
 - Never return raw coordinates or event identifiers.
@@ -221,8 +285,10 @@ The API reads tenant-partitioned precomputed prediction Parquet files for the de
 - Prevent cross-tenant caching by including `tenant_id` in every server-side cache key and never caching authenticated API responses publicly.
 - Rate-limit and quota sources per tenant; reject unbounded payloads.
 - Require human review; prohibit automated enforcement and individual-level decisions.
+- Treat retrieved source text and user prompts as untrusted instructions; tool authorization is enforced in code, not by the model prompt.
+- Show which aggregate facts, model version, and data timestamp grounded each AI explanation.
 
-## 10. Free integrations and MCP guidance
+## 11. Free integrations and MCP guidance
 
 Do not make the core demo depend on an MCP server. MCPs are best used for development workflow, not runtime prediction.
 
@@ -234,7 +300,7 @@ Do not make the core demo depend on an MCP server. MCPs are best used for develo
 
 Use least-privilege tokens, pin third-party server versions, and never expose raw sensitive incident data to a remote MCP. Prefer local/open-source servers and read-only credentials. Avoid installing a connector merely to save a few lines of code; reusable Python modules and generated OpenAPI clients are easier to test and audit.
 
-## 11. Build order
+## 12. Build order
 
 1. Freeze tenant, source, event, prediction, target-window, H3, taxonomy, and time-split contracts.
 2. Build recorded replay, idempotency/checkpoints, quarantine, and two-tenant isolation tests.
@@ -242,5 +308,6 @@ Use least-privilege tokens, pin third-party server versions, and never expose ra
 4. Establish the historical-rate baseline and evaluation report.
 5. Train/calibrate LightGBM and export predictions plus model card.
 6. Implement tenant middleware and the typed API against fixture predictions.
-7. Build the React/TypeScript/MapLibre/Motion UI against the API contract.
-8. Integrate real model output, test cross-tenant denial and reduced motion, run the end-to-end smoke test, and rehearse the demo.
+7. Implement the Reka gateway, fake provider, allowlisted aggregate tools, structured-output validation, and deterministic fallbacks.
+8. Build the React/TypeScript/MapLibre/Motion UI and copilot against the API contract.
+9. Integrate real model output, test cross-tenant denial, AI failure/injection paths, and reduced motion, then rehearse the demo.

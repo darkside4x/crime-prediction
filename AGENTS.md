@@ -11,7 +11,8 @@ Before changing code, read:
 1. `docs/ARCHITECTURE.md`
 2. `docs/TEAM_PLAN.md`
 3. `docs/PAPER_MATRIX.md`
-4. the relevant prompt in `docs/PROMPTS.md`
+4. `docs/REKA_AI.md` when touching AI, API, facts, onboarding, or frontend copilot behavior
+5. the relevant prompt in `docs/PROMPTS.md`
 
 ## Non-negotiable contracts
 
@@ -27,6 +28,9 @@ Before changing code, read:
 - The API contract in `docs/ARCHITECTURE.md` is the integration boundary.
 - Synthetic fixtures are updated before consumers when a schema changes.
 - Motion must communicate state, remain interruptible, and respect `prefers-reduced-motion`.
+- Reka AI may map schemas, summarize validated aggregate facts, and orchestrate allowlisted read-only tools; it must never calculate or modify risk scores.
+- Only aggregated/suppressed tenant data may be sent to Reka. Raw events, coordinates, identifiers, secrets, and cross-tenant context are prohibited.
+- Every Reka response crossing a system boundary must validate against a versioned schema and include model/prompt versions plus the underlying data/model versions.
 
 ## Ownership
 
@@ -43,11 +47,13 @@ Do not edit another owner's area to work around a broken contract. Document the 
 - Pin direct dependencies and keep the clean-start path documented.
 - Keep secrets and large/raw datasets out of Git.
 - Store connector credentials through secret references; never include credentials in source definitions, events, logs, or fixtures.
+- Keep `REKA_API_KEY` server-side, use timeouts/retries and tenant quotas, and provide a deterministic non-AI fallback for every critical workflow.
 - Add tests for bug fixes and for every time/leakage-sensitive transform.
 - Use deterministic seeds where supported; record data, code, config, and model versions.
 - Avoid network calls in tests. Use tiny synthetic fixtures.
 - Return typed, structured errors; do not silently drop malformed input.
 - Test cross-tenant access denial and tenant-scoped cache/artifact keys.
+- Mock Reka in tests; test prompt-injection strings, invalid structured output, unavailable API, and refusal behavior.
 - Do not claim causality from predictive features or explanations.
 
 ## Definition of done

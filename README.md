@@ -10,8 +10,9 @@ The current repository blueprint assumes:
 - Evaluation: strictly forward-in-time, including a simple historical-rate baseline.
 - Tenancy: every source, feature row, artifact, model, and API request belongs to exactly one tenant.
 - Ingestion: the demo replays recorded events through the same contract used by future live adapters.
+- AI experience: Reka powers schema onboarding, aggregate-data explanations, and the analyst copilot; it does not generate numeric crime-risk scores.
 
-Start with [the system architecture](docs/ARCHITECTURE.md), [the team plan](docs/TEAM_PLAN.md), and [the reusable agent prompts](docs/PROMPTS.md). Repository rules and interface contracts are in [AGENTS.md](AGENTS.md).
+Start with [the system architecture](docs/ARCHITECTURE.md), [the Reka AI design](docs/REKA_AI.md), [the team plan](docs/TEAM_PLAN.md), and [the reusable agent prompts](docs/PROMPTS.md). Repository rules and interface contracts are in [AGENTS.md](AGENTS.md).
 
 ## Suggested repository layout
 
@@ -38,6 +39,7 @@ artifacts/             # local model/evaluation outputs; mostly ignored
 5. State the limitations and prohibit individual-level or automated policing use.
 6. Switch between demo tenants and prove their sources, predictions, and UI state remain isolated.
 7. Replay a recorded stream through the canonical ingestion contract and show freshness/health status.
+8. Ask the Reka-powered copilot an aggregate question and show its cited model/data context and safety boundary.
 
 ## Papers still needed
 
