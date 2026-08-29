@@ -5,6 +5,11 @@ services:
       dockerfile: docker/api.Dockerfile
     environment:
       CORS_ORIGINS: http://localhost:5173,http://localhost:8080
+      REKA_BASE_URL: ${REKA_BASE_URL:-https://api.reka.ai/v1}
+      REKA_API_KEY: ${REKA_API_KEY:-}
+      REKA_MODEL: ${REKA_MODEL:-reka-flash}
+      REKA_PROMPT_VERSION: ${REKA_PROMPT_VERSION:-1.0.0}
+      REKA_TIMEOUT_SECONDS: ${REKA_TIMEOUT_SECONDS:-20}
     ports:
       - "8000:8000"
     healthcheck:

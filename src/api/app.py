@@ -32,7 +32,7 @@ class CopilotMessage(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
 
 
-def create_app() -> FastAPI:
+def create_app(provider: reka.RekaProvider | None = None) -> FastAPI:
     app = FastAPI(title="Crime Hotspot Forecasting API", version="0.1.0")
     app.add_middleware(
         CORSMiddleware,
@@ -40,7 +40,7 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    provider: reka.RekaProvider = reka.FakeRekaProvider()
+    active_provider = provider or reka.provider_from_environment()
 
     @app.get("/health")
     def health() -> dict[str, str]:
@@ -126,7 +126,7 @@ def create_app() -> FastAPI:
 
     @app.post("/v1/ai/copilot/messages")
     def copilot(body: CopilotMessage, ctx: TenantContext = Depends(require_tenant)) -> dict[str, Any]:
-        return reka.answer_question(ctx.tenant_id, body.question, provider)
+        return reka.answer_question(ctx.tenant_id, body.question, active_provider)
 
     return app
 

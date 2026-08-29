@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+from types import SimpleNamespace
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -14,7 +17,7 @@ TWO = {"Authorization": "Bearer demo-token-two"}
 
 @pytest.fixture()
 def client() -> TestClient:
-    return TestClient(create_app())
+    return TestClient(create_app(provider=reka.FakeRekaProvider()))
 
 
 def _window() -> str:
@@ -103,3 +106,47 @@ def test_invalid_ai_output_fails_safe():
     )
     assert insight["refusal_code"] == "provider_unavailable"
     assert "AI explanation unavailable" in insight["answer"]
+
+
+def test_live_reka_provider_sends_only_aggregate_facts_and_parses_json():
+    class Completions:
+        request = None
+
+        def create(self, **kwargs):
+            self.request = kwargs
+            fact_id = "fact_0123456789abcdef"
+            content = json.dumps({
+                "answer": "The held-out metric is reported with limitations.",
+                "claims": [{"text": "The metric is 0.82.", "fact_ids": [fact_id]}],
+                "limitations": ["This is not a causal claim."],
+            })
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content=content))]
+            )
+
+    completions = Completions()
+    provider = reka.RekaAPIProvider(
+        api_key="test-key",
+        client=SimpleNamespace(chat=SimpleNamespace(completions=completions)),
+    )
+    facts = reka.load_fact_bundle("00000000-0000-4000-8000-000000000001")
+
+    result = reka.answer_question(
+        facts["tenant_id"],
+        "How did the model perform?",
+        provider,
+    )
+
+    assert result["refusal_code"] == "not_applicable"
+    assert result["reka_model"] == "reka-flash"
+    outbound = completions.request["messages"][1]["content"]
+    response_format = completions.request["response_format"]
+    assert response_format["type"] == "json_schema"
+    fact_id_schema = (
+        response_format["json_schema"]["schema"]["properties"]["claims"]["items"]
+        ["properties"]["fact_ids"]["items"]
+    )
+    assert fact_id_schema["enum"] == ["fact_0123456789abcdef"]
+    assert "tenant_id" not in outbound
+    assert "latitude" not in outbound and "longitude" not in outbound
+    assert "fact_0123456789abcdef" in outbound
