@@ -2,7 +2,7 @@
   "name": "crime-hotspot-web",
   "private": true,
   "version": "0.1.0",
-  "packageManager": "pnpm@10.14.0",
+  "packageManager": "pnpm@10.15.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
