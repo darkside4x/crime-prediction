@@ -187,6 +187,7 @@ class IngestionStore:
         self,
         run_id: str,
         *,
+        tenant_id: str | None = None,
         status: str,
         checkpoint: str | int | None,
         accepted_count: int,
@@ -205,7 +206,7 @@ class IngestionStore:
                     status = ?, checkpoint_json = ?, accepted_count = ?,
                     duplicate_count = ?, rejected_count = ?, last_received_at = ?,
                     last_event_at = ?, last_error_code = ?, finished_at = ?
-                WHERE run_id = ?
+                WHERE run_id = ? AND (? IS NULL OR tenant_id = ?)
                 """,
                 (
                     status,
@@ -218,16 +219,19 @@ class IngestionStore:
                     last_error_code,
                     finished_at,
                     run_id,
+                    tenant_id,
+                    tenant_id,
                 ),
             )
-        run = self.get_run(run_id)
+        run = self.get_run(run_id, tenant_id=tenant_id)
         validate_contract("ingestion-run.schema.json", run)
         return run
 
-    def get_run(self, run_id: str) -> dict[str, Any]:
+    def get_run(self, run_id: str, *, tenant_id: str | None = None) -> dict[str, Any]:
         with self.connect() as connection:
             row = connection.execute(
-                "SELECT * FROM ingestion_runs WHERE run_id = ?", (run_id,)
+                "SELECT * FROM ingestion_runs WHERE run_id = ? AND (? IS NULL OR tenant_id = ?)",
+                (run_id, tenant_id, tenant_id),
             ).fetchone()
         if row is None:
             raise KeyError(run_id)

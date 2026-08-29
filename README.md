@@ -29,17 +29,21 @@ Implemented today:
 - authenticated FastAPI forecast/model/copilot endpoints with demo tenant isolation, typed errors, idempotency, and audit records;
 - schema-valid operational historical-rate fallback with coverage/support suppression;
 - live server-side Reka Chat explanations with strict grounding and deterministic failure fallback;
+- PostgreSQL repositories with transaction-scoped tenant RLS;
+- SQS-compatible leased video workers with retries, heartbeats, recovery and DLQ transfer;
+- tenant-prefixed S3/KMS media storage, ClamAV scanning and retention deletion;
+- secret-backed bounded HLS/RTSP/ONVIF segmentation with backpressure;
+- measured source coverage propagated into future forecast rows;
 - a fixture-backed React/MapLibre dashboard and Docker demo setup.
 
 Contracted but not yet implemented:
 
 - backend-proxied Reka Vision upload/index/search/Q&A/tagging/highlights;
 - Reka-proposed candidate detection and human review;
-- measured source coverage;
 - future feature snapshot generation and an approved calibrated-model registry;
-- production identity-provider integration and Person 1 media upload/worker connection;
+- production identity-provider integration and FastAPI media upload/worker wiring;
 - recorded-video onboarding/review screens connected to the real APIs;
-- Postgres/RLS, durable workers, monitoring, and drift checks.
+- deployed AWS resources, real-camera certification, monitoring, backups and drift checks.
 
 Synthetic fixtures are interface examples, not real crime patterns or measured model performance.
 

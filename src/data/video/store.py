@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -72,6 +72,10 @@ class VideoStore:
                     available_at TEXT NOT NULL,
                     started_at TEXT,
                     finished_at TEXT,
+                    lease_expires_at TEXT,
+                    heartbeat_at TEXT,
+                    worker_id TEXT,
+                    dead_lettered_at TEXT,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     PRIMARY KEY (tenant_id, job_id),
@@ -128,6 +132,15 @@ class VideoStore:
                 """
             )
 
+            # Existing development databases predate durable worker leases.
+            columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(video_processing_jobs)").fetchall()
+            }
+            for name in ("lease_expires_at", "heartbeat_at", "worker_id", "dead_lettered_at"):
+                if name not in columns:
+                    connection.execute(f"ALTER TABLE video_processing_jobs ADD COLUMN {name} TEXT")
+
     def put_source(self, payload: dict[str, Any]) -> None:
         with self.ingestion_store.connect() as connection:
             connection.execute(
@@ -139,14 +152,29 @@ class VideoStore:
     def get_source(self, tenant_id: str, source_id: str) -> dict[str, Any]:
         return self._get_payload("camera_sources_restricted", tenant_id, "source_id", source_id)
 
-    def put_asset(self, payload: dict[str, Any], local_path: Path) -> None:
+    def list_source_ids(self, tenant_id: str) -> tuple[str, ...]:
+        with self.ingestion_store.connect() as connection:
+            rows = connection.execute(
+                """SELECT source_id, payload_json FROM camera_sources_restricted
+                   WHERE tenant_id=? ORDER BY source_id""",
+                (tenant_id,),
+            ).fetchall()
+        return tuple(
+            row["source_id"]
+            for row in rows
+            if json.loads(row["payload_json"]).get("status") == "active"
+        )
+
+    def put_asset(self, payload: dict[str, Any], local_path: Path | str) -> None:
+        stored_path = str(local_path)
+        stored_path = stored_path.removeprefix("file://")
         with self.ingestion_store.connect() as connection:
             connection.execute(
                 """INSERT INTO video_assets_restricted
                    (tenant_id, asset_id, source_id, payload_json, local_path, created_at)
                    VALUES (?, ?, ?, ?, ?, ?)
                    ON CONFLICT (tenant_id, asset_id) DO UPDATE SET payload_json=excluded.payload_json""",
-                (payload["tenant_id"], payload["asset_id"], payload["source_id"], _json(payload), str(local_path), utc_now()),
+                (payload["tenant_id"], payload["asset_id"], payload["source_id"], _json(payload), stored_path, utc_now()),
             )
 
     def get_asset(self, tenant_id: str, asset_id: str) -> dict[str, Any]:
@@ -161,6 +189,9 @@ class VideoStore:
         if row is None:
             raise VideoPipelineError("asset_not_found", "Video asset was not found")
         return Path(row["local_path"])
+
+    def asset_storage_ref(self, tenant_id: str, asset_id: str) -> str:
+        return f"file://{self.asset_path(tenant_id, asset_id).resolve()}"
 
     def update_asset_status(self, tenant_id: str, asset_id: str, status: str, failure_code: str | None = None) -> None:
         payload = self.get_asset(tenant_id, asset_id)
@@ -218,8 +249,16 @@ class VideoStore:
                 (now, now, tenant_id, asset_id),
             )
 
-    def enqueue(self, tenant_id: str, asset_id: str, operation: str, *, max_attempts: int = 3) -> dict[str, Any]:
-        key = f"{asset_id}:{operation}"
+    def enqueue(
+        self,
+        tenant_id: str,
+        asset_id: str,
+        operation: str,
+        *,
+        max_attempts: int = 5,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        key = idempotency_key or f"{asset_id}:{operation}"
         now = utc_now()
         with self.ingestion_store.connect() as connection:
             row = connection.execute(
@@ -247,7 +286,15 @@ class VideoStore:
             raise VideoPipelineError("job_not_found", "Processing job was not found")
         return dict(row)
 
-    def transition_job(self, tenant_id: str, job_id: str, state: str, error_code: str | None = None) -> dict[str, Any]:
+    def transition_job(
+        self,
+        tenant_id: str,
+        job_id: str,
+        state: str,
+        error_code: str | None = None,
+        *,
+        retry_delay_seconds: float = 0,
+    ) -> dict[str, Any]:
         if state not in {"queued", "running", "completed", "failed", "cancelled", "retry"}:
             raise ValueError("Invalid job state")
         now = utc_now()
@@ -260,29 +307,111 @@ class VideoStore:
             attempts = current["attempts"] + (1 if state == "running" else 0)
             started = now if state == "running" else current["started_at"]
             finished = now if state in {"completed", "failed", "cancelled"} else None
+            available_at = (
+                datetime.now(UTC) + timedelta(seconds=max(retry_delay_seconds, 0))
+            ).isoformat().replace("+00:00", "Z")
             connection.execute(
                 """UPDATE video_processing_jobs SET state=?, attempts=?, last_error_code=?,
-                   started_at=?, finished_at=?, updated_at=? WHERE tenant_id=? AND job_id=?""",
-                (state, attempts, error_code, started, finished, now, tenant_id, job_id),
+                   started_at=?, finished_at=?, available_at=?, lease_expires_at=NULL,
+                   heartbeat_at=NULL, worker_id=NULL, updated_at=?
+                   WHERE tenant_id=? AND job_id=?""",
+                (
+                    state, attempts, error_code, started, finished, available_at,
+                    now, tenant_id, job_id,
+                ),
             )
         return self.get_job(tenant_id, job_id)
+
+    def ready_jobs(self, *, operations: tuple[str, ...], limit: int = 10) -> list[dict[str, Any]]:
+        if not operations or limit < 1:
+            return []
+        placeholders = ",".join("?" for _ in operations)
+        with self.ingestion_store.connect() as connection:
+            rows = connection.execute(
+                f"""SELECT * FROM video_processing_jobs
+                    WHERE state IN ('queued','retry') AND available_at <= ?
+                      AND operation IN ({placeholders}) AND attempts < max_attempts
+                    ORDER BY available_at, created_at LIMIT ?""",  # nosec B608
+                (utc_now(), *operations, limit),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def claim_job(
+        self, tenant_id: str, job_id: str, *, worker_id: str, lease_seconds: int
+    ) -> dict[str, Any]:
+        if lease_seconds < 1:
+            raise ValueError("lease_seconds must be positive")
+        now = datetime.now(UTC)
+        now_text = now.isoformat().replace("+00:00", "Z")
+        lease = (now + timedelta(seconds=lease_seconds)).isoformat().replace("+00:00", "Z")
+        with self.ingestion_store.connect() as connection:
+            cursor = connection.execute(
+                """UPDATE video_processing_jobs SET state='running', attempts=attempts+1,
+                   started_at=COALESCE(started_at, ?), heartbeat_at=?, lease_expires_at=?,
+                   worker_id=?, updated_at=?
+                   WHERE tenant_id=? AND job_id=? AND state IN ('queued','retry')
+                     AND available_at <= ? AND attempts < max_attempts""",
+                (
+                    now_text, now_text, lease, worker_id, now_text,
+                    tenant_id, job_id, now_text,
+                ),
+            )
+        if cursor.rowcount != 1:
+            raise VideoPipelineError("job_not_claimable", "Processing job is not ready")
+        return self.get_job(tenant_id, job_id)
+
+    def heartbeat(
+        self, tenant_id: str, job_id: str, *, worker_id: str, lease_seconds: int
+    ) -> None:
+        now = datetime.now(UTC)
+        now_text = now.isoformat().replace("+00:00", "Z")
+        lease = (now + timedelta(seconds=lease_seconds)).isoformat().replace("+00:00", "Z")
+        with self.ingestion_store.connect() as connection:
+            cursor = connection.execute(
+                """UPDATE video_processing_jobs SET heartbeat_at=?, lease_expires_at=?, updated_at=?
+                   WHERE tenant_id=? AND job_id=? AND state='running' AND worker_id=?""",
+                (now_text, lease, now_text, tenant_id, job_id, worker_id),
+            )
+        if cursor.rowcount != 1:
+            raise VideoPipelineError("job_lease_lost", "Worker no longer owns the job lease")
+
+    def mark_dead_lettered(self, tenant_id: str, job_id: str) -> None:
+        now = utc_now()
+        with self.ingestion_store.connect() as connection:
+            cursor = connection.execute(
+                """UPDATE video_processing_jobs SET dead_lettered_at=?, updated_at=?
+                   WHERE tenant_id=? AND job_id=? AND state='failed'""",
+                (now, now, tenant_id, job_id),
+            )
+        if cursor.rowcount != 1:
+            raise VideoPipelineError("job_not_failed", "Only failed jobs can enter the dead-letter queue")
 
     def recover_stale_jobs(self, *, stale_after: timedelta, now: datetime | None = None) -> int:
         """Return abandoned running work to retry after a worker lease timeout."""
         if stale_after.total_seconds() <= 0:
             raise ValueError("stale_after must be positive")
-        cutoff = (now or datetime.now(timezone.utc)) - stale_after
-        cutoff_text = cutoff.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+        current = now or datetime.now(UTC)
+        cutoff = current - stale_after
+        current_text = current.astimezone(UTC).isoformat().replace("+00:00", "Z")
+        cutoff_text = cutoff.astimezone(UTC).isoformat().replace("+00:00", "Z")
         with self.ingestion_store.connect() as connection:
             cursor = connection.execute(
                 """UPDATE video_processing_jobs SET state='retry', last_error_code='worker_lease_expired',
-                   updated_at=? WHERE state='running' AND started_at < ? AND attempts < max_attempts""",
-                (utc_now(), cutoff_text),
+                   lease_expires_at=NULL, heartbeat_at=NULL, worker_id=NULL, available_at=?,
+                   updated_at=? WHERE state='running'
+                   AND ((lease_expires_at IS NOT NULL AND lease_expires_at < ?)
+                     OR (lease_expires_at IS NULL AND started_at < ?))
+                   AND attempts < max_attempts""",
+                (current_text, current_text, current_text, cutoff_text),
             )
             failed = connection.execute(
                 """UPDATE video_processing_jobs SET state='failed', last_error_code='worker_recovery_exhausted',
-                   finished_at=?, updated_at=? WHERE state='running' AND started_at < ? AND attempts >= max_attempts""",
-                (utc_now(), utc_now(), cutoff_text),
+                   finished_at=?, lease_expires_at=NULL, heartbeat_at=NULL, worker_id=NULL,
+                   updated_at=? WHERE state='running'
+                   AND ((lease_expires_at IS NOT NULL AND lease_expires_at < ?)
+                     OR (lease_expires_at IS NULL AND started_at < ?))
+                   AND attempts >= max_attempts""",
+                (current_text, current_text, current_text, cutoff_text),
             )
         return cursor.rowcount + failed.rowcount
 
@@ -339,6 +468,56 @@ class VideoStore:
         except sqlite3.IntegrityError as error:
             raise VideoPipelineError("review_already_final", "Candidate already has an immutable final review") from error
 
+    def put_review_and_event(
+        self, payload: dict[str, Any], event: dict[str, Any], event_hash: str
+    ) -> None:
+        """Atomically finalize a confirmed review and promote exactly one event."""
+        location = event["location"]
+        try:
+            with self.ingestion_store.connect() as connection:
+                connection.execute(
+                    """INSERT INTO candidate_reviews_restricted
+                       (tenant_id, review_id, detection_id, payload_json, created_at)
+                       VALUES (?, ?, ?, ?, ?)""",
+                    (
+                        payload["tenant_id"], payload["review_id"], payload["detection_id"],
+                        _json(payload), utc_now(),
+                    ),
+                )
+                candidate_row = connection.execute(
+                    """SELECT payload_json FROM candidate_detections_restricted
+                       WHERE tenant_id=? AND detection_id=?""",
+                    (payload["tenant_id"], payload["detection_id"]),
+                ).fetchone()
+                if candidate_row is None:
+                    raise VideoPipelineError("resource_not_found", "Candidate was not found")
+                candidate = json.loads(candidate_row["payload_json"])
+                candidate["review_status"] = payload["decision"]
+                connection.execute(
+                    """UPDATE candidate_detections_restricted SET payload_json=?
+                       WHERE tenant_id=? AND detection_id=?""",
+                    (_json(candidate), payload["tenant_id"], payload["detection_id"]),
+                )
+                connection.execute(
+                    """INSERT INTO accepted_events (
+                         tenant_id, source_id, external_event_id, occurred_at,
+                         received_at, category, latitude, longitude, accuracy_meters,
+                         source_sequence_json, attributes_json, event_hash, ingested_at
+                       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        event["tenant_id"], event["source_id"], event["external_event_id"],
+                        event["occurred_at"], event["received_at"], event["category"],
+                        location["latitude"], location["longitude"], location.get("accuracy_meters"),
+                        json.dumps(event.get("source_sequence")),
+                        json.dumps(event.get("attributes", {}), sort_keys=True),
+                        event_hash, utc_now(),
+                    ),
+                )
+        except sqlite3.IntegrityError as error:
+            raise VideoPipelineError(
+                "review_already_final", "Candidate already has an immutable final review"
+            ) from error
+
     def get_review_for_candidate(self, tenant_id: str, detection_id: str) -> dict[str, Any] | None:
         with self.ingestion_store.connect() as connection:
             row = connection.execute(
@@ -390,6 +569,9 @@ class VideoStore:
         expected = sum(value["expected_seconds"] for value in values)
         available = sum(value["detector_available_seconds"] for value in values)
         return available / expected
+
+    def latest_tenant_coverage_ratio(self, tenant_id: str, before: str) -> float:
+        return self.latest_coverage_ratio(tenant_id, self.list_source_ids(tenant_id), before)
 
     def put_future_snapshot(self, tenant_id: str, version: str, interval_start: str, rows: list[dict[str, Any]]) -> None:
         with self.ingestion_store.connect() as connection:

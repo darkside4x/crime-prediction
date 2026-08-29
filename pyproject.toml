@@ -26,11 +26,18 @@ dev = [
   "httpx==0.28.1",
   "pytest==9.0.3",
 ]
+platform = [
+  "boto3==1.40.31",
+  "psycopg[binary,pool]==3.2.10",
+]
 
 [project.scripts]
 crime-data = "src.data.cli:main"
 crime-model = "src.models.cli:main"
 crime-api-openapi = "src.api.openapi:main"
+crime-platform-migrate = "src.data.video.cli:migrate"
+crime-video-worker = "src.data.video.cli:worker"
+crime-video-capture-worker = "src.data.video.cli:capture_worker"
 
 [build-system]
 requires = ["hatchling==1.27.0"]

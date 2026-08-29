@@ -7,7 +7,7 @@ import hashlib
 import json
 import math
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Callable, Literal
 import uuid
 
 from fastapi import Depends, FastAPI, Header, Query, Request
@@ -54,7 +54,7 @@ class RecordedSourceCreate(BaseModel):
 
 class LiveSourceCreate(RecordedSourceCreate):
     connection_secret_id: uuid.UUID
-    transport: str = Field(pattern="^(rtsp|onvif)$")
+    transport: str = Field(pattern="^(hls|rtsp|onvif)$")
 
 
 class ReviewRequest(BaseModel):
@@ -109,7 +109,14 @@ def _parse_bbox(value: str | None) -> tuple[float, float, float, float] | None:
     return west, south, east, north
 
 
-def _future_row(tenant_id: str, cell_id: str, window_start: datetime, category: str) -> dict[str, Any]:
+def _future_row(
+    tenant_id: str,
+    cell_id: str,
+    window_start: datetime,
+    category: str,
+    *,
+    coverage_ratio: float,
+) -> dict[str, Any]:
     seed = int(hashlib.sha256(f"{tenant_id}|{cell_id}|{category}".encode()).hexdigest()[:8], 16)
     lag_1, lag_2, lag_7, lag_14 = ((seed >> shift) % 4 for shift in (0, 3, 6, 9))
     data_as_of = min(datetime.now(timezone.utc), window_start - timedelta(seconds=1))
@@ -134,7 +141,7 @@ def _future_row(tenant_id: str, cell_id: str, window_start: datetime, category: 
         "hour_cos": math.cos(hour_angle),
         "day_of_week_sin": math.sin(day_angle),
         "day_of_week_cos": math.cos(day_angle),
-        "coverage_ratio": 0.4 if seed % 17 == 0 else 0.9,
+        "coverage_ratio": coverage_ratio,
         "data_as_of": data_as_of.isoformat().replace("+00:00", "Z"),
         "feature_snapshot_version": f"forecast-features-{window_start:%Y%m%dT%H%M%SZ}-v1",
     }
@@ -168,6 +175,7 @@ def create_app(
     settings: Settings | None = None,
     auth_provider: AuthenticationProvider | None = None,
     forecast_service: ForecastService | None = None,
+    coverage_provider: Callable[[str, str], float] | None = None,
 ) -> FastAPI:
     active_settings = settings or Settings.from_environment()
     if auth_provider is None and active_settings.app_environment == "production":
@@ -486,9 +494,23 @@ def create_app(
         total = len(cells)
         offset = (page - 1) * page_size
         selected = cells[offset : offset + page_size]
+        measured_coverage = (
+            coverage_provider(
+                ctx.tenant_id,
+                start.isoformat().replace("+00:00", "Z"),
+            )
+            if coverage_provider is not None
+            else 0.0
+        )
         items = [
             app.state.forecast_service.forecast(
-                _future_row(ctx.tenant_id, cell, start, category),
+                _future_row(
+                    ctx.tenant_id,
+                    cell,
+                    start,
+                    category,
+                    coverage_ratio=measured_coverage,
+                ),
                 tenant_id=ctx.tenant_id,
                 generated_at=now,
             )
