@@ -6,6 +6,11 @@ No papers were available in the workspace when this file was created. Add PDFs u
 |---|---|---|---|---|---|---|---|---|---|---|
 | _Pending_ | | | | | | | | | | |
 
+The empirical dataset decision and locally reproduced results are tracked in
+`docs/EVALUATION.md`. That benchmark is evidence about this implementation, not
+a research-paper claim, so it is intentionally not inserted into the paper
+matrix as if it were a publication.
+
 ## Cross-paper synthesis questions
 
 1. Which gains remain after chronological or spatial holdout rather than random splitting?

@@ -1,6 +1,41 @@
 {
   "components": {
     "schemas": {
+      "Body_create_video_upload_v1_video_assets_uploads_post": {
+        "properties": {
+          "captured_end": {
+            "title": "Captured End",
+            "type": "string"
+          },
+          "captured_start": {
+            "title": "Captured Start",
+            "type": "string"
+          },
+          "consent_confirmed": {
+            "title": "Consent Confirmed",
+            "type": "boolean"
+          },
+          "file": {
+            "contentMediaType": "application/octet-stream",
+            "title": "File",
+            "type": "string"
+          },
+          "source_id": {
+            "format": "uuid",
+            "title": "Source Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_id",
+          "captured_start",
+          "captured_end",
+          "consent_confirmed",
+          "file"
+        ],
+        "title": "Body_create_video_upload_v1_video_assets_uploads_post",
+        "type": "object"
+      },
       "CopilotMessage": {
         "additionalProperties": false,
         "properties": {
@@ -76,6 +111,72 @@
           "transport"
         ],
         "title": "LiveSourceCreate",
+        "type": "object"
+      },
+      "ModelPromotionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "model_version": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9._-]+$",
+            "title": "Model Version",
+            "type": "string"
+          },
+          "reason": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "model_version",
+          "reason"
+        ],
+        "title": "ModelPromotionRequest",
+        "type": "object"
+      },
+      "ModelRollbackRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "reason": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "title": "ModelRollbackRequest",
+        "type": "object"
+      },
+      "NearLiveCaptureRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "duration_seconds": {
+            "anyOf": [
+              {
+                "maximum": 60.0,
+                "minimum": 5.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Seconds"
+          },
+          "source_key": {
+            "const": "louisiana-dot-i20",
+            "default": "louisiana-dot-i20",
+            "title": "Source Key",
+            "type": "string"
+          }
+        },
+        "title": "NearLiveCaptureRequest",
         "type": "object"
       },
       "RecordedSourceCreate": {
@@ -456,6 +557,69 @@
         "summary": "Coverage"
       }
     },
+    "/v1/demo/near-live-cctv/captures": {
+      "post": {
+        "operationId": "start_near_live_capture_v1_demo_near_live_cctv_captures_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NearLiveCaptureRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Start Near Live Capture V1 Demo Near Live Cctv Captures Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Start Near Live Capture"
+      }
+    },
     "/v1/forecasts": {
       "get": {
         "operationId": "forecasts_v1_forecasts_get",
@@ -781,6 +945,157 @@
         "summary": "Model Card"
       }
     },
+    "/v1/model-registry": {
+      "get": {
+        "operationId": "model_registry_status_v1_model_registry_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Model Registry Status V1 Model Registry Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Model Registry Status"
+      }
+    },
+    "/v1/model-registry/promotions": {
+      "post": {
+        "operationId": "promote_model_v1_model_registry_promotions_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ModelPromotionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Promote Model V1 Model Registry Promotions Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Promote Model"
+      }
+    },
+    "/v1/model-registry/rollback": {
+      "post": {
+        "operationId": "rollback_model_v1_model_registry_rollback_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ModelRollbackRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Rollback Model V1 Model Registry Rollback Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Rollback Model"
+      }
+    },
     "/v1/sources": {
       "get": {
         "operationId": "sources_v1_sources_get",
@@ -953,6 +1268,16 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_create_video_upload_v1_video_assets_uploads_post"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "202": {
             "content": {

@@ -9,7 +9,8 @@ RUN pip install --no-cache-dir \
     "fastapi==0.141.1" "uvicorn==0.35.0" "h3==4.3.1" \
     "jsonschema[format]==4.25.1" "numpy==2.2.3" "openai==3.6.0" \
     "python-dotenv==1.2.3" "boto3==1.40.31" \
-    "psycopg[binary,pool]==3.2.10" "python-multipart==0.0.20"
+    "psycopg[binary,pool]==3.2.10" "python-multipart==0.0.20" \
+    "PyJWT[crypto]==2.13.0"
 
 COPY contracts/ contracts/
 COPY migrations/ migrations/

@@ -111,9 +111,9 @@ Candidate order:
 2. regularized Poisson baseline;
 3. LightGBM Poisson candidate.
 
-Selection uses validation and rolling-origin results. The untouched test set is opened only after selection. The selected production model is then refit under a recorded policy, and probability calibration uses validation-only or out-of-fold predictions. Operational uncertainty must use a named, versioned temporal method rather than an unlabeled approximation.
+Selection uses validation and rolling-origin results. The untouched test set is opened only after selection. Test metrics are frozen, then the selected production model is separately refit on all chronological history. Probability calibration uses validation-only predictions. Operational uncertainty combines rolling-origin model-refit/residual variation, temporal variation, and measured data-coverage availability under a named versioned method. Only explicitly promoted tenant artifacts whose bundle and sidecar checksums match the frozen run manifest may load for inference.
 
-Evaluation remains chronological. Required metrics include MAE, Poisson deviance, per-window top-k capture, Brier score, calibration, time/geography/category/coverage slices, and temporally appropriate confidence intervals.
+Evaluation remains chronological. Required metrics include MAE, Poisson deviance, per-window/category top-k cell capture, Brier score, calibration, time/geography/category/coverage slices, and temporally appropriate confidence intervals.
 
 ## API surface
 

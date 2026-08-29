@@ -151,7 +151,9 @@ class ForecastService:
             model_version = model.model_version
             data_version = model.data_version
             drivers = model.drivers(row, limit=5)
-            probability_method = "poisson_link_uncalibrated_no_approved_calibrator"
+            calibrate = getattr(model, "calibrate_probability", None)
+            interval = getattr(model, "count_interval", None)
+            calibration_version = getattr(model, "calibration_version", None)
         else:
             expected = _fallback_expected_count(row)
             model_version = "historical-rate-operational-fallback-v1"
@@ -160,6 +162,9 @@ class ForecastService:
                 {"feature": "historical comparable-window rate", "direction": "higher"}
             ]
             probability_method = "poisson_link_fallback_uncalibrated"
+            calibration_version = None
+            calibrate = None
+            interval = None
 
         recent_support = sum(float(raw_row[name]) for name in ("lag_1", "lag_2", "lag_7", "lag_14"))
         reason: str | None = None
@@ -168,10 +173,23 @@ class ForecastService:
         elif recent_support < self.policy.minimum_recent_support:
             reason = "low_support"
 
-        count_lower, count_upper = _empirical_interval(row, expected)
-        probability = 1.0 - math.exp(-expected)
-        probability_lower = 1.0 - math.exp(-count_lower)
-        probability_upper = 1.0 - math.exp(-count_upper)
+        if callable(interval):
+            count_lower, count_upper, count_interval_method = interval(row, expected)
+        else:
+            count_lower, count_upper = _empirical_interval(row, expected)
+            count_interval_method = "comparable_window_empirical_interval_v1"
+        raw_probability = 1.0 - math.exp(-expected)
+        raw_probability_lower = 1.0 - math.exp(-count_lower)
+        raw_probability_upper = 1.0 - math.exp(-count_upper)
+        if callable(calibrate):
+            probability = float(calibrate(raw_probability))
+            probability_lower = min(probability, float(calibrate(raw_probability_lower)))
+            probability_upper = max(probability, float(calibrate(raw_probability_upper)))
+            probability_method = "validation_isotonic_pav_v1"
+        else:
+            probability = raw_probability
+            probability_lower = raw_probability_lower
+            probability_upper = raw_probability_upper
         suppressed = reason is not None
         forecast_id = str(
             uuid.uuid5(
@@ -204,7 +222,7 @@ class ForecastService:
                 "lower": null_or(count_lower),
                 "upper": null_or(count_upper),
                 "interval_level": self.policy.interval_level,
-                "method": "comparable_window_empirical_interval_v1",
+                "method": count_interval_method,
             },
             "occurrence_probability": {
                 "value": null_or(probability),
@@ -212,7 +230,7 @@ class ForecastService:
                 "upper": null_or(probability_upper),
                 "interval_level": self.policy.interval_level,
                 "method": probability_method,
-                "calibration_version": None,
+                "calibration_version": calibration_version,
             },
             "risk_band": "suppressed" if suppressed else _risk_band(probability, self.policy.risk_band_thresholds),
             "coverage_ratio": float(raw_row["coverage_ratio"]),

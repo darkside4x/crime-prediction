@@ -106,6 +106,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/demo/near-live-cctv/captures": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start Near Live Capture */
+        post: operations["start_near_live_capture_v1_demo_near_live_cctv_captures_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/forecasts": {
         parameters: {
             query?: never;
@@ -225,6 +242,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/model-registry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Model Registry Status */
+        get: operations["model_registry_status_v1_model_registry_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/model-registry/promotions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Promote Model */
+        post: operations["promote_model_v1_model_registry_promotions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/model-registry/rollback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Rollback Model */
+        post: operations["rollback_model_v1_model_registry_rollback_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/sources": {
         parameters: {
             query?: never;
@@ -297,6 +365,22 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** Body_create_video_upload_v1_video_assets_uploads_post */
+        Body_create_video_upload_v1_video_assets_uploads_post: {
+            /** Captured End */
+            captured_end: string;
+            /** Captured Start */
+            captured_start: string;
+            /** Consent Confirmed */
+            consent_confirmed: boolean;
+            /** File */
+            file: string;
+            /**
+             * Source Id
+             * Format: uuid
+             */
+            source_id: string;
+        };
         /** CopilotMessage */
         CopilotMessage: {
             /** Question */
@@ -327,6 +411,29 @@ export interface components {
             timezone: string;
             /** Transport */
             transport: string;
+        };
+        /** ModelPromotionRequest */
+        ModelPromotionRequest: {
+            /** Model Version */
+            model_version: string;
+            /** Reason */
+            reason: string;
+        };
+        /** ModelRollbackRequest */
+        ModelRollbackRequest: {
+            /** Reason */
+            reason: string;
+        };
+        /** NearLiveCaptureRequest */
+        NearLiveCaptureRequest: {
+            /** Duration Seconds */
+            duration_seconds?: number | null;
+            /**
+             * Source Key
+             * @default louisiana-dot-i20
+             * @constant
+             */
+            source_key: "louisiana-dot-i20";
         };
         /** RecordedSourceCreate */
         RecordedSourceCreate: {
@@ -549,6 +656,43 @@ export interface operations {
             };
         };
     };
+    start_near_live_capture_v1_demo_near_live_cctv_captures_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NearLiveCaptureRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     forecasts_v1_forecasts_get: {
         parameters: {
             query: {
@@ -753,6 +897,102 @@ export interface operations {
             };
         };
     };
+    model_registry_status_v1_model_registry_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    promote_model_v1_model_registry_promotions_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ModelPromotionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    rollback_model_v1_model_registry_rollback_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ModelRollbackRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     sources_v1_sources_get: {
         parameters: {
             query?: never;
@@ -858,7 +1098,11 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_create_video_upload_v1_video_assets_uploads_post"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             202: {

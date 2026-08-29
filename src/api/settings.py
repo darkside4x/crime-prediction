@@ -21,6 +21,15 @@ class Settings:
     near_live_capture_seconds: int = 20
     reka_index_poll_seconds: float = 3.0
     reka_index_max_polls: int = 20
+    oidc_issuer: str = ""
+    oidc_audience: str = ""
+    oidc_jwks_url: str = ""
+    oidc_algorithms: tuple[str, ...] = ("RS256",)
+    oidc_memberships_claim: str = "tenant_memberships"
+    trusted_hosts: tuple[str, ...] = ("localhost", "127.0.0.1", "testserver")
+    max_request_bytes: int = 512 * 1024 * 1024
+    api_rate_limit_requests: int = 120
+    api_rate_limit_window_seconds: int = 60
 
     @classmethod
     def from_environment(cls) -> "Settings":
@@ -33,6 +42,16 @@ class Settings:
         origins = tuple(
             item.strip()
             for item in os.environ.get("CORS_ORIGINS", "http://localhost:5173").split(",")
+            if item.strip()
+        )
+        trusted_hosts = tuple(
+            item.strip()
+            for item in os.environ.get("TRUSTED_HOSTS", "localhost,127.0.0.1,testserver").split(",")
+            if item.strip()
+        )
+        algorithms = tuple(
+            item.strip()
+            for item in os.environ.get("OIDC_ALGORITHMS", "RS256").split(",")
             if item.strip()
         )
         settings = cls(
@@ -53,6 +72,19 @@ class Settings:
             near_live_capture_seconds=int(os.environ.get("NEAR_LIVE_CAPTURE_SECONDS", "20")),
             reka_index_poll_seconds=float(os.environ.get("REKA_INDEX_POLL_SECONDS", "3")),
             reka_index_max_polls=int(os.environ.get("REKA_INDEX_MAX_POLLS", "20")),
+            oidc_issuer=os.environ.get("OIDC_ISSUER", "").strip(),
+            oidc_audience=os.environ.get("OIDC_AUDIENCE", "").strip(),
+            oidc_jwks_url=os.environ.get("OIDC_JWKS_URL", "").strip(),
+            oidc_algorithms=algorithms,
+            oidc_memberships_claim=os.environ.get(
+                "OIDC_MEMBERSHIPS_CLAIM", "tenant_memberships"
+            ).strip(),
+            trusted_hosts=trusted_hosts,
+            max_request_bytes=int(os.environ.get("MAX_REQUEST_BYTES", str(512 * 1024 * 1024))),
+            api_rate_limit_requests=int(os.environ.get("API_RATE_LIMIT_REQUESTS", "120")),
+            api_rate_limit_window_seconds=int(
+                os.environ.get("API_RATE_LIMIT_WINDOW_SECONDS", "60")
+            ),
         )
         if not 1 <= settings.reka_timeout_seconds <= 120:
             raise ValueError("REKA_TIMEOUT_SECONDS must be between 1 and 120")
@@ -70,6 +102,30 @@ class Settings:
             raise ValueError("REKA_INDEX_POLL_SECONDS must be between 0 and 30")
         if not 1 <= settings.reka_index_max_polls <= 100:
             raise ValueError("REKA_INDEX_MAX_POLLS must be between 1 and 100")
+        if not settings.trusted_hosts or "*" in settings.trusted_hosts:
+            raise ValueError("TRUSTED_HOSTS must be explicit and cannot contain '*'")
+        if not 1024 <= settings.max_request_bytes <= 10 * 1024 * 1024 * 1024:
+            raise ValueError("MAX_REQUEST_BYTES must be between 1 KiB and 10 GiB")
+        if not 1 <= settings.api_rate_limit_requests <= 100000:
+            raise ValueError("API_RATE_LIMIT_REQUESTS is outside the supported range")
+        if not 1 <= settings.api_rate_limit_window_seconds <= 3600:
+            raise ValueError("API_RATE_LIMIT_WINDOW_SECONDS is outside the supported range")
+        allowed_algorithms = {"RS256", "RS384", "RS512", "ES256", "ES384", "ES512"}
+        if not settings.oidc_algorithms or not set(settings.oidc_algorithms) <= allowed_algorithms:
+            raise ValueError("OIDC_ALGORITHMS contains an unsupported asymmetric algorithm")
+        if settings.app_environment == "production":
+            required = {
+                "OIDC_ISSUER": settings.oidc_issuer,
+                "OIDC_AUDIENCE": settings.oidc_audience,
+                "OIDC_JWKS_URL": settings.oidc_jwks_url,
+            }
+            missing = sorted(name for name, value in required.items() if not value)
+            if missing:
+                raise ValueError(f"Missing production OIDC settings: {', '.join(missing)}")
+            if not settings.oidc_issuer.startswith("https://"):
+                raise ValueError("OIDC_ISSUER must use HTTPS in production")
+            if not settings.oidc_jwks_url.startswith("https://"):
+                raise ValueError("OIDC_JWKS_URL must use HTTPS in production")
         return settings
 
     @property

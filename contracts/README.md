@@ -58,6 +58,14 @@ Every schema has a synthetic fixture with the same basename under `contracts/fix
 
 ## Changelog
 
+### 2026-08-30 — calibrated operational model artifacts
+
+- Model-run manifests now record validation-only probability-calibration and
+  model/data/temporal uncertainty sidecars alongside the fitted estimator.
+- Top-k cell capture is evaluated independently within each forecast
+  window/category group.
+- This shared-contract addition requires review by a teammate outside Person 2.
+
 ### 2026-08-30 — allowlisted near-live HLS demo transport
 
 - Added `hls` as an explicit live-camera transport. Public HLS sources require a

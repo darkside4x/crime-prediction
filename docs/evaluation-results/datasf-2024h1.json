@@ -1,0 +1,49 @@
+{
+  "schema_version": "1.0.0",
+  "dataset": {
+    "resource_id": "wg3w-h783",
+    "license": "PDDL",
+    "raw_sha256": "50381b05462c9981ad1894fb44d76a2ee82f59e5a55594b30704534c0493a921",
+    "api_row_count": 36433,
+    "accepted_in_domain": 25226,
+    "rejected": 1,
+    "feature_sha256": "6ff595004b3e8856b6c125fd11062638d9368fd4352d9059bbb645bd7f67717c",
+    "feature_row_count": 68780,
+    "data_version": "features-0feae9e35df3d27a7d3e3a1a"
+  },
+  "split": {
+    "strategy": "rolling_origin_with_chronological_holdout",
+    "train_rows": 41230,
+    "validation_rows": 13680,
+    "test_rows": 13870,
+    "test_start": "2024-05-25T12:00:00Z",
+    "test_end": "2024-06-30T18:00:00Z"
+  },
+  "selection": {
+    "selected_model": "regularized_poisson",
+    "model_version": "regularized_poisson-f4d45b4fc210a44a",
+    "primary_metric": "poisson_deviance",
+    "validation_relative_gain": 0.25114320791525774,
+    "test_evaluated_after_selection": true
+  },
+  "test_metrics": {
+    "regularized_poisson": {
+      "mae": 0.500589853944588,
+      "poisson_deviance": 1.0653312241093977,
+      "top_k_capture_per_window_category": 0.3023987416437279,
+      "brier_score": 0.14842330148378324
+    },
+    "historical_rate": {
+      "mae": 0.42355649397466266,
+      "poisson_deviance": 1.2041092615638076,
+      "top_k_capture_per_window_category": 0.3240267400707825,
+      "brier_score": 0.13809038667111612
+    }
+  },
+  "limitations": [
+    "Reported incidents are not underlying crime prevalence.",
+    "The bounded San Francisco benchmark is not representative of other jurisdictions.",
+    "Historical camera uptime was unavailable, so coverage is a benchmark-only source-availability assumption.",
+    "The selected model did not beat the baseline on MAE, per-window top-k capture, or Brier score."
+  ]
+}

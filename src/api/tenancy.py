@@ -4,8 +4,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import hashlib
 import os
+import threading
 from typing import Protocol
+import uuid
 
 from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -56,6 +59,8 @@ class AuthenticationProvider(Protocol):
 class DevelopmentAuthenticationProvider:
     """Deterministic development provider with explicit tenant memberships."""
 
+    development_only = True
+
     def __init__(self) -> None:
         tenant_one_admin = TenantMembership(
             DEMO_TENANT_ONE, "demo-one", "Demo Tenant One", "tenant_admin"
@@ -68,6 +73,9 @@ class DevelopmentAuthenticationProvider:
         )
         tenant_two_viewer = TenantMembership(
             DEMO_TENANT_TWO, "demo-two", "Demo Tenant Two", "viewer"
+        )
+        tenant_one_operator = TenantMembership(
+            DEMO_TENANT_ONE, "demo-one", "Demo Tenant One", "platform_operator"
         )
         self._principals = {
             os.environ.get("DEMO_TOKEN_ONE", "demo-token-one"): Principal(
@@ -83,6 +91,9 @@ class DevelopmentAuthenticationProvider:
             ),
             os.environ.get("DEMO_VIEWER_TOKEN", "demo-viewer-one"): Principal(
                 "principal-demo-viewer-one", (tenant_one_viewer,), DEMO_TENANT_ONE
+            ),
+            os.environ.get("DEMO_OPERATOR_TOKEN", "demo-operator-one"): Principal(
+                "principal-demo-operator", (tenant_one_operator,), DEMO_TENANT_ONE
             ),
         }
         self._active = {
@@ -115,6 +126,157 @@ class DevelopmentAuthenticationProvider:
                 detail={"code": "tenant_forbidden", "message": "Tenant membership is required"},
             )
         self._active[token] = tenant_id
+        return self.authenticate(token)
+
+
+class OidcAuthenticationProvider:
+    """Validate asymmetric OIDC access tokens and derive tenant context from signed claims.
+
+    The raw bearer token is never persisted. Active-tenant choices are keyed by a
+    one-way token digest and may only select a membership present in the verified
+    token. A deployment that needs choices to survive token rotation should inject
+    an identity-provider session implementation instead of relying on this cache.
+    """
+
+    development_only = False
+
+    def __init__(
+        self,
+        *,
+        issuer: str,
+        audience: str,
+        jwks_url: str,
+        algorithms: tuple[str, ...] = ("RS256",),
+        memberships_claim: str = "tenant_memberships",
+        leeway_seconds: int = 30,
+        jwks_client: object | None = None,
+    ) -> None:
+        if not issuer.startswith("https://") or not jwks_url.startswith("https://"):
+            raise ValueError("OIDC issuer and JWKS URL must use HTTPS")
+        if not audience or not memberships_claim:
+            raise ValueError("OIDC audience and memberships claim are required")
+        allowed = {"RS256", "RS384", "RS512", "ES256", "ES384", "ES512"}
+        if not algorithms or not set(algorithms) <= allowed:
+            raise ValueError("Only allowlisted asymmetric JWT algorithms are supported")
+        try:
+            import jwt
+        except ImportError as error:  # pragma: no cover - dependency guidance
+            raise RuntimeError("Install the API extra to enable OIDC authentication") from error
+        self._jwt = jwt
+        self.issuer = issuer
+        self.audience = audience
+        self.algorithms = algorithms
+        self.memberships_claim = memberships_claim
+        self.leeway_seconds = leeway_seconds
+        self.jwks_client = jwks_client or jwt.PyJWKClient(
+            jwks_url,
+            cache_keys=True,
+            cache_jwk_set=True,
+            lifespan=300,
+            timeout=5,
+        )
+        self._active: dict[str, str] = {}
+        self._lock = threading.Lock()
+
+    @staticmethod
+    def _token_key(token: str) -> str:
+        return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+    def _decode(self, token: str) -> dict:
+        try:
+            signing_key = self.jwks_client.get_signing_key_from_jwt(token).key
+            claims = self._jwt.decode(
+                token,
+                signing_key,
+                algorithms=list(self.algorithms),
+                audience=self.audience,
+                issuer=self.issuer,
+                leeway=self.leeway_seconds,
+                options={"require": ["exp", "iat", "iss", "aud", "sub"]},
+            )
+        except self._jwt.ExpiredSignatureError as error:
+            raise HTTPException(
+                status_code=401,
+                detail={"code": "expired_token", "message": "Authentication token has expired"},
+            ) from error
+        except self._jwt.PyJWTError as error:
+            raise HTTPException(
+                status_code=401,
+                detail={"code": "invalid_token", "message": "Authentication token is invalid"},
+            ) from error
+        if not isinstance(claims, dict):
+            raise HTTPException(
+                status_code=401,
+                detail={"code": "invalid_token", "message": "Authentication token is invalid"},
+            )
+        return claims
+
+    def _principal(self, token: str, claims: dict) -> Principal:
+        subject = claims.get("sub")
+        raw_memberships = claims.get(self.memberships_claim)
+        if not isinstance(subject, str) or not subject or not isinstance(raw_memberships, list):
+            raise HTTPException(
+                status_code=403,
+                detail={"code": "tenant_membership_missing", "message": "No tenant membership is available"},
+            )
+        memberships: list[TenantMembership] = []
+        seen: set[str] = set()
+        for raw in raw_memberships:
+            if not isinstance(raw, dict) or set(raw) != {"tenant_id", "slug", "display_name", "role"}:
+                raise HTTPException(
+                    status_code=401,
+                    detail={"code": "invalid_token", "message": "Authentication token memberships are invalid"},
+                )
+            try:
+                uuid.UUID(str(raw["tenant_id"]))
+                membership = TenantMembership(
+                    str(raw["tenant_id"]),
+                    str(raw["slug"])[:80],
+                    str(raw["display_name"])[:120],
+                    str(raw["role"]),
+                )
+            except (TypeError, ValueError) as error:
+                raise HTTPException(
+                    status_code=401,
+                    detail={"code": "invalid_token", "message": "Authentication token memberships are invalid"},
+                ) from error
+            if membership.tenant_id in seen:
+                raise HTTPException(
+                    status_code=401,
+                    detail={"code": "invalid_token", "message": "Authentication token memberships are invalid"},
+                )
+            seen.add(membership.tenant_id)
+            memberships.append(membership)
+        if not memberships:
+            raise HTTPException(
+                status_code=403,
+                detail={"code": "tenant_membership_missing", "message": "No tenant membership is available"},
+            )
+        token_key = self._token_key(token)
+        requested = claims.get("active_tenant_id")
+        with self._lock:
+            active = self._active.get(token_key)
+        if active not in seen:
+            active = str(requested) if requested in seen else memberships[0].tenant_id
+        return Principal(subject[:200], tuple(memberships), active)
+
+    def authenticate(self, token: str) -> Principal:
+        if not 1 <= len(token) <= 16384:
+            raise HTTPException(
+                status_code=401,
+                detail={"code": "invalid_token", "message": "Authentication token is invalid"},
+            )
+        return self._principal(token, self._decode(token))
+
+    def switch_active_tenant(self, token: str, tenant_id: str) -> Principal:
+        principal = self.authenticate(token)
+        if tenant_id not in {item.tenant_id for item in principal.memberships}:
+            raise HTTPException(
+                status_code=403,
+                detail={"code": "tenant_forbidden", "message": "Tenant membership is required"},
+            )
+        with self._lock:
+            self._active[self._token_key(token)] = tenant_id
         return self.authenticate(token)
 
 
@@ -178,3 +340,4 @@ def require_roles(*allowed: str):
 
 require_owner = require_roles("tenant_admin", "platform_operator")
 require_reviewer = require_roles("reviewer", "tenant_admin", "platform_operator")
+require_operator = require_roles("platform_operator")

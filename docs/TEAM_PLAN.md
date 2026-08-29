@@ -30,6 +30,16 @@ Phase 1 responsibilities:
 
 Acceptance: a future snapshot produces schema-valid, versioned forecasts for windows after `data_as_of`; suppression returns null estimates; cross-tenant access and unauthorized review fail with typed errors.
 
+P0 production-model work completed in this branch:
+
+- a bounded, PDDL-licensed DataSF reported-incident benchmark and reproducible real evaluation are documented in `docs/EVALUATION.md`;
+- operational coverage comes from measured source telemetry and fails closed when unavailable;
+- the selected estimator is evaluated on untouched test data, then separately refit on all chronological history for export;
+- occurrence probability uses a versioned validation-only isotonic calibration artifact;
+- top-k capture is computed independently inside each forecast time window;
+- uncertainty exports separate model-refit, temporal-residual, and data-coverage components;
+- only checksum-verified, explicitly approved tenant model artifacts can load into operational inference.
+
 ## Person 3 — Frontend product
 
 Owns `src/web/`, frontend fixtures, accessibility tests, and browser end-to-end tests.

@@ -75,7 +75,12 @@ def resolve_camera_connection(source: dict[str, Any], resolver: SecretResolver) 
     if transport not in {"hls", "rtsp", "onvif"}:
         raise VideoPipelineError("camera_transport_invalid", "Live connector requires HLS, RTSP, or ONVIF")
     endpoint = resolver.resolve_json(connection["endpoint_ref"])
-    credential = resolver.resolve_json(connection["credential_ref"])
+    credential_ref = connection.get("credential_ref")
+    if credential_ref is None and transport in {"rtsp", "onvif"}:
+        raise VideoPipelineError(
+            "camera_credentials_invalid", "RTSP and ONVIF camera credentials are required"
+        )
+    credential = resolver.resolve_json(credential_ref) if credential_ref else {}
     input_url = endpoint.get("stream_url") or endpoint.get("url")
     if not isinstance(input_url, str) or not input_url.startswith(("rtsp://", "rtsps://", "http://", "https://")):
         raise VideoPipelineError("camera_endpoint_invalid", "Camera endpoint secret is invalid")

@@ -13,6 +13,7 @@ It does not identify people, decide guilt, predict individual behaviour, expose 
 5. [Research evidence matrix](docs/PAPER_MATRIX.md) — dataset/model evidence status
 6. [Reka AI and Vision](docs/REKA_AI.md) — managed video intelligence and grounded forecast explanations
 7. [Reka platform research](docs/REKA_PLATFORM_RESEARCH.md) — current APIs, limits, AWS architecture, and product decisions
+8. [Historical benchmark and real results](docs/EVALUATION.md) — lawful dataset decision, reproducible chronological evaluation, and limitations
 
 Repository instructions are in [AGENTS.md](AGENTS.md).
 

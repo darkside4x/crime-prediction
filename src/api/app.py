@@ -8,7 +8,6 @@ import json
 import math
 from pathlib import Path
 from typing import Any, Callable, Literal
-import shutil
 import threading
 import time
 import uuid
@@ -16,10 +15,12 @@ import uuid
 from fastapi import Depends, FastAPI, File, Form, Header, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from src.models.contracts import validate_contract
 from src.models.data import parse_utc
 from src.models.operational import ForecastService
+from src.models.registry import FilesystemApprovedModelRegistry
 from src.data.store import IngestionStore
 from src.data.video import (
     FakeRekaVisionProvider,
@@ -29,17 +30,22 @@ from src.data.video import (
     VideoStore,
 )
 from src.data.video.errors import VideoPipelineError
+from src.data.video.broker import JobBroker, JobMessage
 
 from . import demo_data, reka
 from .errors import install_error_handlers, problem
+from .forecasting import ForecastOrchestrator, InMemoryForecastRepository
 from .settings import Settings
+from .security import ApiSecurityMiddleware, InMemoryRateLimiter, RateLimiter
 from .state import AuditLog, IdempotencyStore
 from .tenancy import (
     AuthenticationProvider,
     DevelopmentAuthenticationProvider,
+    OidcAuthenticationProvider,
     TenantContext,
     context_for,
     require_owner,
+    require_operator,
     require_reviewer,
     require_tenant,
 )
@@ -94,6 +100,19 @@ class NearLiveCaptureRequest(BaseModel):
 
     source_key: Literal["louisiana-dot-i20"] = "louisiana-dot-i20"
     duration_seconds: int | None = Field(default=None, ge=5, le=60)
+
+
+class ModelPromotionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    model_version: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._-]+$")
+    reason: str = Field(min_length=1, max_length=500)
+
+
+class ModelRollbackRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str = Field(min_length=1, max_length=500)
 
 
 class _DemoLocationResolver:
@@ -230,10 +249,46 @@ def create_app(
     coverage_provider: Callable[[str, str], float] | None = None,
     video_service: VideoPipelineService | None = None,
     hls_capture: FfmpegHlsCapture | None = None,
+    rate_limiter: RateLimiter | None = None,
+    forecast_orchestrator: ForecastOrchestrator | None = None,
+    model_registry: FilesystemApprovedModelRegistry | None = None,
+    audit_log: Any | None = None,
+    idempotency_store: Any | None = None,
+    video_broker: JobBroker | None = None,
 ) -> FastAPI:
     active_settings = settings or Settings.from_environment()
-    if auth_provider is None and active_settings.app_environment == "production":
-        raise ValueError("A production AuthenticationProvider must be injected")
+    production = active_settings.app_environment == "production"
+    if auth_provider is None and production:
+        if not all(
+            (
+                active_settings.oidc_issuer,
+                active_settings.oidc_audience,
+                active_settings.oidc_jwks_url,
+            )
+        ):
+            raise ValueError(
+                "A production AuthenticationProvider or complete OIDC settings must be supplied"
+            )
+        auth_provider = OidcAuthenticationProvider(
+            issuer=active_settings.oidc_issuer,
+            audience=active_settings.oidc_audience,
+            jwks_url=active_settings.oidc_jwks_url,
+            algorithms=active_settings.oidc_algorithms,
+            memberships_claim=active_settings.oidc_memberships_claim,
+        )
+    if production and getattr(auth_provider, "development_only", False):
+        raise ValueError("A development AuthenticationProvider cannot run in production")
+    if production and any(not origin.startswith("https://") for origin in active_settings.cors_origins):
+        raise ValueError("Production CORS origins must use HTTPS")
+    if rate_limiter is None:
+        if production:
+            raise ValueError("A durable production RateLimiter must be injected")
+        rate_limiter = InMemoryRateLimiter(
+            active_settings.api_rate_limit_requests,
+            active_settings.api_rate_limit_window_seconds,
+        )
+    if production and getattr(rate_limiter, "development_only", False):
+        raise ValueError("A development RateLimiter cannot run in production")
     if provider is None:
         provider = (
             reka.RekaAPIProvider(
@@ -254,6 +309,13 @@ def create_app(
     )
     install_error_handlers(app)
     app.add_middleware(
+        ApiSecurityMiddleware,
+        max_request_bytes=active_settings.max_request_bytes,
+        rate_limiter=rate_limiter,
+        production=production,
+    )
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(active_settings.trusted_hosts))
+    app.add_middleware(
         CORSMiddleware,
         allow_origins=list(active_settings.cors_origins),
         allow_credentials=False,
@@ -263,18 +325,45 @@ def create_app(
     )
     app.state.settings = active_settings
     app.state.auth_provider = auth_provider or DevelopmentAuthenticationProvider()
-    app.state.forecast_service = forecast_service or ForecastService()
-    app.state.audit = AuditLog()
-    app.state.idempotency = IdempotencyStore()
-    app.state.forecasts = {}
-    first_source = _load_fixture("camera-source")
-    app.state.sources = {first_source["tenant_id"]: [first_source]}
-    candidate = _load_fixture("candidate-detection")
-    app.state.candidates = {candidate["tenant_id"]: {candidate["detection_id"]: candidate}}
+    if production and model_registry is None:
+        raise ValueError("An approved production model registry must be injected")
+    app.state.model_registry = model_registry
+    app.state.forecast_service = forecast_service or ForecastService(models=model_registry)
+    if forecast_orchestrator is None:
+        if production:
+            raise ValueError("A production ForecastOrchestrator must be injected")
+        forecast_orchestrator = ForecastOrchestrator(
+            app.state.forecast_service, InMemoryForecastRepository()
+        )
+    if production and getattr(forecast_orchestrator.repository, "development_only", False):
+        raise ValueError("A development forecast repository cannot run in production")
+    app.state.forecast_orchestrator = forecast_orchestrator
+    audit_log = audit_log or AuditLog()
+    idempotency_store = idempotency_store or IdempotencyStore()
+    if production and getattr(audit_log, "development_only", False):
+        raise ValueError("A durable production audit log must be injected")
+    if production and getattr(idempotency_store, "development_only", False):
+        raise ValueError("A durable production idempotency store must be injected")
+    app.state.audit = audit_log
+    app.state.idempotency = idempotency_store
+    first_source = None if production else _load_fixture("camera-source")
+    app.state.sources = (
+        {} if first_source is None else {first_source["tenant_id"]: [first_source]}
+    )
+    candidate = None if production else _load_fixture("candidate-detection")
+    app.state.candidates = (
+        {} if candidate is None else {candidate["tenant_id"]: {candidate["detection_id"]: candidate}}
+    )
     app.state.reviews = {}
     runtime_dir = active_settings.runtime_dir.resolve()
     media_root = runtime_dir / "restricted-media"
     media_root.mkdir(parents=True, exist_ok=True)
+    if production and video_service is None:
+        raise ValueError("The production Postgres/S3 video service must be injected")
+    if production and video_broker is None:
+        raise ValueError("The production durable video broker must be injected")
+    if production and coverage_provider is None:
+        raise ValueError("A measured production coverage provider must be injected")
     if video_service is None:
         ingestion_store = IngestionStore(runtime_dir / "video-pipeline.sqlite3")
         vision_provider = (
@@ -298,16 +387,18 @@ def create_app(
             prompt_version=active_settings.reka_prompt_version,
         )
     app.state.video_service = video_service
+    app.state.video_broker = video_broker
     app.state.hls_capture = hls_capture or FfmpegHlsCapture()
     app.state.video_runs = {}
     app.state.vision_mode = "reka_vision" if active_settings.reka_configured else "deterministic_fake"
-    try:
-        app.state.video_service.register_recorded_source(
-            first_source, authenticated_tenant_id=first_source["tenant_id"]
-        )
-    except VideoPipelineError:
-        # A durable development store may already contain the fixture source.
-        pass
+    if first_source is not None:
+        try:
+            app.state.video_service.register_recorded_source(
+                first_source, authenticated_tenant_id=first_source["tenant_id"]
+            )
+        except VideoPipelineError:
+            # A durable development store may already contain the fixture source.
+            pass
 
     @app.get("/health")
     async def health() -> dict[str, str]:
@@ -339,6 +430,10 @@ def create_app(
         idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
         ctx: TenantContext = Depends(require_tenant),
     ) -> dict[str, Any]:
+        principal = request.state.principal
+        if tenant_id not in {item.tenant_id for item in principal.memberships}:
+            raise problem(403, "tenant_forbidden", "Tenant membership is required")
+
         def action() -> dict[str, Any]:
             principal = app.state.auth_provider.switch_active_tenant(
                 request.state.bearer_token, tenant_id
@@ -355,8 +450,8 @@ def create_app(
             return {"active_tenant_id": switched.tenant_id, "role": switched.role}
 
         return app.state.idempotency.execute(
-            tenant_id=ctx.principal_id,
-            operation="switch_active_tenant",
+            tenant_id=tenant_id,
+            operation=f"switch_active_tenant:{ctx.principal_id}",
             key=idempotency_key,
             payload={"tenant_id": tenant_id},
             action=action,
@@ -373,7 +468,12 @@ def create_app(
 
     @app.get("/v1/sources")
     def sources(ctx: TenantContext = Depends(require_tenant)) -> dict[str, Any]:
-        return {"items": [_public_source(item) for item in app.state.sources.get(ctx.tenant_id, [])]}
+        source_ids = app.state.video_service.store.list_source_ids(ctx.tenant_id)
+        records = [
+            app.state.video_service.store.get_source(ctx.tenant_id, source_id)
+            for source_id in source_ids
+        ]
+        return {"items": [_public_source(item) for item in records]}
 
     def create_source_record(
         body: RecordedSourceCreate,
@@ -473,6 +573,47 @@ def create_app(
                 updated_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             )
 
+    def enqueue_asset_run(tenant_id: str, asset_id: str, label: str) -> dict[str, Any]:
+        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        if app.state.video_broker is not None:
+            job = app.state.video_service.store.enqueue(tenant_id, asset_id, "upload")
+            app.state.video_broker.publish(
+                JobMessage(tenant_id, job["job_id"], "upload")
+            )
+            return {
+                "run_id": job["job_id"],
+                "tenant_id": tenant_id,
+                "state": job["state"],
+                "stage": "accepted",
+                "label": label,
+                "asset_id": asset_id,
+                "candidate_count": 0,
+                "analysis_mode": app.state.vision_mode,
+                "created_at": job.get("created_at", now),
+                "updated_at": job.get("updated_at", now),
+            }
+        run_id = str(uuid.uuid4())
+        run = {
+            "run_id": run_id,
+            "tenant_id": tenant_id,
+            "state": "queued",
+            "stage": "accepted",
+            "label": label,
+            "asset_id": asset_id,
+            "candidate_count": 0,
+            "analysis_mode": app.state.vision_mode,
+            "created_at": now,
+            "updated_at": now,
+        }
+        app.state.video_runs[run_id] = run
+        threading.Thread(
+            target=process_asset_run,
+            args=(run_id, tenant_id, asset_id),
+            name=f"video-worker-{run_id[:8]}",
+            daemon=True,
+        ).start()
+        return run
+
     @app.post("/v1/video-assets/uploads", status_code=202)
     async def create_video_upload(
         source_id: uuid.UUID = Form(...),
@@ -485,12 +626,22 @@ def create_app(
     ) -> dict[str, Any]:
         destination = app.state.video_service.media_root / ctx.tenant_id / f"{uuid.uuid4()}.mp4"
         destination.parent.mkdir(parents=True, exist_ok=True)
+        checksum = hashlib.sha256()
+        received_bytes = 0
         try:
             with destination.open("wb") as handle:
-                shutil.copyfileobj(file.file, handle)
-            checksum = hashlib.sha256(destination.read_bytes()).hexdigest()
+                while chunk := await file.read(1024 * 1024):
+                    received_bytes += len(chunk)
+                    if received_bytes > app.state.video_service.max_upload_bytes:
+                        raise problem(413, "video_size_invalid", "Video exceeds the configured upload limit")
+                    checksum.update(chunk)
+                    handle.write(chunk)
+        except Exception:
+            destination.unlink(missing_ok=True)
+            raise
         finally:
             await file.close()
+        checksum_hex = checksum.hexdigest()
 
         def accept() -> dict[str, Any]:
             try:
@@ -503,32 +654,14 @@ def create_app(
                     captured_end=captured_end,
                     duration_seconds=None,
                     consent_confirmed=consent_confirmed,
-                    expected_sha256=checksum,
+                    expected_sha256=checksum_hex,
                 )
             except Exception:
                 destination.unlink(missing_ok=True)
                 raise
-            run_id = str(uuid.uuid4())
-            now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-            run = {
-                "run_id": run_id,
-                "tenant_id": ctx.tenant_id,
-                "state": "queued",
-                "stage": "accepted",
-                "label": "recorded video upload",
-                "asset_id": asset["asset_id"],
-                "candidate_count": 0,
-                "analysis_mode": app.state.vision_mode,
-                "created_at": now,
-                "updated_at": now,
-            }
-            app.state.video_runs[run_id] = run
-            threading.Thread(
-                target=process_asset_run,
-                args=(run_id, ctx.tenant_id, asset["asset_id"]),
-                name=f"video-worker-{run_id[:8]}",
-                daemon=True,
-            ).start()
+            run = enqueue_asset_run(
+                ctx.tenant_id, asset["asset_id"], "recorded video upload"
+            )
             app.state.audit.record(
                 tenant_id=ctx.tenant_id,
                 principal_id=ctx.principal_id,
@@ -548,7 +681,7 @@ def create_app(
                 "captured_start": captured_start,
                 "captured_end": captured_end,
                 "consent_confirmed": consent_confirmed,
-                "sha256": checksum,
+                "sha256": checksum_hex,
             },
             action=accept,
         )
@@ -620,6 +753,12 @@ def create_app(
         idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
         ctx: TenantContext = Depends(require_owner),
     ) -> dict[str, Any]:
+        if production:
+            raise problem(
+                404,
+                "demo_capture_disabled",
+                "The public demonstration camera is disabled in production",
+            )
         duration = body.duration_seconds or active_settings.near_live_capture_seconds
 
         def start() -> dict[str, Any]:
@@ -670,9 +809,26 @@ def create_app(
         run_id: uuid.UUID, ctx: TenantContext = Depends(require_tenant)
     ) -> dict[str, Any]:
         run = app.state.video_runs.get(str(run_id))
-        if run is None or run["tenant_id"] != ctx.tenant_id:
-            raise problem(404, "ingestion_run_not_found", "Ingestion run was not found")
-        return _public_run(run)
+        if run is not None and run["tenant_id"] == ctx.tenant_id:
+            return _public_run(run)
+        if app.state.video_broker is not None:
+            try:
+                job = app.state.video_service.store.get_job(ctx.tenant_id, str(run_id))
+            except VideoPipelineError:
+                raise problem(404, "ingestion_run_not_found", "Ingestion run was not found")
+            return {
+                "run_id": job["job_id"],
+                "state": job["state"],
+                "stage": job["operation"],
+                "label": "recorded video upload",
+                "asset_id": job["asset_id"],
+                "candidate_count": 0,
+                "analysis_mode": app.state.vision_mode,
+                "error_code": job.get("last_error_code"),
+                "created_at": job["created_at"],
+                "updated_at": job["updated_at"],
+            }
+        raise problem(404, "ingestion_run_not_found", "Ingestion run was not found")
 
     @app.get("/v1/candidate-detections")
     def candidates(
@@ -680,7 +836,9 @@ def create_app(
         ctx: TenantContext = Depends(require_reviewer),
     ) -> dict[str, Any]:
         durable = app.state.video_service.store.list_candidates(ctx.tenant_id)
-        fixture_records = list(app.state.candidates.get(ctx.tenant_id, {}).values())
+        fixture_records = (
+            [] if production else list(app.state.candidates.get(ctx.tenant_id, {}).values())
+        )
         seen = {record["detection_id"] for record in durable}
         records = (durable + [record for record in fixture_records if record["detection_id"] not in seen])[:limit]
         return {
@@ -716,7 +874,11 @@ def create_app(
             )
         except VideoPipelineError:
             pass
-        candidate_record = durable_candidate or app.state.candidates.get(ctx.tenant_id, {}).get(detection_id)
+        candidate_record = durable_candidate or (
+            None
+            if production
+            else app.state.candidates.get(ctx.tenant_id, {}).get(detection_id)
+        )
         if candidate_record is None:
             raise problem(404, "candidate_not_found", "Candidate detection was not found")
         if body.decision == "confirmed" and not body.confirmed_category:
@@ -784,6 +946,8 @@ def create_app(
 
     @app.get("/v1/coverage")
     def coverage(ctx: TenantContext = Depends(require_tenant)) -> dict[str, Any]:
+        if production:
+            return {"items": app.state.video_service.store.list_coverage(ctx.tenant_id, limit=100)}
         fixture = _load_fixture("coverage-snapshot")
         fixture["tenant_id"] = ctx.tenant_id
         return {"items": [fixture]}
@@ -806,61 +970,144 @@ def create_app(
         if start > now + timedelta(days=7):
             raise problem(422, "window_too_distant", "Forecast horizon is limited to seven days")
         bounds = _parse_bbox(bbox)
-        cells = demo_data.tenant_cells(ctx.tenant_id)
-        if bounds is not None:
-            import h3
-
-            west, south, east, north = bounds
-            cells = [
-                cell
-                for cell in cells
-                if (lambda point: south <= point[0] <= north and west <= point[1] <= east)(
-                    h3.cell_to_latlng(cell)
-                )
-            ]
-        total = len(cells)
-        offset = (page - 1) * page_size
-        selected = cells[offset : offset + page_size]
-        measured_coverage = (
-            coverage_provider(
-                ctx.tenant_id,
-                start.isoformat().replace("+00:00", "Z"),
-            )
-            if coverage_provider is not None
-            else 0.0
+        start_text = start.isoformat().replace("+00:00", "Z")
+        items = app.state.forecast_orchestrator.repository.list_window(
+            ctx.tenant_id, start_text, category
         )
-        items = [
-            app.state.forecast_service.forecast(
+        if not items and not production:
+            measured_coverage = (
+                coverage_provider(ctx.tenant_id, start_text)
+                if coverage_provider is not None
+                else 0.0
+            )
+            rows = [
                 _future_row(
                     ctx.tenant_id,
                     cell,
                     start,
                     category,
                     coverage_ratio=measured_coverage,
-                ),
-                tenant_id=ctx.tenant_id,
-                generated_at=now,
+                )
+                for cell in demo_data.tenant_cells(ctx.tenant_id)
+            ]
+            items = app.state.forecast_orchestrator.publish_future_rows(
+                ctx.tenant_id, rows, generated_at=now
             )
-            for cell in selected
-        ]
-        for item in items:
-            app.state.forecasts[(ctx.tenant_id, item["forecast_id"])] = item
-        return {"items": items, "page": page, "page_size": page_size, "total": total}
+        if not items:
+            raise problem(
+                404,
+                "forecast_window_not_generated",
+                "The scheduled forecast window has not been published",
+            )
+        if bounds is not None:
+            import h3
+
+            west, south, east, north = bounds
+            items = [
+                item
+                for item in items
+                if (lambda point: south <= point[0] <= north and west <= point[1] <= east)(
+                    h3.cell_to_latlng(item["cell_id"])
+                )
+            ]
+        total = len(items)
+        offset = (page - 1) * page_size
+        selected = items[offset : offset + page_size]
+        return {"items": selected, "page": page, "page_size": page_size, "total": total}
 
     @app.get("/v1/forecasts/{forecast_id}")
     def forecast_detail(
         forecast_id: str, ctx: TenantContext = Depends(require_tenant)
     ) -> dict[str, Any]:
-        item = app.state.forecasts.get((ctx.tenant_id, forecast_id))
+        item = app.state.forecast_orchestrator.repository.get(ctx.tenant_id, forecast_id)
         if item is None:
             raise problem(404, "forecast_not_found", "Forecast was not found")
         return item
 
     @app.get("/v1/model-card")
     def model_card(ctx: TenantContext = Depends(require_tenant)) -> dict[str, Any]:
+        if app.state.model_registry is not None:
+            approved_card = app.state.model_registry.model_card_for(ctx.tenant_id)
+            if approved_card is not None:
+                return approved_card
+        if production:
+            raise problem(404, "approved_model_not_found", "No approved model is active")
         card = _load_fixture("model-card")
         card["tenant_id"] = ctx.tenant_id
         return card
+
+    @app.get("/v1/model-registry")
+    def model_registry_status(
+        ctx: TenantContext = Depends(require_operator),
+    ) -> dict[str, Any]:
+        if app.state.model_registry is None:
+            return {"active_model_version": None, "history": []}
+        return app.state.model_registry.status(ctx.tenant_id)
+
+    @app.post("/v1/model-registry/promotions", status_code=201)
+    def promote_model(
+        body: ModelPromotionRequest,
+        idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+        ctx: TenantContext = Depends(require_operator),
+    ) -> dict[str, Any]:
+        if app.state.model_registry is None:
+            raise problem(503, "model_registry_unavailable", "Model registry is unavailable", retryable=True)
+
+        def action() -> dict[str, Any]:
+            result = app.state.model_registry.promote(
+                ctx.tenant_id,
+                body.model_version,
+                approved_by=ctx.principal_id,
+                reason=body.reason,
+            )
+            app.state.audit.record(
+                tenant_id=ctx.tenant_id,
+                principal_id=ctx.principal_id,
+                request_id=ctx.request_id,
+                action="model_promoted",
+                resource_type="model",
+                resource_id=body.model_version,
+            )
+            return result
+
+        return app.state.idempotency.execute(
+            tenant_id=ctx.tenant_id,
+            operation=f"promote_model:{body.model_version}",
+            key=idempotency_key,
+            payload=body.model_dump(),
+            action=action,
+        )
+
+    @app.post("/v1/model-registry/rollback", status_code=201)
+    def rollback_model(
+        body: ModelRollbackRequest,
+        idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+        ctx: TenantContext = Depends(require_operator),
+    ) -> dict[str, Any]:
+        if app.state.model_registry is None:
+            raise problem(503, "model_registry_unavailable", "Model registry is unavailable", retryable=True)
+
+        def action() -> dict[str, Any]:
+            result = app.state.model_registry.rollback(
+                ctx.tenant_id, approved_by=ctx.principal_id, reason=body.reason
+            )
+            app.state.audit.record(
+                tenant_id=ctx.tenant_id,
+                principal_id=ctx.principal_id,
+                request_id=ctx.request_id,
+                action="model_rolled_back",
+                resource_type="model",
+                resource_id=result["model_version"],
+            )
+            return result
+
+        return app.state.idempotency.execute(
+            tenant_id=ctx.tenant_id,
+            operation="rollback_model",
+            key=idempotency_key,
+            payload=body.model_dump(),
+            action=action,
+        )
 
     @app.post("/v1/ai/copilot/messages")
     def copilot(
@@ -875,6 +1122,8 @@ def create_app(
         category: str = Query("all"),
         ctx: TenantContext = Depends(require_tenant),
     ) -> dict[str, Any]:
+        if production:
+            raise problem(404, "endpoint_not_found", "Endpoint is not available")
         valid_windows = {item["window_start"] for item in demo_data.windows()}
         if window_start not in valid_windows:
             raise problem(422, "invalid_window", "Window is not available")
@@ -889,6 +1138,8 @@ def create_app(
         category: str = Query("all"),
         ctx: TenantContext = Depends(require_tenant),
     ) -> dict[str, Any]:
+        if production:
+            raise problem(404, "endpoint_not_found", "Endpoint is not available")
         if cell_id not in set(demo_data.tenant_cells(ctx.tenant_id)):
             raise problem(404, "cell_not_found", "Cell was not found")
         return {

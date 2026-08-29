@@ -122,3 +122,11 @@ The Phase 2 video demo is:
 Automated tests use fake HLS capture and fake Reka Vision/Chat providers and
 make no network calls. The real demo uses the same services with the allowlisted
 HLS adapter and server-only Reka key.
+
+The feed provenance is LADOTD's official `GET /api/v2/get/cameras` catalogue:
+source `101`, view `2206`, whose documented `VideoUrl` is the server-side HLS
+playlist used by the adapter. The catalogue endpoint itself requires a 511LA
+developer key and is not called at runtime; the bounded segment is fetched
+directly from the official public HLS `VideoUrl`. Do not describe this as an
+unkeyed catalogue API, and obtain permission before uploading public footage to
+Reka or retaining it beyond the live demonstration.

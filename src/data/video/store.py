@@ -534,6 +534,15 @@ class VideoStore:
                 (payload["tenant_id"], payload["source_id"], payload["interval_start"], _json(payload)),
             )
 
+    def list_coverage(self, tenant_id: str, *, limit: int = 100) -> list[dict[str, Any]]:
+        with self.ingestion_store.connect() as connection:
+            rows = connection.execute(
+                """SELECT payload_json FROM coverage_snapshots WHERE tenant_id=?
+                   ORDER BY interval_start DESC LIMIT ?""",
+                (tenant_id, limit),
+            ).fetchall()
+        return [json.loads(row["payload_json"]) for row in rows]
+
     def coverage_ratio(self, tenant_id: str, source_ids: tuple[str, ...], interval_start: str) -> float:
         if not source_ids:
             raise ValueError("At least one source is required")

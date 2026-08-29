@@ -56,6 +56,16 @@
       "kind": "reka_fact_bundle",
       "path": "artifacts/tenant=00000000-0000-4000-8000-000000000001/models/demo-one-historical-rate-v1/reka-facts.json",
       "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    },
+    {
+      "kind": "calibration",
+      "path": "artifacts/tenant=00000000-0000-4000-8000-000000000001/models/demo-one-historical-rate-v1/calibration.json",
+      "sha256": "123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0"
+    },
+    {
+      "kind": "uncertainty",
+      "path": "artifacts/tenant=00000000-0000-4000-8000-000000000001/models/demo-one-historical-rate-v1/uncertainty.json",
+      "sha256": "23456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef01"
     }
   ],
   "generation_command": "uv run python -m src.models.cli evaluate --config configs/model/default.json"

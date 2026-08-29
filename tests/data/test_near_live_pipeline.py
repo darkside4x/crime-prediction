@@ -11,7 +11,7 @@ from src.api.settings import Settings
 from src.api.tenancy import DEMO_TENANT_ONE
 from src.data.store import IngestionStore
 from src.data.video import DictLocationResolver, FakeRekaVisionProvider, VideoPipelineService, VideoStore
-from src.data.video.live import CapturedSegment, HlsSourceDefinition
+from src.data.video.live import CapturedSegment, DEFAULT_HLS_SOURCES, HlsSourceDefinition
 
 
 class Inspector:
@@ -37,6 +37,17 @@ class FakeCapture:
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes(b"\x00\x00\x00\x18ftypmp42" + b"bounded-live-segment" * 8)
         return CapturedSegment(destination, "2026-08-30T00:00:00Z")
+
+
+def test_default_live_feed_uses_the_official_catalog_video_url() -> None:
+    source = DEFAULT_HLS_SOURCES["louisiana-dot-i20"]
+    assert source.url == (
+        "https://ITSStreamingBR2.dotd.la.gov/public/"
+        "shr-cam-002.streams/playlist.m3u8"
+    )
+    assert source.catalog_api_url == "https://511la.org/api/v2/get/cameras"
+    assert source.catalog_source_id == "101"
+    assert source.catalog_view_id == "2206"
 
 
 def test_allowlisted_hls_capture_reaches_validated_human_review(tmp_path: Path) -> None:

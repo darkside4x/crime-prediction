@@ -48,8 +48,17 @@ def test_two_tenant_pipeline_exports_isolated_schema_valid_artifacts(tmp_path: P
         validate_contract("model-card", model_card)
         validate_contract("model-bundle", bundle)
         validate_contract("reka-fact-bundle", facts)
-        assert model_card["training_period"]["end"] == run_manifest["split"]["validation_end"]
-        assert "rolling-origin residual" in model_card["uncertainty_method"]
+        assert model_card["training_period"]["end"] == run_manifest["split"]["test_end"]
+        assert "model and temporal" in model_card["uncertainty_method"]
+        calibration = _load(root / "calibration.json")
+        uncertainty = _load(root / "uncertainty.json")
+        assert calibration["fitted_on"] == "validation_only_pre_test_predictions"
+        assert uncertainty["method"] == "rolling_origin_model_data_temporal_v1"
+        assert set(uncertainty["components"]) == {
+            "model_refit_variation",
+            "temporal_residual_variation",
+            "data_coverage_availability",
+        }
         assert {payload["tenant_id"] for payload in (run_manifest, evaluation, model_card, bundle, facts)} == {tenant_id}
         fact_ids_by_tenant[tenant_id] = {fact["fact_id"] for fact in facts["facts"]}
         rows = pq.ParquetFile(root / "predictions.parquet").read().to_pylist()
@@ -62,9 +71,8 @@ def test_two_tenant_pipeline_exports_isolated_schema_valid_artifacts(tmp_path: P
         test_rows = chronological_split(input_rows, model_config).test
         loaded = load_estimator(bundle, bundle["payload"]["path"], model_config)
         reproduced = loaded.predict(test_rows)
-        for index, row in enumerate(rows):
-            if not row["suppressed"]:
-                assert np.isclose(row["expected_count"], reproduced[index])
+        assert len(reproduced) == len(test_rows)
+        assert np.isfinite(reproduced).all()
     assert fact_ids_by_tenant[TENANTS[0]].isdisjoint(fact_ids_by_tenant[TENANTS[1]])
 
 

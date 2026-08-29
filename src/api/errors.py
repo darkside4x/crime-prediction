@@ -60,7 +60,8 @@ def _payload(request: Request, detail: Any, status_code: int) -> dict[str, Any]:
 def install_error_handlers(app: FastAPI) -> None:
     @app.middleware("http")
     async def request_identity(request: Request, call_next):
-        request.state.request_id = str(uuid.uuid4())
+        if not getattr(request.state, "request_id", None):
+            request.state.request_id = str(uuid.uuid4())
         response = await call_next(request)
         response.headers["X-Request-ID"] = request.state.request_id
         return response

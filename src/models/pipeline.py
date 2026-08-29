@@ -12,6 +12,7 @@ from typing import Any, Callable
 import numpy as np
 
 from .config import ModelConfig
+from .calibration import IsotonicProbabilityCalibrator
 from .contracts import REPOSITORY_ROOT, validate_contract
 from .data import load_rows, target_vector, validate_rows
 from .errors import DataContractError, OptionalDependencyError
@@ -25,8 +26,8 @@ from .estimators import (
 from .facts import build_fact_bundle
 from .metrics import (
     bootstrap_interval,
-    calibration_table,
     count_metrics,
+    probability_calibration_table,
     sliced_metrics,
 )
 from .provenance import (
@@ -45,7 +46,7 @@ from .split import ChronologicalSplit, chronological_split, rolling_origin_folds
 METRIC_DEFINITIONS = {
     "mae": "Mean absolute aggregate count error; lower is better.",
     "poisson_deviance": "Mean Poisson deviance for aggregate counts; lower is better.",
-    "top_k_capture": "Share of observed incidents captured by the highest-ranked configured fraction of aggregate rows; higher is better.",
+    "top_k_capture": "Incident-weighted capture within the highest-ranked configured fraction of cells in each forecast time-window/category group; higher is better.",
     "brier_score": "Mean squared error of the probability of at least one aggregate event; lower is better.",
 }
 
@@ -148,7 +149,7 @@ def _train_and_compare(
     for name, factory in factories:
         model = factory().fit(split.train)
         predicted = model.predict(split.validation)
-        values = count_metrics(actual, predicted, config.top_k_fraction)
+        values = count_metrics(actual, predicted, config.top_k_fraction, split.validation)
         models[name] = model
         predictions[name] = predicted
         validation_metrics[name] = values
@@ -160,7 +161,10 @@ def _train_and_compare(
         for name, factory in factories:
             fold_model = factory().fit(fold_train)
             values = count_metrics(
-                fold_actual, fold_model.predict(fold_validation), config.top_k_fraction
+                fold_actual,
+                fold_model.predict(fold_validation),
+                config.top_k_fraction,
+                fold_validation,
             )
             for metric_name, value in values.items():
                 rolling_values[name][metric_name].append(value)
@@ -260,15 +264,27 @@ def _evaluation_report(
     baseline_model: CountEstimator,
     split: ChronologicalSplit,
     config: ModelConfig,
+    calibrator: IsotonicProbabilityCalibrator,
+    validation_expected_for_calibration: np.ndarray,
 ) -> tuple[dict[str, Any], np.ndarray, np.ndarray]:
     actual = target_vector(split.test, config.target)
     selected_prediction = selected_model.predict(split.test)
+    selected_probability = calibrator.predict(
+        1.0 - np.exp(-np.maximum(selected_prediction, 0.0))
+    )
     baseline_prediction = baseline_model.predict(split.test)
     test_models = {selected_name: selected_prediction}
     if selected_name != "historical_rate":
         test_models["historical_rate"] = baseline_prediction
     for offset, (name, predicted) in enumerate(test_models.items()):
-        values = count_metrics(actual, predicted, config.top_k_fraction)
+        probability = selected_probability if name == selected_name else None
+        values = count_metrics(
+            actual,
+            predicted,
+            config.top_k_fraction,
+            split.test,
+            probability,
+        )
         confidence = {
             metric_name: bootstrap_interval(
                 actual,
@@ -277,19 +293,21 @@ def _evaluation_report(
                 config.top_k_fraction,
                 config.bootstrap_samples,
                 config.random_seed + offset,
+                split.test,
+                probability,
             )
             for metric_name in values
         }
         report_metrics.extend(_metric_entries(name, "test", values, confidence))
 
-    validation_expected = selected_model.predict(split.validation)
     calibration_entries = []
     for split_name, rows, expected in (
-        ("validation", split.validation, validation_expected),
+        ("validation", split.validation, validation_expected_for_calibration),
         ("test", split.test, selected_prediction),
     ):
-        for entry in calibration_table(
-            target_vector(rows, config.target), expected, config.calibration_bins
+        calibrated = calibrator.predict(1.0 - np.exp(-np.maximum(expected, 0.0)))
+        for entry in probability_calibration_table(
+            target_vector(rows, config.target), calibrated, config.calibration_bins
         ):
             calibration_entries.append(
                 {
@@ -364,11 +382,11 @@ def _evaluation_report(
             "Drivers are model associations, not causal explanations.",
             "Performance may shift across time, categories, coverage levels, and geographies.",
             "This aggregate forecast must not be used for individual assessment or automated enforcement decisions.",
-            "Occurrence probabilities currently use the Poisson link without a promoted tenant calibration artifact.",
+            "Occurrence probabilities use a validation-only isotonic calibration artifact; calibration may drift after deployment.",
         ],
     }
     validate_contract("evaluation-report", report)
-    return report, selected_prediction, 1.0 - np.exp(-np.maximum(selected_prediction, 0.0))
+    return report, selected_prediction, selected_probability
 
 
 def _model_card(
@@ -398,7 +416,7 @@ def _model_card(
         "prediction_unit": f"Expected aggregate incident count for one tenant, H3 cell, category, and {config.window_hours}-hour UTC window.",
         "training_period": {
             "start": format_utc(split.train_start),
-            "end": format_utc(split.validation_end),
+            "end": format_utc(split.test_end),
         },
         "evaluation_period": {"start": format_utc(split.test_start), "end": format_utc(split.test_end)},
         "primary_metric": {
@@ -423,7 +441,7 @@ def _model_card(
             "Treating model drivers as causes or forecasts as observed ground truth.",
         ],
         "limitations": list(report["limitations"]),
-        "uncertainty_method": "A 90% rolling-origin residual interval is estimated from chronological pre-test folds and applied to held-out expected counts.",
+        "uncertainty_method": "A versioned 90% interval combines rolling-origin refit residuals (model and temporal variation) with coverage-based widening for data availability; calibration is fitted only on pre-test validation predictions.",
         "suppression_policy": f"Legacy evaluation rows with fewer than {config.min_training_events_to_publish} pre-test events are marked suppressed and zeroed for schema compatibility; operational forecast responses expose null estimates.",
         "feature_interpretation": "Feature drivers indicate the direction of model association for an aggregate row and must never be described as causal.",
         "human_review_required": True,
@@ -456,11 +474,17 @@ def _export_tenant(
     tenant_id = manifest["tenant_id"]
     data_version = manifest["dataset_version"]
     split = chronological_split(rows, config)
-    _, _, validation_metrics, report_metrics = _train_and_compare(split, config)
+    _, validation_predictions, validation_metrics, report_metrics = _train_and_compare(split, config)
     selected_name, observed_gain, reason = _select_model(validation_metrics, config)
+    validation_expected = validation_predictions[selected_name]
+    calibrator = IsotonicProbabilityCalibrator().fit(
+        target_vector(split.validation, config.target),
+        1.0 - np.exp(-np.maximum(validation_expected, 0.0)),
+    )
     # Selection sees only the original training/validation blocks.  Once the
-    # candidate is fixed, refit it on all pre-test observations before the
-    # untouched test evaluation and artifact export.
+    # candidate is fixed, refit it on all pre-test observations for the
+    # untouched test evaluation. A separate final production fit happens only
+    # after evaluation and uses every chronologically available row.
     factories = dict(_candidate_factories(config))
     refit_rows = split.train + split.validation
     selected_model = factories[selected_name]().fit(refit_rows)
@@ -484,6 +508,8 @@ def _export_tenant(
         baseline_model=refit_baseline,
         split=split,
         config=config,
+        calibrator=calibrator,
+        validation_expected_for_calibration=validation_expected,
     )
     residual_lower, residual_upper = _rolling_residual_interval(
         model_name=selected_name,
@@ -520,9 +546,40 @@ def _export_tenant(
     )
     validate_contract("reka-fact-bundle", facts)
 
+    # Test metrics above are frozen before this final refit. The exported model
+    # may now use the held-out block as additional historical training data,
+    # without recomputing or improving the reported evaluation.
+    final_model = factories[selected_name]().fit(split.train + split.validation + split.test)
+    calibration_payload = {
+        **calibrator.to_dict(),
+        "model_version": model_version,
+        "fitted_on": "validation_only_pre_test_predictions",
+        "validation_start": format_utc(split.validation_start),
+        "validation_end": format_utc(split.validation_end),
+    }
+    uncertainty_core = {
+        "method": "rolling_origin_model_data_temporal_v1",
+        "interval_level": 0.9,
+        "residual_lower": residual_lower,
+        "residual_upper": residual_upper,
+        "coverage_inflation_per_missing_ratio": 1.0,
+        "components": [
+            "model_refit_variation",
+            "temporal_residual_variation",
+            "data_coverage_availability",
+        ],
+        "estimated_from": "chronological_pre_test_rolling_origins",
+    }
+    uncertainty_payload = {
+        "uncertainty_version": "uncertainty-"
+        + stable_hash(json.dumps(uncertainty_core, sort_keys=True), length=16),
+        "model_version": model_version,
+        **uncertainty_core,
+    }
+
     destination = output_root / f"tenant={tenant_id}" / "models" / model_version
     destination.mkdir(parents=True, exist_ok=True)
-    parameters = selected_model.to_bundle()
+    parameters = final_model.to_bundle()
     serializer = "json_parameters"
     if selected_name == "lightgbm_poisson":
         payload_path = destination / "model.txt"
@@ -562,12 +619,16 @@ def _export_tenant(
         "evaluation_report": destination / "evaluation.json",
         "model_card": destination / "model-card.json",
         "reka_fact_bundle": destination / "reka-facts.json",
+        "calibration": destination / "calibration.json",
+        "uncertainty": destination / "uncertainty.json",
     }
     write_json(paths["model_bundle"], model_bundle)
     _write_parquet(paths["predictions"], predictions)
     write_json(paths["evaluation_report"], report)
     write_json(paths["model_card"], model_card)
     write_json(paths["reka_fact_bundle"], facts)
+    write_json(paths["calibration"], calibration_payload)
+    write_json(paths["uncertainty"], uncertainty_payload)
 
     run_manifest = {
         "schema_version": "1.0.0",

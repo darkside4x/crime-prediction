@@ -28,6 +28,9 @@ class HlsSourceDefinition:
     name: str
     url: str
     attribution: str
+    catalog_api_url: str | None = None
+    catalog_source_id: str | None = None
+    catalog_view_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -42,6 +45,9 @@ DEFAULT_HLS_SOURCES = {
         name="Louisiana DOT I-20 public traffic camera",
         url=LOUISIANA_DOT_HLS,
         attribution="LADOTD / 511 Louisiana",
+        catalog_api_url="https://511la.org/api/v2/get/cameras",
+        catalog_source_id="101",
+        catalog_view_id="2206",
     )
 }
 

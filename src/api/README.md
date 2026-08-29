@@ -17,12 +17,12 @@ With no `REKA_API_KEY`, `/ready` reports `deterministic_fallback`. With a key, R
 
 `GET /v1/forecasts` accepts a future UTC window, an allowlisted category, an optional ordered `west,south,east,north` bounding box, and bounded pagination. It consumes unlabelled `forecast-feature-row` records and returns `forecast` records. When no approved tenant bundle is promoted it uses the named historical-rate fallback. Low-support or low-coverage outputs have null estimates.
 
-The current approved-model registry intentionally defaults to empty. Connecting the artifact registry and promoting a calibrated tenant bundle is required before claiming production model performance.
+The development registry intentionally defaults to empty. Production startup rejects development authentication, in-memory rate limiting, audit/idempotency stores, fixture-backed forecasts, local video storage, and an unconfigured model registry. A deployment bootstrap must inject OIDC authentication, durable rate limiting, Postgres/RLS repositories, S3/SQS video services, measured coverage, and a checksum-verified approved-model registry. Promotion and rollback require the audited `platform_operator` role.
 
 ## OpenAPI
 
 ```bash
-python -m src.api.openapi --output artifacts/openapi.json
+python -m src.api.openapi --output contracts/openapi.json
 ```
 
 Generation fails if server secret names or restricted `secret_ref` fields appear in the document. Person 3 can generate frontend types from this output.

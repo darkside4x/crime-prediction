@@ -56,7 +56,7 @@
       "additionalProperties": false,
       "required": ["kind", "path", "sha256"],
       "properties": {
-        "kind": {"enum": ["model_bundle", "predictions", "evaluation_report", "model_card", "reka_fact_bundle"]},
+        "kind": {"enum": ["model_bundle", "predictions", "evaluation_report", "model_card", "reka_fact_bundle", "calibration", "uncertainty"]},
         "path": {"type": "string", "minLength": 1, "maxLength": 512},
         "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
       }
