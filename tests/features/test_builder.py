@@ -144,7 +144,7 @@ def test_parquet_contains_no_raw_coordinates_or_event_identifiers(tmp_path: Path
         config(),
         output,
         manifest,
-        source_schema_versions={SOURCE_A: "1.0.0"},
+        source_versions={SOURCE_A: "synthetic-v1"},
         category_map_version="1.0.0",
         replay_input_path=replay_input,
         generation_command=["crime-data", "replay"],
@@ -154,3 +154,7 @@ def test_parquet_contains_no_raw_coordinates_or_event_identifiers(tmp_path: Path
     assert {"latitude", "longitude", "external_event_id", "source_id"}.isdisjoint(columns)
     assert output.is_file()
     assert manifest.is_file()
+
+    rows = pl.read_parquet(output).to_dicts()
+    assert {row["schema_version"] for row in rows} == {"2.0.0"}
+    assert all(row["data_as_of"] < row["interval_start"] for row in rows)

@@ -1,6 +1,14 @@
 # Modeling configuration
 
-`default.json` defines the deterministic Person 2 experiment. With one feature-table manifest per tenant, run:
+`default.json` defines the deterministic Person 2 experiment.
+
+Install the combined data/model development environment from the repository root:
+
+```bash
+python -m pip install -e ".[dev,model]"
+```
+
+Then run with one feature-table manifest per tenant:
 
 ```bash
 uv run --python 3.12 --with-requirements configs/model/requirements.txt \
@@ -9,6 +17,9 @@ uv run --python 3.12 --with-requirements configs/model/requirements.txt \
   --feature-manifest artifacts/tenant=<tenant-id>/features/manifest.json \
   --output-root artifacts
 ```
+
+The installed `crime-model evaluate` command is equivalent to
+`python -m src.models.cli evaluate`.
 
 Repeat `--feature-manifest` for additional tenants. Each input manifest and Parquet file must contain exactly one matching tenant. Models are trained independently and artifacts are written below `tenant=<tenant-id>/models/<model-version>/`.
 

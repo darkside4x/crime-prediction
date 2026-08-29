@@ -14,7 +14,13 @@ from src.data.category_map import CategoryMap
 from src.data.service import IngestionService
 from src.data.source import SourceDefinition
 from src.data.store import IngestionStore
-from src.features.builder import FeatureBuildConfig, FeatureBuilder, load_domain_cells, parse_utc
+from src.features.builder import (
+    FeatureBuildConfig,
+    FeatureBuilder,
+    load_domain_cells,
+    parse_utc,
+    sha256_file,
+)
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
@@ -60,6 +66,13 @@ async def run_replay(args: argparse.Namespace) -> int:
         if not location_ref:
             raise ValueError("Recorded source is missing config.location_ref")
         input_path = (source_path.parent / location_ref).resolve()
+        try:
+            input_path.relative_to(source_path.parent)
+        except ValueError as exc:
+            raise ValueError(
+                "Recorded source config.location_ref must stay within the source-definition directory; "
+                "use --input for an explicit external path"
+            ) from exc
 
     category_map = CategoryMap.from_file(args.category_map.resolve())
     store = IngestionStore(args.state_db.resolve())
@@ -87,8 +100,8 @@ async def run_replay(args: argparse.Namespace) -> int:
         config,
         args.output.resolve(),
         args.manifest.resolve(),
-        source_schema_versions={source.source_id: source.schema_version},
-        category_map_version=category_map.schema_version,
+        source_versions={source.source_id: f"sha256:{sha256_file(source_path)}"},
+        category_map_version=f"sha256:{sha256_file(args.category_map.resolve())}",
         replay_input_path=input_path,
         generation_command=["crime-data", *sys.argv[1:]],
     )
@@ -99,7 +112,7 @@ async def run_replay(args: argparse.Namespace) -> int:
                 "feature_output": str(args.output.resolve()),
                 "manifest": str(args.manifest.resolve()),
                 "row_count": manifest["row_count"],
-                "feature_parquet_sha256": manifest["feature_parquet_sha256"],
+                "feature_parquet_sha256": manifest["artifact"]["sha256"],
             },
             indent=2,
             sort_keys=True,

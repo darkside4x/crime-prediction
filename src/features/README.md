@@ -15,7 +15,8 @@ For a row at `interval_start = t`:
 - `event_count` is the supervised label for `[t, t + interval)`.
 - All lag, rolling, neighbour, and trend fields use occurrence buckets before
   `t` and only records whose `received_at` is strictly before `t`.
-- `data_as_of` equals `t`.
+- `data_as_of` is the exclusive feature cutoff (`t - 1 second`), so consumers
+  can enforce that every predictor is strictly prior to the target interval.
 - `lag_7` means seven configured intervals, not necessarily seven days.
 - `rolling_7_mean` uses the seven completed configured intervals before `t`.
 - `neighbor_lag_1` is the sum across in-domain H3 ring-one neighbours in the
@@ -32,7 +33,9 @@ is used for modeling.
 
 ## Provenance manifest
 
-Each Parquet build writes a JSON manifest containing tenant and source identity,
-schema/config versions, time range, feature parameters, row/event counts, input
-and output SHA-256 hashes, Git commit, dirty-tree state, and the generation
-command.
+Each Parquet build writes a JSON manifest matching
+`contracts/schemas/feature-table-manifest.schema.json`. It includes the tenant,
+source versions, dataset and feature-schema versions, time bounds, row/cell
+counts, checksummed input/output provenance, Git commit, dirty-tree state, and
+the generation command. The modeling CLI validates this manifest and the
+Parquet checksum before reading any rows.

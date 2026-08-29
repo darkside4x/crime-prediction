@@ -358,14 +358,16 @@ class IngestionStore:
         if not source_ids:
             raise ValueError("At least one source_id is required")
         placeholders = ",".join("?" for _ in source_ids)
+        # Only placeholder count is interpolated; every source ID remains a bound value.
+        query = (
+            "SELECT occurred_at, received_at, category, latitude, longitude "
+            "FROM accepted_events "
+            f"WHERE tenant_id = ? AND source_id IN ({placeholders}) "  # nosec B608
+            "ORDER BY occurred_at"
+        )
         with self.connect() as connection:
             rows = connection.execute(
-                f"""
-                SELECT occurred_at, received_at, category, latitude, longitude
-                FROM accepted_events
-                WHERE tenant_id = ? AND source_id IN ({placeholders})
-                ORDER BY occurred_at
-                """,
+                query,
                 (tenant_id, *source_ids),
             ).fetchall()
         return [

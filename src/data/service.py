@@ -136,8 +136,12 @@ class IngestionService:
                     await adapter.commit(checkpoint)
                     continue
 
-                assert item.payload is not None
                 try:
+                    if item.payload is None:
+                        raise IngestionError(
+                            "adapter_payload_missing",
+                            "Adapter item has neither a payload nor an error code",
+                        )
                     event = self.normalize_event(
                         item.payload,
                         authenticated_tenant_id=authenticated_tenant_id,

@@ -49,6 +49,14 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def display_path(path: Path, repository_root: Path) -> str:
+    resolved = path.resolve()
+    try:
+        return resolved.relative_to(repository_root.resolve()).as_posix()
+    except ValueError:
+        return str(resolved)
+
+
 @dataclass(frozen=True)
 class FeatureBuildConfig:
     tenant_id: str
@@ -68,6 +76,8 @@ class FeatureBuildConfig:
             raise ValueError("Feature range end must be after start")
         if self.interval.total_seconds() <= 0:
             raise ValueError("Feature interval must be positive")
+        if self.interval.total_seconds() % 60:
+            raise ValueError("Feature interval must be a whole number of minutes")
         if not self.domain_cells:
             raise ValueError("A fixed, externally defined H3 domain is required")
         if not self.source_ids:
@@ -175,7 +185,7 @@ class FeatureBuilder:
                     neighbor_lag = sum(lag(1, target_cell=neighbor) for neighbor in neighbors)
 
                     row: dict[str, Any] = {
-                        "schema_version": "1.0.0",
+                        "schema_version": "2.0.0",
                         "tenant_id": config.tenant_id,
                         "cell_id": cell_id,
                         "interval_start": utc_text(interval_start),
@@ -194,7 +204,7 @@ class FeatureBuilder:
                         "day_of_week_sin": math.sin(day_angle),
                         "day_of_week_cos": math.cos(day_angle),
                         "coverage_ratio": config.coverage_ratio,
-                        "data_as_of": utc_text(interval_start),
+                        "data_as_of": utc_text(interval_start - timedelta(seconds=1)),
                     }
                     validate_contract("feature-row.schema.json", row)
                     rows.append(row)
@@ -206,7 +216,7 @@ class FeatureBuilder:
         output_path: Path,
         manifest_path: Path,
         *,
-        source_schema_versions: dict[str, str],
+        source_versions: dict[str, str],
         category_map_version: str,
         replay_input_path: Path,
         generation_command: list[str],
@@ -216,8 +226,8 @@ class FeatureBuilder:
         frame = pl.DataFrame(rows).sort(["tenant_id", "interval_start", "category", "cell_id"])
         frame.write_parquet(output_path, compression="zstd", statistics=True)
 
+        repository_root = Path(__file__).resolve().parents[2]
         try:
-            repository_root = Path(__file__).resolve().parents[2]
             code_commit = subprocess.run(
                 ["git", "rev-parse", "HEAD"],
                 cwd=repository_root,
@@ -238,33 +248,58 @@ class FeatureBuilder:
             code_commit = "unknown"
             working_tree_dirty = True
 
+        feature_checksum = sha256_file(output_path)
+        replay_checksum = sha256_file(replay_input_path)
+        interval_minutes = int(config.interval.total_seconds() // 60)
+        generation_text = subprocess.list2cmdline(generation_command)
+        dataset_identity = {
+            "artifact_sha256": feature_checksum,
+            "category_map_version": category_map_version,
+            "h3_resolution": config.h3_resolution,
+            "interval_minutes": interval_minutes,
+            "replay_input_sha256": replay_checksum,
+            "source_versions": source_versions,
+            "tenant_id": config.tenant_id,
+        }
+        dataset_digest = hashlib.sha256(
+            json.dumps(dataset_identity, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
         manifest = {
             "schema_version": "1.0.0",
-            "created_at": utc_now(),
             "tenant_id": config.tenant_id,
-            "sources": [
-                {"source_id": source_id, "schema_version": source_schema_versions[source_id]}
+            "dataset_version": f"features-{dataset_digest[:24]}",
+            "feature_schema_version": "2.0.0",
+            "artifact": {
+                "path": display_path(output_path, repository_root),
+                "format": "parquet",
+                "sha256": feature_checksum,
+            },
+            "source_versions": [
+                {"source_id": source_id, "source_version": source_versions[source_id]}
                 for source_id in config.source_ids
             ],
-            "category_map_version": category_map_version,
-            "code_commit": code_commit,
-            "working_tree_dirty": working_tree_dirty,
-            "parameters": {
-                "start": utc_text(config.start),
-                "end": utc_text(config.end),
-                "interval_seconds": int(config.interval.total_seconds()),
-                "h3_resolution": config.h3_resolution,
-                "source_ids": list(config.source_ids),
-                "domain_cells": list(config.domain_cells),
-                "categories": list(config.categories),
-                "coverage_ratio": config.coverage_ratio,
-            },
+            "generated_at": utc_now(),
+            "data_as_of": utc_text(config.end - config.interval - timedelta(seconds=1)),
+            "interval_minutes": interval_minutes,
             "row_count": len(rows),
-            "accepted_event_count": self.store.event_count(config.tenant_id, config.source_ids),
-            "replay_input_sha256": sha256_file(replay_input_path),
-            "feature_parquet_sha256": sha256_file(output_path),
-            "generation_command": generation_command,
+            "interval_start_min": utc_text(config.start),
+            "interval_start_max": utc_text(config.end - config.interval),
+            "categories": list(config.categories),
+            "cell_count": len(config.domain_cells),
+            "generation_command": generation_text,
+            "code_version": code_commit,
+            "parameters": {
+                "h3_resolution": config.h3_resolution,
+                "coverage_ratio": config.coverage_ratio,
+                "category_map_version": category_map_version,
+                "replay_input_sha256": replay_checksum,
+                "accepted_event_count": self.store.event_count(
+                    config.tenant_id, config.source_ids
+                ),
+                "working_tree_dirty": working_tree_dirty,
+            },
         }
+        validate_contract("feature-table-manifest.schema.json", manifest)
         manifest_path.parent.mkdir(parents=True, exist_ok=True)
         manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         return manifest

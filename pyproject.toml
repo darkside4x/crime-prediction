@@ -1,7 +1,7 @@
 [project]
 name = "crime-hotspot-prototype"
 version = "0.1.0"
-description = "Tenant-aware incident replay and leakage-safe aggregate feature pipeline"
+description = "Tenant-aware aggregate incident forecasting prototype"
 requires-python = ">=3.12"
 dependencies = [
   "h3==4.3.1",
@@ -10,12 +10,19 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+model = [
+  "lightgbm==4.6.0",
+  "numpy==2.2.3",
+  "pyarrow==23.0.1",
+  "scikit-learn==1.6.1",
+]
 dev = [
-  "pytest==8.4.1",
+  "pytest==9.0.3",
 ]
 
 [project.scripts]
 crime-data = "src.data.cli:main"
+crime-model = "src.models.cli:main"
 
 [build-system]
 requires = ["hatchling==1.27.0"]

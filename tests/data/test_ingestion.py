@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from src.data.adapters import RecordedReplayAdapter
+from src.data.adapters.base import AdapterItem, SourceHealth
 from src.data.category_map import CategoryMap
 from src.data.errors import IngestionError
 from src.data.service import IngestionService
@@ -165,4 +166,33 @@ def test_same_event_id_with_changed_content_is_quarantined_as_conflict(tmp_path:
     assert run["duplicate_count"] == 0
     assert run["rejected_count"] == 1
     assert run["last_error_code"] == "idempotency_conflict"
+    assert store.quarantine_count(TENANT_A, SOURCE_A) == 1
+
+
+def test_adapter_item_without_payload_is_quarantined(tmp_path: Path) -> None:
+    class MissingPayloadAdapter:
+        async def validate_connection(self) -> SourceHealth:
+            return SourceHealth(True, "synthetic adapter")
+
+        async def read(self, checkpoint):
+            yield AdapterItem(checkpoint=1, payload=None)
+
+        async def commit(self, checkpoint) -> None:
+            return None
+
+    store = IngestionStore(tmp_path / "state.sqlite")
+    source = source_definition()
+    service = IngestionService(store, CategoryMap.from_file(CATEGORY_MAP))
+
+    run = asyncio.run(
+        service.ingest_replay(
+            MissingPayloadAdapter(),
+            source,
+            authenticated_tenant_id=source.tenant_id,
+        )
+    )
+
+    assert run["status"] == "completed"
+    assert run["rejected_count"] == 1
+    assert run["last_error_code"] == "adapter_payload_missing"
     assert store.quarantine_count(TENANT_A, SOURCE_A) == 1
