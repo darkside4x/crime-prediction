@@ -35,6 +35,8 @@ psql "$connection" -v ON_ERROR_STOP=1 -c \
 psql "$connection" -v ON_ERROR_STOP=1 -c \
   "GRANT CONNECT ON DATABASE $DATABASE_NAME TO crime_app"
 psql "$connection" -v ON_ERROR_STOP=1 -c \
+  "GRANT CREATE ON DATABASE $DATABASE_NAME TO crime_app"
+psql "$connection" -v ON_ERROR_STOP=1 -c \
   "GRANT USAGE, CREATE ON SCHEMA public TO crime_app"
 psql "$connection" -v ON_ERROR_STOP=1 -c \
   "ALTER ROLE crime_app SET statement_timeout = '30s'"
