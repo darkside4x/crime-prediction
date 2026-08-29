@@ -10,6 +10,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+api = [
+  "fastapi==0.141.1",
+  "openai==3.6.0",
+  "python-dotenv==1.2.3",
+  "uvicorn==0.35.0",
+]
 model = [
   "lightgbm==4.6.0",
   "numpy==2.2.3",
@@ -17,12 +23,14 @@ model = [
   "scikit-learn==1.6.1",
 ]
 dev = [
+  "httpx==0.28.1",
   "pytest==9.0.3",
 ]
 
 [project.scripts]
 crime-data = "src.data.cli:main"
 crime-model = "src.models.cli:main"
+crime-api-openapi = "src.api.openapi:main"
 
 [build-system]
 requires = ["hatchling==1.27.0"]

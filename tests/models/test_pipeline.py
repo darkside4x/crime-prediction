@@ -48,6 +48,8 @@ def test_two_tenant_pipeline_exports_isolated_schema_valid_artifacts(tmp_path: P
         validate_contract("model-card", model_card)
         validate_contract("model-bundle", bundle)
         validate_contract("reka-fact-bundle", facts)
+        assert model_card["training_period"]["end"] == run_manifest["split"]["validation_end"]
+        assert "rolling-origin residual" in model_card["uncertainty_method"]
         assert {payload["tenant_id"] for payload in (run_manifest, evaluation, model_card, bundle, facts)} == {tenant_id}
         fact_ids_by_tenant[tenant_id] = {fact["fact_id"] for fact in facts["facts"]}
         rows = pq.ParquetFile(root / "predictions.parquet").read().to_pylist()

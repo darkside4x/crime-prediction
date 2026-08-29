@@ -21,6 +21,7 @@ artifacts/
 # Frontend dependencies and build output
 node_modules/
 dist/
+*.tsbuildinfo
 
 # Web
 src/web/node_modules/
