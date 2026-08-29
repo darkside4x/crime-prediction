@@ -21,3 +21,7 @@ artifacts/
 # Frontend dependencies and build output
 node_modules/
 dist/
+
+# Web
+src/web/node_modules/
+src/web/dist/
