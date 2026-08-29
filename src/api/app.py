@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import math
+import os
 from pathlib import Path
 from typing import Any, Callable, Literal
 import threading
@@ -1153,4 +1154,7 @@ def create_app(
     return app
 
 
-app = create_app()
+# Importing the reusable factory must not instantiate development adapters in a
+# production process. Production deployments use
+# ``src.data.video.production_app:app`` which injects all durable dependencies.
+app = create_app() if os.environ.get("APP_ENVIRONMENT", "development").lower() != "production" else None

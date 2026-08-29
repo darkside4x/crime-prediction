@@ -65,6 +65,16 @@ Run `crime-platform-migrate`, then start one process per operation, for example
 `crime-video-worker --operation upload`. Set `TEST_POSTGRES_DSN` to run the
 database-level cross-tenant denial test.
 
+`src.data.video.production_app:app` is the production ASGI entrypoint. It
+injects Postgres/RLS repositories, a cross-replica Postgres rate limiter,
+S3/KMS media storage, operation-specific SQS queues, durable audit and
+idempotency stores, measured coverage, OIDC authentication and a shared model
+registry. The single-queue SQS setting remains compatible for local use, but a
+scaled deployment configures every `VIDEO_QUEUE_URL_*` stage queue.
+
+The hardened AWS VM reference composition and required cloud controls are in
+`deploy/aws-vm/README.md`.
+
 Coverage now comes from persisted capture/detector observations. The snapshot
 formula is `detector_available_seconds / expected_seconds`; missing measurements
 fail closed to zero at the forecast API boundary instead of using seeded demo

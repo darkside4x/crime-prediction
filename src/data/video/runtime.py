@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -16,15 +16,34 @@ from .service import LocationResolver, VideoPipelineService
 from .storage import ClamAVCommandScanner, S3MediaStorage
 
 
+def _secret_value(name: str) -> str:
+    direct = os.environ.get(name, "").strip()
+    file_name = os.environ.get(f"{name}_FILE", "").strip()
+    if direct and file_name:
+        raise ValueError(f"Set only one of {name} or {name}_FILE")
+    if not file_name:
+        return direct
+    path = Path(file_name)
+    try:
+        if path.stat().st_size > 64 * 1024:
+            raise ValueError(f"{name}_FILE exceeds the secret size limit")
+        return path.read_text(encoding="utf-8").strip()
+    except OSError as error:
+        raise ValueError(f"{name}_FILE could not be read") from error
+
+
 @dataclass(frozen=True)
 class PlatformSettings:
-    database_url: str
-    queue_url: str
-    queue_dlq_url: str
+    database_url: str = field(repr=False)
+    queue_url: str = field(repr=False)
+    queue_dlq_url: str = field(repr=False)
+    operation_queue_urls: dict[str, str] = field(repr=False)
     media_bucket: str
     media_kms_key_id: str
+    media_bucket_owner: str | None
+    location_secret_prefix: str
     aws_region: str
-    reka_api_key: str
+    reka_api_key: str = field(repr=False)
     reka_vision_base_url: str
     worker_lease_seconds: int
     restricted_spool_root: Path
@@ -42,21 +61,60 @@ class PlatformSettings:
         }
         values: dict[str, Any] = {}
         missing: list[str] = []
-        for field, variable in required.items():
-            value = os.getenv(variable, "").strip()
+        for setting_field, variable in required.items():
+            value = (
+                _secret_value(variable)
+                if variable in {"DATABASE_URL", "REKA_API_KEY"}
+                else os.getenv(variable, "").strip()
+            )
             if not value or value.startswith("replace-"):
                 missing.append(variable)
-            values[field] = value
+            values[setting_field] = value
         if missing:
-            raise ValueError(f"Missing production platform settings: {', '.join(sorted(missing))}")
+            raise ValueError(
+                f"Missing production platform settings: {', '.join(sorted(missing))}"
+            )
         values.update(
             reka_vision_base_url=os.getenv(
                 "REKA_VISION_BASE_URL", "https://vision-agent.api.reka.ai"
             ),
             worker_lease_seconds=int(os.getenv("VIDEO_WORKER_LEASE_SECONDS", "120")),
-            restricted_spool_root=Path(os.getenv("VIDEO_SPOOL_ROOT", "/var/lib/crime-video-spool")),
+            restricted_spool_root=Path(
+                os.getenv("VIDEO_SPOOL_ROOT", "/var/lib/crime-video-spool")
+            ),
+            media_bucket_owner=os.getenv("VIDEO_MEDIA_BUCKET_OWNER", "").strip()
+            or None,
+            location_secret_prefix=os.getenv("LOCATION_SECRET_PREFIX", "").strip(),
+            operation_queue_urls={
+                operation: os.getenv(f"VIDEO_QUEUE_URL_{operation.upper()}", "").strip()
+                for operation in ("upload", "index", "analyze", "delete")
+                if os.getenv(f"VIDEO_QUEUE_URL_{operation.upper()}", "").strip()
+            },
         )
-        return cls(**values)
+        settings = cls(**values)
+        if not settings.reka_vision_base_url.startswith("https://"):
+            raise ValueError("REKA_VISION_BASE_URL must use HTTPS")
+        if not 30 <= settings.worker_lease_seconds <= 43200:
+            raise ValueError("VIDEO_WORKER_LEASE_SECONDS must be between 30 and 43200")
+        if settings.media_bucket_owner is not None and (
+            len(settings.media_bucket_owner) != 12
+            or not settings.media_bucket_owner.isdecimal()
+        ):
+            raise ValueError(
+                "VIDEO_MEDIA_BUCKET_OWNER must be a 12-digit AWS account ID"
+            )
+        if not settings.location_secret_prefix:
+            raise ValueError("LOCATION_SECRET_PREFIX is required")
+        if settings.operation_queue_urls and set(settings.operation_queue_urls) != {
+            "upload",
+            "index",
+            "analyze",
+            "delete",
+        }:
+            raise ValueError(
+                "Configure all four operation-specific VIDEO_QUEUE_URL_* values"
+            )
+        return settings
 
 
 @dataclass
@@ -81,11 +139,13 @@ def create_platform_runtime(
     media_storage = S3MediaStorage(
         bucket=settings.media_bucket,
         kms_key_id=settings.media_kms_key_id,
+        expected_bucket_owner=settings.media_bucket_owner,
         region_name=settings.aws_region,
     )
     broker = SqsJobBroker(
         queue_url=settings.queue_url,
         dead_letter_queue_url=settings.queue_dlq_url,
+        queue_urls=settings.operation_queue_urls or None,
         region_name=settings.aws_region,
         visibility_seconds=settings.worker_lease_seconds,
     )

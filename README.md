@@ -14,6 +14,7 @@ It does not identify people, decide guilt, predict individual behaviour, expose 
 6. [Reka AI and Vision](docs/REKA_AI.md) — managed video intelligence and grounded forecast explanations
 7. [Reka platform research](docs/REKA_PLATFORM_RESEARCH.md) — current APIs, limits, AWS architecture, and product decisions
 8. [Historical benchmark and real results](docs/EVALUATION.md) — lawful dataset decision, reproducible chronological evaluation, and limitations
+9. [AWS VM deployment](deploy/aws-vm/README.md) — hardened production composition and scale controls
 
 Repository instructions are in [AGENTS.md](AGENTS.md).
 
@@ -35,6 +36,9 @@ Implemented today:
 - tenant-prefixed S3/KMS media storage, ClamAV scanning and retention deletion;
 - secret-backed bounded HLS/RTSP/ONVIF segmentation with backpressure;
 - measured source coverage propagated into future forecast rows;
+- operation-specific SQS stage queues and a shared PostgreSQL rate limiter for horizontal replicas;
+- a production FastAPI composition backed by Postgres/RLS, S3/KMS, SQS/DLQ, OIDC and durable audit/idempotency stores;
+- non-root, read-only container defaults and a hardened same-origin reverse proxy;
 - bounded allowlisted public-HLS capture into restricted `live_segment` MP4 assets;
 - backend-proxied Reka Vision upload/index/candidate analysis with strict output validation;
 - tenant-scoped candidate listing and immutable human confirmation/rejection;
@@ -44,9 +48,8 @@ Contracted but not yet implemented:
 
 - Reka Vision video search, tagging and highlight generation;
 - future feature snapshot generation and an approved calibrated-model registry;
-- production identity-provider integration and FastAPI media upload/worker wiring;
 - recorded-video onboarding/review screens connected to the real APIs;
-- deployed AWS resources, real-camera certification, monitoring, backups and drift checks.
+- provisioned AWS resources, real-camera certification, alerting, backup-restore drills and drift checks.
 
 Synthetic fixtures are interface examples, not real crime patterns or measured model performance.
 

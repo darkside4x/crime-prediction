@@ -2,9 +2,25 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import os
+from dataclasses import dataclass, field
 from pathlib import Path
+
+
+def _secret_value(name: str) -> str:
+    direct = os.environ.get(name, "").strip()
+    file_name = os.environ.get(f"{name}_FILE", "").strip()
+    if direct and file_name:
+        raise ValueError(f"Set only one of {name} or {name}_FILE")
+    if not file_name:
+        return direct
+    path = Path(file_name)
+    try:
+        if path.stat().st_size > 64 * 1024:
+            raise ValueError(f"{name}_FILE exceeds the secret size limit")
+        return path.read_text(encoding="utf-8").strip()
+    except OSError as error:
+        raise ValueError(f"{name}_FILE could not be read") from error
 
 
 @dataclass(frozen=True)
@@ -32,7 +48,7 @@ class Settings:
     api_rate_limit_window_seconds: int = 60
 
     @classmethod
-    def from_environment(cls) -> "Settings":
+    def from_environment(cls) -> Settings:
         try:
             from dotenv import load_dotenv
         except ImportError:
@@ -41,12 +57,16 @@ class Settings:
             load_dotenv()
         origins = tuple(
             item.strip()
-            for item in os.environ.get("CORS_ORIGINS", "http://localhost:5173").split(",")
+            for item in os.environ.get("CORS_ORIGINS", "http://localhost:5173").split(
+                ","
+            )
             if item.strip()
         )
         trusted_hosts = tuple(
             item.strip()
-            for item in os.environ.get("TRUSTED_HOSTS", "localhost,127.0.0.1,testserver").split(",")
+            for item in os.environ.get(
+                "TRUSTED_HOSTS", "localhost,127.0.0.1,testserver"
+            ).split(",")
             if item.strip()
         )
         algorithms = tuple(
@@ -55,8 +75,10 @@ class Settings:
             if item.strip()
         )
         settings = cls(
-            app_environment=os.environ.get("APP_ENVIRONMENT", "development").strip().lower(),
-            reka_api_key=os.environ.get("REKA_API_KEY", "").strip(),
+            app_environment=os.environ.get("APP_ENVIRONMENT", "development")
+            .strip()
+            .lower(),
+            reka_api_key=_secret_value("REKA_API_KEY"),
             reka_chat_base_url=os.environ.get(
                 "REKA_CHAT_BASE_URL",
                 os.environ.get("REKA_BASE_URL", "https://api.reka.ai/v1"),
@@ -69,8 +91,12 @@ class Settings:
             reka_timeout_seconds=float(os.environ.get("REKA_TIMEOUT_SECONDS", "20")),
             cors_origins=origins,
             runtime_dir=Path(os.environ.get("RUNTIME_DIR", "data/runtime")),
-            near_live_capture_seconds=int(os.environ.get("NEAR_LIVE_CAPTURE_SECONDS", "20")),
-            reka_index_poll_seconds=float(os.environ.get("REKA_INDEX_POLL_SECONDS", "3")),
+            near_live_capture_seconds=int(
+                os.environ.get("NEAR_LIVE_CAPTURE_SECONDS", "20")
+            ),
+            reka_index_poll_seconds=float(
+                os.environ.get("REKA_INDEX_POLL_SECONDS", "3")
+            ),
             reka_index_max_polls=int(os.environ.get("REKA_INDEX_MAX_POLLS", "20")),
             oidc_issuer=os.environ.get("OIDC_ISSUER", "").strip(),
             oidc_audience=os.environ.get("OIDC_AUDIENCE", "").strip(),
@@ -80,8 +106,12 @@ class Settings:
                 "OIDC_MEMBERSHIPS_CLAIM", "tenant_memberships"
             ).strip(),
             trusted_hosts=trusted_hosts,
-            max_request_bytes=int(os.environ.get("MAX_REQUEST_BYTES", str(512 * 1024 * 1024))),
-            api_rate_limit_requests=int(os.environ.get("API_RATE_LIMIT_REQUESTS", "120")),
+            max_request_bytes=int(
+                os.environ.get("MAX_REQUEST_BYTES", str(512 * 1024 * 1024))
+            ),
+            api_rate_limit_requests=int(
+                os.environ.get("API_RATE_LIMIT_REQUESTS", "120")
+            ),
             api_rate_limit_window_seconds=int(
                 os.environ.get("API_RATE_LIMIT_WINDOW_SECONDS", "60")
             ),
@@ -109,10 +139,17 @@ class Settings:
         if not 1 <= settings.api_rate_limit_requests <= 100000:
             raise ValueError("API_RATE_LIMIT_REQUESTS is outside the supported range")
         if not 1 <= settings.api_rate_limit_window_seconds <= 3600:
-            raise ValueError("API_RATE_LIMIT_WINDOW_SECONDS is outside the supported range")
+            raise ValueError(
+                "API_RATE_LIMIT_WINDOW_SECONDS is outside the supported range"
+            )
         allowed_algorithms = {"RS256", "RS384", "RS512", "ES256", "ES384", "ES512"}
-        if not settings.oidc_algorithms or not set(settings.oidc_algorithms) <= allowed_algorithms:
-            raise ValueError("OIDC_ALGORITHMS contains an unsupported asymmetric algorithm")
+        if (
+            not settings.oidc_algorithms
+            or not set(settings.oidc_algorithms) <= allowed_algorithms
+        ):
+            raise ValueError(
+                "OIDC_ALGORITHMS contains an unsupported asymmetric algorithm"
+            )
         if settings.app_environment == "production":
             required = {
                 "OIDC_ISSUER": settings.oidc_issuer,
@@ -121,7 +158,9 @@ class Settings:
             }
             missing = sorted(name for name, value in required.items() if not value)
             if missing:
-                raise ValueError(f"Missing production OIDC settings: {', '.join(missing)}")
+                raise ValueError(
+                    f"Missing production OIDC settings: {', '.join(missing)}"
+                )
             if not settings.oidc_issuer.startswith("https://"):
                 raise ValueError("OIDC_ISSUER must use HTTPS in production")
             if not settings.oidc_jwks_url.startswith("https://"):

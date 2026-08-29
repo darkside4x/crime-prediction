@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:17.6-alpine
+        image: postgres:17.11-alpine3.24
         env:
           POSTGRES_DB: crime_prediction
           POSTGRES_USER: postgres
@@ -34,7 +34,7 @@ jobs:
           python-version: "3.12"
           cache: pip
       - name: Install dependencies
-        run: python -m pip install -e ".[api,dev,platform]"
+        run: python -m pip install -e ".[api,dev,model,platform]"
       - name: Create non-superuser application role
         env:
           ADMIN_DSN: postgresql://postgres:postgres-test-admin@localhost:5432/crime_prediction

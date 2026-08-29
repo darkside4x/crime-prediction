@@ -30,8 +30,12 @@ class TenantPostgres:
         try:
             from psycopg_pool import ConnectionPool
         except ImportError as error:  # pragma: no cover - dependency guidance
-            raise RuntimeError("Install the platform extra: pip install -e '.[platform]'") from error
-        self._pool = ConnectionPool(dsn, min_size=min_size, max_size=max_size, open=True)
+            raise RuntimeError(
+                "Install the platform extra: pip install -e '.[platform]'"
+            ) from error
+        self._pool = ConnectionPool(
+            dsn, min_size=min_size, max_size=max_size, open=True
+        )
 
     @contextmanager
     def transaction(self, tenant_id: str) -> Iterator[Any]:
@@ -50,6 +54,23 @@ class TenantPostgres:
             cursor.execute(
                 sql.SQL("SET LOCAL app.tenant_id = {}").format(sql.Literal(tenant_id))
             )
+            yield cursor
+
+    @contextmanager
+    def system_transaction(self) -> Iterator[Any]:
+        """Access non-tenant operational tables only.
+
+        Tenant repositories must use :meth:`transaction`; this deliberately
+        does not set ``app.tenant_id`` and therefore cannot read RLS-protected
+        tenant rows.
+        """
+        from psycopg.rows import dict_row
+
+        with (
+            self._pool.connection() as connection,
+            connection.transaction(),
+            connection.cursor(row_factory=dict_row) as cursor,
+        ):
             yield cursor
 
     def close(self) -> None:
@@ -83,7 +104,12 @@ class PostgresIngestionStore:
                    VALUES (%s, %s, %s::jsonb, %s)
                    ON CONFLICT (tenant_id, source_id) DO UPDATE
                    SET definition=excluded.definition""",
-                (payload["tenant_id"], payload["source_id"], json.dumps(payload), utc_now()),
+                (
+                    payload["tenant_id"],
+                    payload["source_id"],
+                    json.dumps(payload),
+                    utc_now(),
+                ),
             )
 
     def start_run(self, source: SourceDefinition) -> str:
@@ -113,7 +139,9 @@ class PostgresIngestionStore:
     ) -> dict[str, Any]:
         if tenant_id is None:
             raise ValueError("tenant_id is required by the PostgreSQL repository")
-        finished_at = utc_now() if status in {"completed", "failed", "cancelled"} else None
+        finished_at = (
+            utc_now() if status in {"completed", "failed", "cancelled"} else None
+        )
         with self.database.transaction(tenant_id) as cursor:
             cursor.execute(
                 """UPDATE ingestion_runs SET status=%s, checkpoint=%s::jsonb,
@@ -176,7 +204,9 @@ class PostgresIngestionStore:
             row = cursor.fetchone()
         return row["checkpoint"] if row else None
 
-    def set_checkpoint(self, tenant_id: str, source_id: str, checkpoint: str | int) -> None:
+    def set_checkpoint(
+        self, tenant_id: str, source_id: str, checkpoint: str | int
+    ) -> None:
         with self.database.transaction(tenant_id) as cursor:
             cursor.execute(
                 """INSERT INTO ingestion_checkpoints
@@ -285,12 +315,16 @@ class PostgresIngestionStore:
                 "occurred_at": _time(row["occurred_at"]),
                 "received_at": _time(row["received_at"]),
                 "category": row["category"],
-                "cell_id": h3.latlng_to_cell(row["latitude"], row["longitude"], h3_resolution),
+                "cell_id": h3.latlng_to_cell(
+                    row["latitude"], row["longitude"], h3_resolution
+                ),
             }
             for row in rows
         ]
 
-    def event_count(self, tenant_id: str, source_ids: tuple[str, ...] | None = None) -> int:
+    def event_count(
+        self, tenant_id: str, source_ids: tuple[str, ...] | None = None
+    ) -> int:
         with self.database.transaction(tenant_id) as cursor:
             if source_ids:
                 cursor.execute(

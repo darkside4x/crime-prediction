@@ -1,0 +1,136 @@
+x-platform-environment: &platform-environment
+  APP_ENVIRONMENT: production
+  AWS_REGION: ${AWS_REGION:-ap-south-1}
+  DATABASE_URL_FILE: /run/secrets/database_url
+  REKA_API_KEY_FILE: /run/secrets/reka_api_key
+  REKA_CHAT_BASE_URL: https://api.reka.ai/v1
+  REKA_VISION_BASE_URL: https://vision-agent.api.reka.ai
+  REKA_MODEL: ${REKA_MODEL:-reka-flash}
+  REKA_PROMPT_VERSION: ${REKA_PROMPT_VERSION:-1.0.0}
+  REKA_TIMEOUT_SECONDS: ${REKA_TIMEOUT_SECONDS:-20}
+  VIDEO_QUEUE_URL: ${VIDEO_QUEUE_URL:?Set VIDEO_QUEUE_URL}
+  VIDEO_QUEUE_URL_UPLOAD: ${VIDEO_QUEUE_URL_UPLOAD:?Set VIDEO_QUEUE_URL_UPLOAD}
+  VIDEO_QUEUE_URL_INDEX: ${VIDEO_QUEUE_URL_INDEX:?Set VIDEO_QUEUE_URL_INDEX}
+  VIDEO_QUEUE_URL_ANALYZE: ${VIDEO_QUEUE_URL_ANALYZE:?Set VIDEO_QUEUE_URL_ANALYZE}
+  VIDEO_QUEUE_URL_DELETE: ${VIDEO_QUEUE_URL_DELETE:?Set VIDEO_QUEUE_URL_DELETE}
+  VIDEO_QUEUE_DLQ_URL: ${VIDEO_QUEUE_DLQ_URL:?Set VIDEO_QUEUE_DLQ_URL}
+  VIDEO_MEDIA_BUCKET: ${VIDEO_MEDIA_BUCKET:?Set VIDEO_MEDIA_BUCKET}
+  VIDEO_MEDIA_KMS_KEY_ID: ${VIDEO_MEDIA_KMS_KEY_ID:?Set VIDEO_MEDIA_KMS_KEY_ID}
+  VIDEO_MEDIA_BUCKET_OWNER: ${VIDEO_MEDIA_BUCKET_OWNER:?Set VIDEO_MEDIA_BUCKET_OWNER}
+  LOCATION_SECRET_PREFIX: ${LOCATION_SECRET_PREFIX:?Set LOCATION_SECRET_PREFIX}
+  VIDEO_WORKER_LEASE_SECONDS: ${VIDEO_WORKER_LEASE_SECONDS:-180}
+  VIDEO_SPOOL_ROOT: /var/lib/crime-video-spool
+  MODEL_REGISTRY_ROOT: /app/data/models
+
+x-platform-service: &platform-service
+  build:
+    context: ../..
+    dockerfile: docker/api.Dockerfile
+  environment: *platform-environment
+  secrets:
+    - database_url
+    - reka_api_key
+  read_only: true
+  tmpfs:
+    - /tmp:size=512m,mode=1777
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+  restart: unless-stopped
+
+services:
+  migrate:
+    <<: *platform-service
+    command: ["crime-platform-migrate"]
+    restart: "no"
+
+  api:
+    <<: *platform-service
+    command:
+      - sh
+      - -c
+      - >-
+        exec uvicorn src.data.video.production_app:app
+        --host 0.0.0.0 --port 8000 --workers $${API_WORKERS:-2}
+        --no-server-header --proxy-headers
+    environment:
+      <<: *platform-environment
+      CORS_ORIGINS: ${CORS_ORIGINS:?Set CORS_ORIGINS to HTTPS origins}
+      TRUSTED_HOSTS: ${TRUSTED_HOSTS:?Set TRUSTED_HOSTS}
+      OIDC_ISSUER: ${OIDC_ISSUER:?Set OIDC_ISSUER}
+      OIDC_AUDIENCE: ${OIDC_AUDIENCE:?Set OIDC_AUDIENCE}
+      OIDC_JWKS_URL: ${OIDC_JWKS_URL:?Set OIDC_JWKS_URL}
+      OIDC_ALGORITHMS: ${OIDC_ALGORITHMS:-RS256}
+      OIDC_MEMBERSHIPS_CLAIM: ${OIDC_MEMBERSHIPS_CLAIM:-tenant_memberships}
+      API_WORKERS: ${API_WORKERS:-2}
+    volumes:
+      - model-registry:/app/data/models
+      - api-runtime:/app/data/runtime
+    expose:
+      - "8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+      start_period: 20s
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  web:
+    build:
+      context: ../..
+      dockerfile: docker/web.Dockerfile
+    ports:
+      - "${WEB_BIND_ADDRESS:-127.0.0.1}:${WEB_PORT:-8080}:8080"
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+
+  worker-upload:
+    <<: *platform-service
+    command: ["crime-video-worker", "--operation", "upload"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  worker-index:
+    <<: *platform-service
+    command: ["crime-video-worker", "--operation", "index"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  worker-analyze:
+    <<: *platform-service
+    command: ["crime-video-worker", "--operation", "analyze"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  worker-delete:
+    <<: *platform-service
+    command: ["crime-video-worker", "--operation", "delete"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+secrets:
+  database_url:
+    file: ${DATABASE_URL_SECRET_FILE:?Set DATABASE_URL_SECRET_FILE}
+  reka_api_key:
+    file: ${REKA_API_KEY_SECRET_FILE:?Set REKA_API_KEY_SECRET_FILE}
+
+volumes:
+  api-runtime:
+  model-registry:
