@@ -32,9 +32,11 @@ Before changing code, read:
 - The endpoint, role, and payload rules in `docs/PHASE1_CONTRACTS.md` plus `contracts/schemas/` are the integration boundary.
 - Synthetic fixtures are updated before consumers when a schema changes.
 - Motion must communicate state, remain interruptible, and respect `prefers-reduced-motion`.
-- Reka AI may map schemas, summarize validated aggregate facts, and orchestrate allowlisted read-only tools; it must never calculate or modify risk scores.
-- Only aggregated/suppressed tenant data may be sent to Reka. Raw events, coordinates, identifiers, secrets, and cross-tenant context are prohibited.
-- Every Reka response crossing a system boundary must validate against a versioned schema and include model/prompt versions plus the underlying data/model versions.
+- The backend uses one server-side `REKA_API_KEY` for Reka Vision and Reka Chat; no separate browser or Vision key is permitted.
+- Reka Vision may manage and analyze tenant-owned, lawfully obtained, explicitly approved video. It may propose candidate incidents but never confirm a crime or bypass human review.
+- Reka must never receive exact camera coordinates, incident/event identifiers, credentials, secret references, identity watchlists, facial embeddings, protected-attribute labels, or cross-tenant context.
+- Reka may map schemas, summarize validated aggregate facts, and orchestrate allowlisted read-only tools; it must never calculate or modify future risk scores.
+- Every Reka output crossing a system boundary must validate against a versioned schema and record the relevant video/model/configuration, prompt, data, and forecast model versions.
 
 ## Ownership
 
@@ -51,13 +53,13 @@ Do not edit another owner's area to work around a broken contract. Document the 
 - Pin direct dependencies and keep the clean-start path documented.
 - Keep secrets and large/raw datasets out of Git.
 - Store connector credentials through secret references; never include credentials in source definitions, events, logs, or fixtures.
-- Keep `REKA_API_KEY` server-side, use timeouts/retries and tenant quotas, and provide a deterministic non-AI fallback for every critical workflow.
+- Keep `REKA_API_KEY` server-side, use bounded timeouts/retries, tenant quotas, Reka video-ID tenant mappings, and monitored remote deletion. Provide a deterministic or manual-review fallback for every critical workflow.
 - Add tests for bug fixes and for every time/leakage-sensitive transform.
 - Use deterministic seeds where supported; record data, code, config, and model versions.
 - Avoid network calls in tests. Use tiny synthetic fixtures.
 - Return typed, structured errors; do not silently drop malformed input.
 - Test cross-tenant access denial and tenant-scoped cache/artifact keys.
-- Mock Reka in tests; test prompt-injection strings, invalid structured output, unavailable API, and refusal behavior.
+- Mock Reka in tests; test video upload/index/delete failures, prompt-injection strings, invalid structured output, cross-tenant video IDs, unavailable APIs, key leakage, and refusal behavior.
 - Do not claim causality from predictive features or explanations.
 
 ## Definition of done

@@ -12,7 +12,7 @@ The product has three distinct records. The UI, API, logs, and documentation mus
 
 | Record | Meaning | May be public? |
 |---|---|---|
-| Candidate detection | A detector found a possible safety incident in footage; it is unconfirmed and not a declaration of crime | Reviewer-only metadata and expiring evidence |
+| Candidate detection | Reka Vision found a possible safety incident in tenant-approved footage; it is unconfirmed and not a declaration of crime | Reviewer-only metadata and expiring evidence |
 | Confirmed incident | A human confirmed a candidate or an approved incident source supplied a record | Only after H3/time/category aggregation |
 | Forecast | A model estimates future aggregate incident volume for an H3 cell and time window | Yes, after suppression |
 
@@ -25,6 +25,10 @@ Recorded upload or tenant-owned live camera
                   |
                   v
         camera-source + video-asset
+                  |
+                  v
+       FastAPI -> Reka Vision
+      upload / index / Q&A / tags
                   |
                   v
    restricted candidate-detection
@@ -51,6 +55,7 @@ Recorded upload or tenant-owned live camera
 - `tenant_id` in a payload is routing and audit metadata, never authorization proof.
 - The server derives `tenant-context` from authenticated claims. Clients cannot submit or override it.
 - Exact camera location, credentials, raw video, evidence clips, raw coordinates, event identifiers, and candidate detections are restricted.
+- One server-side `REKA_API_KEY` authorizes backend Reka Vision and Reka Chat calls. Browsers never receive or use it.
 - Public forecast endpoints return only `forecast.schema.json` payloads after authorization, bounding, and suppression.
 - Every schema has a matching synthetic fixture with the same basename.
 
@@ -60,13 +65,14 @@ Recorded upload or tenant-owned live camera
 
 - `camera-source.schema.json` registers `recorded_video` or `live_camera` sources. Exact locations and endpoints use `secret://` references.
 - Recorded sources accept uploaded assets. Live sources use RTSP or ONVIF through secret endpoint and credential references.
-- `video-asset.schema.json` is restricted metadata for an uploaded file or live segment. The maximum contract size is 10 GiB; runtime quotas may be lower.
+- `video-asset.schema.json` is restricted metadata for an uploaded file or live segment. Its restricted storage reference resolves to the tenant-mapped Reka `video_id`; the public API never returns it. The maximum contract size is 10 GiB; Reka/account/runtime quotas may be lower.
 - Raw media is never stored in Git, logs, analytics exports, model artifacts, or public APIs.
+- Only tenant-owned, lawfully obtained, explicitly approved video may be uploaded to Reka Vision. Reka deletion is part of the retention workflow.
 
 ### Detection and review
 
-- `candidate-detection.schema.json` contains the proposed category, detector confidence/version, evidence reference, and review state.
-- Confidence is detector confidence, not the probability that a crime occurred.
+- `candidate-detection.schema.json` contains the proposed category, Reka analysis confidence/version, evidence reference, and review state.
+- Confidence is Reka analysis confidence, not the probability that a crime occurred.
 - `candidate-review.schema.json` is immutable. A detection receives at most one final decision.
 - Only the `reviewer`, `tenant_admin`, or explicitly audited `platform_operator` role may decide.
 - A confirmed decision requires a canonical category and deterministic `promoted_external_event_id`.
@@ -123,6 +129,7 @@ Every API request receives a server-created `tenant-context.schema.json`. A plat
 - Collection endpoints are bounded and paginated.
 - Browser requests never include `tenant_id` as a query parameter or writable field.
 - Evidence URLs are short-lived, reviewer-authorized references; APIs never return `secret://` values.
+- Video uploads go to FastAPI; FastAPI calls Reka Vision using `REKA_API_KEY`. Direct browser-to-Reka calls using the secret are prohibited.
 
 The initial endpoint surface is:
 
@@ -158,6 +165,8 @@ Services and tests must enforce:
 - promotion occurs only from a confirmed review and is idempotent;
 - recorded assets belong to recorded sources and live segments belong to live sources;
 - evidence and media have not expired before access.
+- every Reka `video_id` resolves through a tenant-scoped local mapping;
+- Reka output validates before candidate persistence, and remote deletion is monitored before retention deletion is complete.
 
 ## Change procedure
 

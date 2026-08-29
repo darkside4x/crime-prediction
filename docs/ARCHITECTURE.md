@@ -23,10 +23,10 @@ The canonical integration semantics are in `docs/PHASE1_CONTRACTS.md`; JSON Sche
                     - endpoint and location secret refs
                                  |
                                  v
-                       Video analysis workers
-                    - versioned detector
-                    - checkpoint and idempotency
-                    - candidate only, no identity
+                    FastAPI + Reka Vision
+                    - managed upload and indexing
+                    - semantic search / Q&A / tags / clips
+                    - versioned prompts and validated candidates
                                  |
                                  v
                       Restricted review service
@@ -74,7 +74,7 @@ The canonical integration semantics are in `docs/PHASE1_CONTRACTS.md`; JSON Sche
 - FastAPI application and background workers;
 - PostgreSQL with tenant RLS;
 - durable job queue;
-- S3-compatible encrypted object storage or a local equivalent;
+- Reka Vision managed video storage/indexing, with local tenant-to-Reka-video mappings;
 - recorded MP4 upload;
 - precomputed future forecast artifacts;
 - React/MapLibre UI built against generated OpenAPI types.
@@ -82,18 +82,19 @@ The canonical integration semantics are in `docs/PHASE1_CONTRACTS.md`; JSON Sche
 ### Live product
 
 - edge connector owns RTSP/ONVIF credentials and reconnect logic;
-- bounded live segments enter the same restricted video-asset boundary;
+- bounded approved live segments enter Reka Vision through the backend and the same restricted video-asset boundary;
 - managed Postgres/object storage/broker with backups and retention enforcement;
 - autoscaled workers, monitoring, drift checks, and tenant quotas.
 
-Recorded and live sources produce the same candidate-detection contract. Candidate promotion and forecasting logic never live inside transport adapters.
+Recorded and live sources use the same Reka Vision analysis path and candidate-detection contract. Candidate promotion and forecasting logic never live inside Reka or transport adapters.
 
 ## Trust boundaries
 
 | Boundary | Permitted data | Prohibited output |
 |---|---|---|
-| Media/source | raw footage, secret refs, exact registered location | public API, logs, model artifacts |
-| Detection/review | expiring evidence, proposed category, confidence, reviewer decision | forecast API, cross-tenant access |
+| Media/source | tenant-approved footage, Reka video ID, secret refs, exact registered location | public API, logs, model artifacts |
+| Reka Vision | approved video, non-identifying analysis prompt, tenant-scoped opaque video mapping | credentials, coordinates, event IDs, identity lists, cross-tenant context |
+| Detection/review | expiring evidence, proposed category, Reka confidence, reviewer decision | forecast API, cross-tenant access |
 | Incident ingestion | event ID, UTC time, coordinates, category | downstream raw coordinates/IDs |
 | Aggregate features | H3 cell, time, category, counts, measured coverage | individual records or identity |
 | Forecast API | aggregate estimates, uncertainty, coverage, versions, suppression | secret refs, raw events, candidates |
@@ -127,7 +128,9 @@ The Phase 1 endpoint list and role matrix are frozen in `docs/PHASE1_CONTRACTS.m
 
 ## Reka boundary
 
-Reka is deferred until deterministic upload, review, forecasting, and API flows work. It may later propose source mappings or summarize supplied aggregate facts. It is never on the detector or numeric forecasting path and may not receive raw media, evidence, candidates, coordinates, identifiers, secrets, or cross-tenant context.
+Reka Vision is the managed video layer for Phase 2. FastAPI uses the server-only `REKA_API_KEY` to upload/index videos, search and ask video questions, generate tags/highlights, and produce structured candidate proposals. Those proposals remain unconfirmed until immutable human review. Local records map every opaque Reka video ID to exactly one tenant/source/asset and drive retention deletion.
+
+Reka Chat may map redacted structured sources or summarize supplied aggregate facts. Neither Reka Vision nor Reka Chat calculates or modifies numeric future H3 forecasts. Exact camera coordinates, incident/event identifiers, credentials, secret references, identity data, and cross-tenant context are prohibited inputs.
 
 ## Reliability and observability
 
@@ -136,7 +139,8 @@ Reka is deferred until deterministic upload, review, forecasting, and API flows 
 - bounded retry and dead-letter records with safe error codes;
 - worker heartbeats, queue depth, source freshness, coverage, rejection rate, inference latency, and drift metrics;
 - model/data/detector/calibration/prompt versions in relevant artifacts;
-- deterministic non-AI fallback for every critical path;
+- deterministic/manual-review fallback for every critical path and explicit degraded state when Reka is unavailable;
+- Reka upload/index/delete status, quota, latency, and safe failure metrics;
 - media retention and deletion are testable jobs, not documentation-only policies.
 
 ## Safety gates

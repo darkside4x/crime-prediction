@@ -9,7 +9,7 @@ Owns `src/data/`, `src/features/`, video/edge workers, database migrations, brok
 Phase 1 responsibilities:
 
 - implement `camera-source`, `video-asset`, `candidate-detection`, `candidate-review`, and `coverage-snapshot` producers;
-- implement recorded upload and later RTSP/ONVIF adapters;
+- implement recorded upload, Reka Vision upload/index/analyze/delete orchestration, and later RTSP/ONVIF segmentation adapters;
 - implement idempotent candidate promotion into `incident-event`;
 - generate historical training rows and unlabelled `forecast-feature-row` snapshots;
 - enforce tenant storage partitions, retention, Postgres RLS, worker recovery, and coverage telemetry.
@@ -25,7 +25,7 @@ Phase 1 responsibilities:
 - consume `forecast-feature-row` and produce `forecast` without accepting client tenant IDs;
 - keep evaluation predictions separate from operational forecasts;
 - refit selected models, calibrate probability, compute temporal uncertainty, and publish model cards;
-- implement server-derived `tenant-context`, role checks, typed API errors, audit events, suppression, and bounded endpoints;
+- implement server-derived `tenant-context`, role checks, typed API errors, audit events, suppression, bounded endpoints, and server-only `REKA_API_KEY` configuration;
 - generate OpenAPI types for the frontend.
 
 Acceptance: a future snapshot produces schema-valid, versioned forecasts for windows after `data_as_of`; suppression returns null estimates; cross-tenant access and unauthorized review fail with typed errors.
@@ -48,13 +48,14 @@ Acceptance: an admin can configure/upload, a reviewer can decide candidates, and
 
 ### Phase objective
 
-Deliver the first working product flow from an uploaded MP4 to an authenticated aggregate forecast map. Phase 2 uses a deterministic fake detector so the team can prove contracts, tenancy, review, forecasting, and UI integration before introducing detector-quality risk.
+Deliver the first working product flow from an uploaded MP4 through Reka Vision to an authenticated aggregate forecast map. Production/demo video analysis uses Reka Vision. Automated tests use a deterministic fake Reka provider so they remain offline and repeatable.
 
 ```text
 recorded MP4
   → restricted video asset
-  → background processing job
-  → candidate detections
+  → FastAPI → Reka Vision upload/index
+  → Reka video Q&A/tagging/search
+  → validated candidate proposals
   → human confirmation/rejection
   → confirmed incident events
   → future feature snapshot
@@ -62,7 +63,7 @@ recorded MP4
   → H3 map
 ```
 
-Live RTSP/ONVIF ingestion, a production detector, Reka, and large-scale infrastructure are outside Phase 2.
+Live RTSP/ONVIF ingestion and large-scale infrastructure are outside Phase 2. Reka Vision recorded-video management and analysis are in scope; numeric future forecasting remains the local model's responsibility.
 
 ### Person 1 — Video, data, and platform backend
 
@@ -70,23 +71,25 @@ Live RTSP/ONVIF ingestion, a production detector, Reka, and large-scale infrastr
 
 1. Add Postgres tables and tenant RLS for camera sources, video assets, processing runs, candidates, reviews, confirmed events, coverage snapshots, and future feature snapshots.
 2. Implement recorded-video source registration using `camera-source.schema.json`.
-3. Implement bounded MP4 upload with content-type, file-size, checksum, duration, and retention validation.
-4. Store raw media behind restricted storage references; never expose filesystem/object paths through the public API.
-5. Implement an idempotent processing-job producer and worker with queued, running, completed, failed, cancelled, and retry states.
-6. Implement a `VideoDetector` interface and deterministic fake detector. The fake detector must derive stable candidate IDs from tenant, asset, detector version, and timestamp.
-7. Persist schema-valid candidate detections without identity fields, face embeddings, license plates, or unrestricted frame metadata.
-8. Implement immutable confirm/reject decisions and ensure one detection can have only one final review.
-9. Promote confirmed reviews into exactly one canonical `IncidentEvent`; rejected or expired candidates create no event.
-10. Produce measured processing coverage snapshots. Do not silently use `coverage_ratio = 1.0`.
-11. Generate point-in-time historical features and unlabelled future `forecast-feature-row` records.
-12. Add retention jobs for expired footage and evidence while preserving non-sensitive audit metadata.
+3. Implement bounded MP4 intake with content-type, file-size, checksum, duration, consent, tenant quota, and retention validation.
+4. Implement `RekaVisionProvider` to upload/index approved video, check status, run versioned candidate Q&A/tagging, and delete remote videos. It receives `REKA_API_KEY` from server configuration only.
+5. Persist an opaque tenant/source/asset-to-Reka-video-ID mapping. Never expose Reka video IDs, presigned URLs, filesystem paths, or secret references through the public API.
+6. Implement idempotent Reka upload, indexing, analysis, and deletion jobs with queued, running, completed, failed, cancelled, and retry states.
+7. Validate Reka output into schema-valid candidate detections. Derive stable candidate IDs from tenant, asset, Reka video ID, prompt version, timestamp, and category.
+8. Implement `FakeRekaVisionProvider` only for offline tests and fixture-backed development.
+9. Persist candidates without identity fields, face embeddings, license plates, exact coordinates, or unrestricted frame/transcript metadata.
+10. Implement immutable confirm/reject decisions and ensure one detection can have only one final review.
+11. Promote confirmed reviews into exactly one canonical `IncidentEvent`; rejected or expired candidates create no event.
+12. Produce measured upload/index/analysis availability snapshots. Do not silently use `coverage_ratio = 1.0`.
+13. Generate point-in-time historical features and unlabelled future `forecast-feature-row` records.
+14. Add retention jobs that delete Reka videos/derived assets and local transient files while preserving non-sensitive audit metadata.
 
 #### Deliverables
 
 - Postgres migrations and RLS policies;
-- recorded-video storage adapter;
-- processing queue and worker;
-- deterministic fake detector;
+- Reka Vision provider and tenant-scoped video-ID registry;
+- upload/index/analyze/delete queue and workers;
+- deterministic fake Reka provider for tests;
 - candidate/review/promotion services;
 - coverage calculation;
 - future feature snapshot generator;
@@ -95,47 +98,51 @@ Live RTSP/ONVIF ingestion, a production detector, Reka, and large-scale infrastr
 
 #### Required tests
 
-- invalid type, oversize, corrupt, and checksum-mismatched uploads;
-- duplicate upload and processing-job idempotency;
-- deterministic candidate IDs across retries;
+- invalid type, oversize, corrupt, checksum-mismatched, unapproved, and over-quota uploads;
+- missing/invalid Reka key, access denial, timeout, indexing failure, quota/rate limit, and malformed response;
+- duplicate upload/analysis job idempotency and deterministic candidate IDs across retries;
+- tenant A cannot access tenant B by supplying a known Reka video ID;
+- Reka output containing prompt injection, identity, guilt, or prohibited fields cannot persist;
 - one immutable review per candidate;
 - confirmed review creates exactly one event;
 - rejected/expired review creates no event;
-- tenant A cannot read or mutate tenant B media, candidates, reviews, events, coverage, or features;
-- raw media references and coordinates do not enter feature artifacts or logs;
+- tenant A cannot read or mutate tenant B video mappings, candidates, reviews, events, coverage, or features;
+- `REKA_API_KEY`, Reka video IDs/URLs, raw media references, and coordinates do not enter public APIs, feature artifacts, or logs;
 - future events cannot change earlier features;
 - coverage duration ordering and ratio calculation;
-- retention removes restricted media without corrupting audit records.
+- retention completes Reka deletion and local transient deletion without corrupting audit records; remote failure is retried and monitored.
 
 #### Acceptance criteria
 
-From a clean database, an uploaded synthetic MP4 completes processing, creates deterministic reviewable candidates, promotes one confirmed candidate exactly once, excludes a rejected candidate, records measured coverage, and generates a schema-valid future feature snapshot containing no `event_count` or restricted fields.
+From a clean database, an approved synthetic MP4 is uploaded/indexed through Reka Vision, produces validated reviewable candidates, promotes one confirmed candidate exactly once, excludes a rejected candidate, records measured coverage, and generates a schema-valid future feature snapshot containing no `event_count` or restricted fields. Offline tests demonstrate the same flow through `FakeRekaVisionProvider`.
 
 ### Person 2 — Forecasting, API, and authentication backend
 
 #### Implementation tasks
 
 1. Create the FastAPI application, settings, dependency injection, health/readiness endpoints, typed errors, and request IDs.
-2. Implement development authentication with a replaceable provider interface. Resolve `ServerTenantContext` from authenticated server-side claims.
-3. Enforce `viewer`, `reviewer`, `tenant_admin`, and audited `platform_operator` permissions from the Phase 1 role matrix.
-4. Implement active-tenant switching only among authorized memberships; never accept `tenant_id` as an ordinary query or body authorization field.
-5. Add bounded APIs for source registration/listing, upload initiation/completion, processing status, candidate listing, evidence authorization, review, coverage, forecasts, and model card.
-6. Require idempotency keys on mutation endpoints and emit tenant-scoped audit events.
-7. Implement the future inference service that accepts `forecast-feature-row`, validates `data_as_of < interval_start`, loads the matching tenant model bundle, and produces `forecast.schema.json`.
-8. Keep held-out `prediction.schema.json` evaluation rows out of operational endpoints.
-9. Implement a deterministic historical-rate operational fallback when no approved tenant model is available.
-10. Apply support and coverage suppression. Suppressed forecasts must contain null estimates, a suppressed band, no drivers, and a reason.
-11. Add model/data/feature/calibration versions, generation time, and freshness to every forecast.
-12. For Phase 2, retain the approved existing model if available; begin final-refit, calibration, and temporal-uncertainty work without blocking the recorded vertical slice.
-13. Generate and commit OpenAPI output or a repeatable generation command for Person 3.
-14. Add audit, authorization-denial, latency, forecast-generation, and model-fallback metrics.
+2. Load one `REKA_API_KEY` from server-only configuration and inject it into Reka Vision and Reka Chat providers. Never serialize it or include it in OpenAPI.
+3. Implement development authentication with a replaceable provider interface. Resolve `ServerTenantContext` from authenticated server-side claims.
+4. Enforce `viewer`, `reviewer`, `tenant_admin`, and audited `platform_operator` permissions from the Phase 1 role matrix.
+5. Implement active-tenant switching only among authorized memberships; never accept `tenant_id` as an ordinary query or body authorization field.
+6. Add bounded APIs for source registration/listing, backend-proxied Reka upload/status, candidate listing, authorized evidence/highlight access, review, coverage, forecasts, and model card.
+7. Require idempotency keys on mutation endpoints and emit tenant-scoped audit events for every Reka operation and review.
+8. Implement the future inference service that accepts `forecast-feature-row`, validates `data_as_of < interval_start`, loads the matching tenant model bundle, and produces `forecast.schema.json`.
+9. Keep held-out `prediction.schema.json` evaluation rows out of operational endpoints.
+10. Implement a deterministic historical-rate operational fallback when no approved tenant model is available.
+11. Apply support and coverage suppression. Suppressed forecasts must contain null estimates, a suppressed band, no drivers, and a reason.
+12. Add model/data/feature/calibration versions, generation time, and freshness to every forecast.
+13. For Phase 2, retain the approved existing model if available; begin final-refit, calibration, and temporal-uncertainty work without blocking the recorded vertical slice.
+14. Generate and commit OpenAPI output or a repeatable generation command for Person 3.
+15. Add Reka health/quota/latency/failure, audit, authorization-denial, forecast-generation, and model-fallback metrics.
 
 #### Deliverables
 
 - runnable FastAPI service;
+- server-only shared Reka configuration and provider injection;
 - authentication-provider interface and development provider;
 - tenant-context and role middleware/dependencies;
-- Phase 2 API routes;
+- Phase 2 API routes, including backend-proxied Reka operations;
 - idempotency and audit services;
 - future inference service;
 - historical-rate fallback;
@@ -146,6 +153,7 @@ From a clean database, an uploaded synthetic MP4 completes processing, creates d
 #### Required tests
 
 - missing, invalid, expired, and unauthorized authentication;
+- missing/invalid `REKA_API_KEY`, Vision access denial, quota/rate limit, timeout, and safe degraded states;
 - role matrix for every endpoint;
 - tenant A cannot access tenant B resources even when supplying known IDs;
 - client-supplied tenant IDs are ignored or rejected;
@@ -157,11 +165,12 @@ From a clean database, an uploaded synthetic MP4 completes processing, creates d
 - suppression returns null rather than zero;
 - bbox, date, category, pagination, and result limits are enforced;
 - errors match `api-error.schema.json` without leaking secrets;
+- the API key, Reka video ID, secret refs, and presigned Reka URLs never appear in OpenAPI or unauthorized/browser responses;
 - OpenAPI contract matches committed Phase 1 schemas.
 
 #### Acceptance criteria
 
-An authenticated tenant can complete the recorded-video API workflow and request a future window. The API returns only schema-valid tenant forecasts, uses the historical fallback when necessary, suppresses unsafe outputs correctly, records provenance/audit metadata, and denies every cross-tenant or unauthorized operation.
+An authenticated tenant can complete the backend-proxied Reka Vision workflow and request a future window. The API returns only schema-valid candidates and tenant forecasts, uses the historical fallback when necessary, suppresses unsafe outputs correctly, records Reka/model provenance and audit metadata, never exposes `REKA_API_KEY`, and denies every cross-tenant or unauthorized operation.
 
 ### Person 3 — Frontend product
 
@@ -170,8 +179,8 @@ An authenticated tenant can complete the recorded-video API workflow and request
 1. Create the React/TypeScript application shell, routing, query client, error boundary, accessibility baseline, and reduced-motion policy.
 2. Generate frontend API types from Person 2's OpenAPI output; do not hand-maintain duplicate domain interfaces.
 3. Implement development sign-in, authorized tenant selector, active role display, and forbidden/session-expired states.
-4. Implement recorded-video source onboarding and MP4 upload with validation, progress, cancellation, retry, and retention notice.
-5. Implement processing status with queued/running/completed/failed states without aggressive polling or focus theft.
+4. Implement recorded-video source onboarding and backend upload with validation, progress, cancellation, retry, Reka processing disclosure, and retention notice.
+5. Implement Reka upload/index/analysis status with queued/running/completed/failed states without aggressive polling or focus theft.
 6. Implement the candidate review queue. Clearly label candidates as unconfirmed and restrict evidence/decisions to authorized roles.
 7. Implement confirm/reject controls with duplicate-submission protection and immutable-final-decision feedback.
 8. Build the MapLibre H3 forecast map with category and future-window controls, bounded viewport requests, legend, and selection continuity.
@@ -198,6 +207,7 @@ An authenticated tenant can complete the recorded-video API workflow and request
 - viewer/reviewer/admin controls match the role matrix;
 - upload validation and progress states;
 - failed processing can be retried safely;
+- no browser request, source map, build artifact, or error contains `REKA_API_KEY`;
 - candidate wording never presents a detection as confirmed crime;
 - final review cannot be submitted twice;
 - suppressed forecast is not rendered as low or zero risk;
@@ -216,8 +226,8 @@ A tenant admin can register and upload a recording, a reviewer can confirm or re
 | Checkpoint | Person 1 | Person 2 | Person 3 |
 |---|---|---|---|
 | Contract-ready | confirm storage/worker mappings | confirm API/OpenAPI mappings | confirm generated UI types/fixtures |
-| Backend skeleton | migrations, storage, fake worker | FastAPI, auth, tenant context | fixture-backed shell and flows |
-| First vertical API | upload → candidates → review | routes, audit, future fallback | connect upload and review |
+| Backend skeleton | migrations, Reka provider, offline fake | FastAPI, auth, tenant context, key injection | fixture-backed shell and flows |
+| First vertical API | Reka upload/index/analyze → candidates → review | proxy routes, audit, future fallback | connect upload and review |
 | Forecast integration | future feature snapshot | forecast generation and query | connect map and details |
 | Hardening | retries, coverage, retention | isolation, limits, typed errors | accessibility, errors, tenant cache |
 | Completion | worker/data tests pass | API/model tests pass | Playwright flow passes |
@@ -228,7 +238,7 @@ The following flow passes from a clean checkout with two tenants:
 
 1. authenticate as tenant A admin;
 2. register a recorded-video source and upload the synthetic MP4;
-3. wait for deterministic processing to complete;
+3. wait for Reka upload, indexing, and candidate analysis to complete (offline fake in automated tests);
 4. authenticate as tenant A reviewer and confirm one candidate while rejecting another;
 5. verify exactly one confirmed incident is promoted;
 6. generate a future feature snapshot with measured coverage;

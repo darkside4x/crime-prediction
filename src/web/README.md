@@ -25,3 +25,9 @@ Structure:
 - `components/RiskMap.tsx` — MapLibre H3 choropleth with suppression styling
 - `components/CellDetails.tsx` — risk, uncertainty, trend bars, drivers
 - `components/Copilot.tsx` — grounded AI panel with citations and refusal states
+
+## Reka boundary
+
+The browser never calls Reka directly. Recorded video is uploaded to the tenant-authenticated FastAPI service, which uses the server-only `REKA_API_KEY` for Reka Vision upload/index/search/Q&A/tagging/highlights. The UI displays safe processing status and reviewed candidate records; it must not receive the key, opaque Reka video IDs, presigned Reka URLs, or secret references.
+
+Numeric future H3 forecasts come from the local forecasting API. Reka-proposed candidates, human-confirmed incidents, and future forecasts must remain visually and textually distinct.

@@ -11,7 +11,7 @@ It does not identify people, decide guilt, predict individual behaviour, expose 
 3. [Architecture](docs/ARCHITECTURE.md) — target system and privacy boundaries
 4. [Team plan](docs/TEAM_PLAN.md) — one frontend and two backend owners
 5. [Research evidence matrix](docs/PAPER_MATRIX.md) — dataset/model evidence status
-6. [Reka boundary](docs/REKA_AI.md) — deferred language interface, outside numeric prediction
+6. [Reka AI and Vision](docs/REKA_AI.md) — managed video intelligence and grounded forecast explanations
 
 Repository instructions are in [AGENTS.md](AGENTS.md).
 
@@ -24,16 +24,18 @@ Implemented today:
 - restricted coordinate-to-H3 aggregation;
 - point-in-time historical feature generation;
 - historical-rate, previous-period, regularized Poisson, and LightGBM candidates;
-- chronological evaluation and versioned model artifacts.
+- chronological evaluation and versioned model artifacts;
+- fixture-backed FastAPI risk/model/copilot endpoints with demo tenant isolation;
+- a fixture-backed React/MapLibre dashboard and Docker demo setup.
 
 Contracted but not yet implemented:
 
-- MP4 upload and live RTSP/ONVIF ingestion;
-- candidate detection and human review;
+- backend-proxied Reka Vision upload/index/search/Q&A/tagging/highlights;
+- Reka-proposed candidate detection and human review;
 - measured source coverage;
 - future feature snapshots and operational inference;
-- FastAPI authentication/authorization endpoints;
-- React/MapLibre product UI;
+- production authentication/authorization, upload/review, and operational forecast endpoints;
+- recorded-video onboarding/review screens connected to the real APIs;
 - Postgres/RLS, durable workers, monitoring, and drift checks.
 
 Synthetic fixtures are interface examples, not real crime patterns or measured model performance.
@@ -42,7 +44,8 @@ Synthetic fixtures are interface examples, not real crime patterns or measured m
 
 ```text
 recorded MP4
-  -> candidate detections
+  -> FastAPI -> Reka Vision upload/index/analysis
+  -> validated candidate detections
   -> reviewer confirms/rejects
   -> confirmed aggregate incident history
   -> future six-hour H3 features
@@ -51,3 +54,5 @@ recorded MP4
 ```
 
 The forecasting model requires a separately approved historical incident dataset. One uploaded video is not sufficient training history.
+
+The backend uses one secret named `REKA_API_KEY` for Reka Vision and Reka Chat. It must never be placed in frontend/Vite configuration or committed to Git. Reka handles managed video intelligence; the reproducible local model still calculates numeric future H3 forecasts.

@@ -10,7 +10,7 @@ Every schema has a synthetic fixture with the same basename under `contracts/fix
 |---|---|---|
 | `camera-source.schema.json` | restricted | recorded/live tenant source with secret location/connection references |
 | `video-asset.schema.json` | restricted | uploaded recording or live segment metadata and retention |
-| `candidate-detection.schema.json` | reviewer-only | unconfirmed detector candidate and expiring evidence reference |
+| `candidate-detection.schema.json` | reviewer-only | unconfirmed Reka Vision candidate and expiring evidence reference |
 | `candidate-review.schema.json` | restricted audit | immutable confirmation/rejection decision |
 | `coverage-snapshot.schema.json` | aggregate/public-safe after authorization | measured source availability for one interval |
 | `incident-event.schema.json` | restricted | confirmed canonical event envelope |
@@ -44,7 +44,8 @@ Every schema has a synthetic fixture with the same basename under `contracts/fix
 - Only confirmed review decisions promote candidate detections to incident events.
 - Historical feature rows have labels; future forecast feature rows never do.
 - Suppressed operational forecasts use null estimates, a `suppressed` band, and no drivers.
-- Reka receives only approved aggregate facts and never calculates forecast values.
+- Reka Vision may receive tenant-approved video and produce unconfirmed candidates; it never receives exact coordinates, event IDs, credentials, secret references, or cross-tenant context.
+- Reka Chat receives only approved aggregate forecast facts and never calculates forecast values.
 
 ## Versioning and changes
 
@@ -64,5 +65,6 @@ Every schema has a synthetic fixture with the same basename under `contracts/fix
 - Added an operational forecast contract distinct from held-out evaluation predictions.
 - Defined server tenant context, product roles, and typed API errors.
 - Defined suppression as null/unavailable rather than numeric zero risk.
+- Selected Reka Vision as the managed video upload/index/search/Q&A/tagging/highlight and candidate-proposal layer, using the server-only shared `REKA_API_KEY`; numeric future forecasts remain local and deterministic.
 
 Status remains implementation target until the required teammate review is recorded.

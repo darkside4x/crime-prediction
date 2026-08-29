@@ -1,5 +1,7 @@
 # Demo path (Person 3)
 
+This file distinguishes the currently committed fixture-backed dashboard from the Phase 2 Reka Vision recorded-video flow.
+
 The dashboard works from a clean checkout without Reka and without real model
 output: predictions are deterministic fixtures that satisfy the frozen
 prediction contract. Swapping in Person 2's exported Parquet only replaces
@@ -61,8 +63,26 @@ cd src/web && npm run build       # typecheck + production build
 
 ## Reka
 
-The demo uses a deterministic fake provider so it runs with no key. With a
-server-side `REKA_API_KEY` a real provider can be dropped into
-`src/api/reka.py` behind the same `RekaProvider` protocol; every response is
-schema-validated and uncited claims are discarded, falling back to
-deterministic facts on any failure.
+The currently committed copilot uses a deterministic fake provider so the basic map demo runs offline. Phase 2 adds real Reka Vision video management and analysis behind FastAPI.
+
+One server-side secret is used for both capabilities:
+
+```text
+REKA_API_KEY=<secret from the Reka platform>
+```
+
+There is no separate `REKA_VISION_API_KEY` in this repository. Do not add the key to Vite, React, browser storage, committed Compose files, fixtures, or logs.
+
+The Phase 2 video demo is:
+
+1. tenant admin uploads an approved MP4 to FastAPI;
+2. FastAPI calls Reka Vision upload with indexing enabled;
+3. the UI shows upload/index/analysis status without exposing the Reka video ID;
+4. Reka Q&A/tagging returns structured candidate proposals;
+5. schema-invalid or prohibited output fails safely;
+6. a human reviewer confirms one candidate and rejects another;
+7. only the confirmed candidate becomes an incident event;
+8. the local deterministic model creates the future aggregate forecast;
+9. Reka Chat may explain supplied aggregate facts but never creates the numeric risk score.
+
+Automated tests use fake Reka Vision/Chat providers and make no network calls. A separate opt-in deployment check may validate the real key, upload/index a tiny consented fixture, and delete it afterward.
