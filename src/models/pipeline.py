@@ -11,7 +11,6 @@ from typing import Any, Callable
 
 import numpy as np
 
-from .calibration import ProbabilityCalibrator, ResidualInterval
 from .config import ModelConfig
 from .contracts import REPOSITORY_ROOT, validate_contract
 from .data import load_rows, target_vector, validate_rows
@@ -26,8 +25,8 @@ from .estimators import (
 from .facts import build_fact_bundle
 from .metrics import (
     bootstrap_interval,
+    calibration_table,
     count_metrics,
-    probability_calibration_table,
     sliced_metrics,
 )
 from .provenance import (
@@ -264,16 +263,13 @@ def _evaluation_report(
         report_metrics.extend(_metric_entries(name, "test", values, confidence))
 
     validation_expected = selected_model.predict(split.validation)
-    calibrator = ProbabilityCalibrator(config.calibration_bins).fit(
-        target_vector(split.validation, config.target), validation_expected
-    )
     calibration_entries = []
     for split_name, rows, expected in (
         ("validation", split.validation, validation_expected),
         ("test", split.test, selected_prediction),
     ):
-        for entry in probability_calibration_table(
-            target_vector(rows, config.target), calibrator.predict(expected), config.calibration_bins
+        for entry in calibration_table(
+            target_vector(rows, config.target), expected, config.calibration_bins
         ):
             calibration_entries.append(
                 {
@@ -351,7 +347,7 @@ def _evaluation_report(
         ],
     }
     validate_contract("evaluation-report", report)
-    return report, selected_prediction, calibrator.predict(selected_prediction)
+    return report, selected_prediction, 1.0 - np.exp(-np.maximum(selected_prediction, 0.0))
 
 
 def _model_card(
@@ -403,7 +399,7 @@ def _model_card(
             "Treating model drivers as causes or forecasts as observed ground truth.",
         ],
         "limitations": list(report["limitations"]),
-        "uncertainty_method": "A 90% interval is formed from the 5th and 95th percentiles of chronological validation residuals and clipped at zero.",
+        "uncertainty_method": "A model-implied approximate 90% Poisson interval is computed as expected count plus or minus 1.645 square roots of the expected count and clipped at zero.",
         "suppression_policy": f"Cell/category outputs with fewer than {config.min_training_events_to_publish} training events are marked suppressed and expose zeroed public fields; Reka facts expose null.",
         "feature_interpretation": "Feature drivers indicate the direction of model association for an aggregate row and must never be described as causal.",
         "human_review_required": True,
@@ -459,11 +455,9 @@ def _export_tenant(
         split=split,
         config=config,
     )
-    validation_expected = selected_model.predict(split.validation)
-    residual_interval = ResidualInterval().fit(
-        target_vector(split.validation, config.target), validation_expected
-    )
-    lower, upper = residual_interval.predict(test_expected)
+    poisson_scale = np.sqrt(np.maximum(test_expected, 0.0))
+    lower = np.maximum(test_expected - 1.645 * poisson_scale, 0.0)
+    upper = np.maximum(test_expected + 1.645 * poisson_scale, 0.0)
     predictions = _prediction_rows(
         rows=split.test,
         expected=test_expected,
@@ -502,16 +496,7 @@ def _export_tenant(
         serializer = "lightgbm_text"
     else:
         payload_path = destination / "parameters.json"
-        write_json(
-            payload_path,
-            {
-                "estimator": parameters,
-                "probability_calibration": ProbabilityCalibrator(config.calibration_bins)
-                .fit(target_vector(split.validation, config.target), validation_expected)
-                .to_dict(),
-                "uncertainty": residual_interval.to_dict(),
-            },
-        )
+        write_json(payload_path, {"estimator": parameters})
     requirements_path = REPOSITORY_ROOT / "configs" / "model" / "requirements.txt"
     model_bundle = {
         "schema_version": "1.0.0",

@@ -71,10 +71,10 @@ def build_fact_bundle(
         ),
         (
             "predictions:mean_risk",
-            "Mean calibrated risk across published aggregates",
+            "Mean model-implied risk across published aggregates",
             (sum(row["risk"] for row in visible) / len(visible)) if visible else None,
             "probability",
-            "Arithmetic mean of already-computed calibrated risk over published aggregate rows; this is not a new risk score.",
+            "Arithmetic mean of already-computed model-implied risk over published aggregate rows; this is not a new risk score.",
             not visible,
         ),
     )

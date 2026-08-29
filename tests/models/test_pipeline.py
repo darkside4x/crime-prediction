@@ -4,13 +4,15 @@ import json
 from pathlib import Path
 from dataclasses import replace
 
+import numpy as np
 import pyarrow.parquet as pq
 import pytest
 
+from src.models.bundle import load_estimator
 from src.models.contracts import validate_contract
 from src.models.errors import DataContractError
 from src.models.config import ModelConfig
-from src.models.data import validate_rows
+from src.models.data import load_rows, validate_rows
 from src.models.pipeline import _select_model, _train_and_compare, run_evaluation
 from src.models.split import chronological_split
 from tests.models.helpers import TENANTS, synthetic_rows, write_feature_manifest, write_test_config
@@ -30,6 +32,7 @@ def test_two_tenant_pipeline_exports_isolated_schema_valid_artifacts(tmp_path: P
         output_root=output,
     )
     assert {result["tenant_id"] for result in results} == set(TENANTS)
+    model_config = ModelConfig.from_path(config)
     fact_ids_by_tenant = {}
     for result in results:
         tenant_id = result["tenant_id"]
@@ -53,6 +56,13 @@ def test_two_tenant_pipeline_exports_isolated_schema_valid_artifacts(tmp_path: P
         for row in rows:
             validate_contract("prediction", row)
             assert not {"latitude", "longitude", "external_event_id"}.intersection(row)
+        input_rows = validate_rows(load_rows(run_manifest["input"]["path"]), model_config)
+        test_rows = chronological_split(input_rows, model_config).test
+        loaded = load_estimator(bundle, bundle["payload"]["path"], model_config)
+        reproduced = loaded.predict(test_rows)
+        for index, row in enumerate(rows):
+            if not row["suppressed"]:
+                assert np.isclose(row["expected_count"], reproduced[index])
     assert fact_ids_by_tenant[TENANTS[0]].isdisjoint(fact_ids_by_tenant[TENANTS[1]])
 
 
@@ -114,6 +124,6 @@ def test_low_support_predictions_and_reka_facts_are_suppressed(tmp_path: Path) -
     assert all(row["suppressed"] for row in predictions)
     assert all(row["risk"] == 0 and row["expected_count"] == 0 for row in predictions)
     facts = _load(root / "reka-facts.json")
-    mean_risk = next(fact for fact in facts["facts"] if fact["label"].startswith("Mean calibrated risk"))
+    mean_risk = next(fact for fact in facts["facts"] if fact["label"].startswith("Mean model-implied risk"))
     assert mean_risk["suppressed"] is True
     assert mean_risk["value"] is None

@@ -197,6 +197,7 @@ class LightGBMEstimator:
     def __init__(self, config: ModelConfig) -> None:
         self.config = config
         self.model = None
+        self.booster = None
 
     def fit(self, rows: list[dict]) -> "LightGBMEstimator":
         try:
@@ -220,19 +221,20 @@ class LightGBMEstimator:
             design_matrix(rows, self.config.features),
             target_vector(rows, self.config.target),
         )
+        self.booster = self.model.booster_
         return self
 
     def predict(self, rows: list[dict]) -> np.ndarray:
-        if self.model is None:
+        if self.booster is None:
             raise RuntimeError("Estimator must be fitted before prediction")
         return np.maximum(
-            self.model.booster_.predict(design_matrix(rows, self.config.features)), 0.0
+            self.booster.predict(design_matrix(rows, self.config.features)), 0.0
         )
 
     def drivers(self, row: dict, limit: int = 5) -> list[dict[str, str]]:
-        if self.model is None:
+        if self.booster is None:
             raise RuntimeError("Estimator must be fitted before prediction")
-        contributions = self.model.booster_.predict(
+        contributions = self.booster.predict(
             design_matrix([row], self.config.features), pred_contrib=True
         )[0][:-1]
         order = np.argsort(np.abs(contributions))[::-1][:limit]
@@ -246,11 +248,11 @@ class LightGBMEstimator:
         ]
 
     def to_bundle(self) -> dict:
-        if self.model is None:
+        if self.booster is None:
             raise RuntimeError("Estimator must be fitted before serialization")
         return {
             "estimator": self.name,
             "target": self.config.target,
             "features": list(self.config.features),
-            "lightgbm_model": self.model.booster_.model_to_string(),
+            "lightgbm_model": self.booster.model_to_string(),
         }
