@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://crime-hotspot.local/schemas/incident-event.schema.json",
+  "title": "IncidentEvent",
+  "description": "Restricted internal ingestion envelope. Never expose through the public API.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "tenant_id", "source_id", "external_event_id", "occurred_at", "received_at", "category", "location"],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "tenant_id": {"type": "string", "format": "uuid"},
+    "source_id": {"type": "string", "format": "uuid"},
+    "external_event_id": {"type": "string", "minLength": 1, "maxLength": 256},
+    "occurred_at": {"type": "string", "format": "date-time"},
+    "received_at": {"type": "string", "format": "date-time"},
+    "category": {"type": "string", "minLength": 1, "maxLength": 80},
+    "location": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["latitude", "longitude"],
+      "properties": {
+        "latitude": {"type": "number", "minimum": -90, "maximum": 90},
+        "longitude": {"type": "number", "minimum": -180, "maximum": 180},
+        "accuracy_meters": {"type": "number", "minimum": 0}
+      }
+    },
+    "source_sequence": {"type": ["integer", "string"]},
+    "attributes": {
+      "type": "object",
+      "description": "Allowlisted non-personal source fields only; adapters must drop unknown sensitive fields.",
+      "additionalProperties": {"type": ["string", "number", "boolean", "null"]},
+      "maxProperties": 20
+    }
+  }
+}

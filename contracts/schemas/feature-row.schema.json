@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://crime-hotspot.local/schemas/feature-row.schema.json",
+  "title": "FeatureRow",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "tenant_id", "cell_id", "interval_start", "category", "event_count", "lag_1", "lag_2", "rolling_7_mean", "hour_sin", "hour_cos", "day_of_week_sin", "day_of_week_cos", "coverage_ratio", "data_as_of"],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "tenant_id": {"type": "string", "format": "uuid"},
+    "cell_id": {"type": "string", "pattern": "^[0-9a-f]{15}$"},
+    "interval_start": {"type": "string", "format": "date-time"},
+    "category": {"type": "string", "minLength": 1, "maxLength": 80},
+    "event_count": {"type": "integer", "minimum": 0},
+    "lag_1": {"type": "integer", "minimum": 0},
+    "lag_2": {"type": "integer", "minimum": 0},
+    "lag_7": {"type": "integer", "minimum": 0},
+    "lag_14": {"type": "integer", "minimum": 0},
+    "rolling_7_mean": {"type": "number", "minimum": 0},
+    "rolling_14_mean": {"type": "number", "minimum": 0},
+    "neighbor_lag_1": {"type": "number", "minimum": 0},
+    "recent_trend": {"type": "number"},
+    "hour_sin": {"type": "number", "minimum": -1, "maximum": 1},
+    "hour_cos": {"type": "number", "minimum": -1, "maximum": 1},
+    "day_of_week_sin": {"type": "number", "minimum": -1, "maximum": 1},
+    "day_of_week_cos": {"type": "number", "minimum": -1, "maximum": 1},
+    "coverage_ratio": {"type": "number", "minimum": 0, "maximum": 1},
+    "data_as_of": {"type": "string", "format": "date-time"}
+  }
+}

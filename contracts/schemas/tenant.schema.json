@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://crime-hotspot.local/schemas/tenant.schema.json",
+  "title": "Tenant",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "tenant_id", "slug", "display_name", "status", "created_at"],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "tenant_id": {"type": "string", "format": "uuid"},
+    "slug": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$"},
+    "display_name": {"type": "string", "minLength": 1, "maxLength": 120},
+    "status": {"enum": ["active", "suspended", "archived"]},
+    "default_timezone": {"type": "string", "default": "UTC"},
+    "created_at": {"type": "string", "format": "date-time"}
+  }
+}

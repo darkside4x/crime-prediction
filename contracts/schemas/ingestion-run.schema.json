@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://crime-hotspot.local/schemas/ingestion-run.schema.json",
+  "title": "IngestionRun",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "tenant_id", "source_id", "run_id", "mode", "status", "accepted_count", "duplicate_count", "rejected_count", "started_at"],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "tenant_id": {"type": "string", "format": "uuid"},
+    "source_id": {"type": "string", "format": "uuid"},
+    "run_id": {"type": "string", "format": "uuid"},
+    "mode": {"enum": ["recorded_replay", "live"]},
+    "status": {"enum": ["queued", "running", "paused", "completed", "failed", "cancelled"]},
+    "checkpoint": {"type": ["string", "integer", "null"]},
+    "accepted_count": {"type": "integer", "minimum": 0},
+    "duplicate_count": {"type": "integer", "minimum": 0},
+    "rejected_count": {"type": "integer", "minimum": 0},
+    "last_received_at": {"type": ["string", "null"], "format": "date-time"},
+    "last_event_at": {"type": ["string", "null"], "format": "date-time"},
+    "last_error_code": {"type": ["string", "null"], "maxLength": 80},
+    "started_at": {"type": "string", "format": "date-time"},
+    "finished_at": {"type": ["string", "null"], "format": "date-time"}
+  }
+}

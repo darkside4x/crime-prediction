@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://crime-hotspot.local/schemas/prediction.schema.json",
+  "title": "AggregatePrediction",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "tenant_id", "cell_id", "window_start", "window_end", "category", "risk", "risk_band", "expected_count", "uncertainty", "drivers", "model_version", "data_as_of"],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "tenant_id": {"type": "string", "format": "uuid"},
+    "cell_id": {"type": "string", "pattern": "^[0-9a-f]{15}$"},
+    "window_start": {"type": "string", "format": "date-time"},
+    "window_end": {"type": "string", "format": "date-time"},
+    "category": {"type": "string", "minLength": 1, "maxLength": 80},
+    "risk": {"type": "number", "minimum": 0, "maximum": 1},
+    "risk_band": {"enum": ["low", "typical", "elevated", "high"]},
+    "expected_count": {"type": "number", "minimum": 0},
+    "uncertainty": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["lower", "upper"],
+      "properties": {
+        "lower": {"type": "number", "minimum": 0},
+        "upper": {"type": "number", "minimum": 0}
+      }
+    },
+    "drivers": {
+      "type": "array",
+      "maxItems": 5,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["feature", "direction"],
+        "properties": {
+          "feature": {"type": "string", "minLength": 1, "maxLength": 100},
+          "direction": {"enum": ["higher", "lower"]}
+        }
+      }
+    },
+    "model_version": {"type": "string", "minLength": 1, "maxLength": 128},
+    "data_as_of": {"type": "string", "format": "date-time"},
+    "suppressed": {"type": "boolean", "default": false}
+  }
+}

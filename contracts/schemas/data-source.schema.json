@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://crime-hotspot.local/schemas/data-source.schema.json",
+  "title": "DataSource",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "tenant_id", "source_id", "name", "kind", "status", "config", "created_at"],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "tenant_id": {"type": "string", "format": "uuid"},
+    "source_id": {"type": "string", "format": "uuid"},
+    "name": {"type": "string", "minLength": 1, "maxLength": 120},
+    "kind": {"enum": ["recorded_replay", "webhook", "kafka", "mqtt"]},
+    "status": {"enum": ["draft", "validating", "active", "degraded", "paused", "archived"]},
+    "secret_ref": {"type": "string", "minLength": 1, "maxLength": 256},
+    "config": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "format": {"enum": ["jsonl", "csv", "json"]},
+        "location_ref": {"type": "string", "maxLength": 512},
+        "replay_speed": {"type": "number", "exclusiveMinimum": 0, "maximum": 1000},
+        "loop": {"type": "boolean", "default": false},
+        "timezone": {"type": "string", "default": "UTC"},
+        "topic": {"type": "string", "maxLength": 249},
+        "endpoint": {"type": "string", "format": "uri"}
+      }
+    },
+    "created_at": {"type": "string", "format": "date-time"},
+    "updated_at": {"type": "string", "format": "date-time"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"kind": {"const": "recorded_replay"}}},
+      "then": {"properties": {"config": {"required": ["format", "location_ref"]}}}
+    },
+    {
+      "if": {"properties": {"kind": {"enum": ["webhook", "kafka", "mqtt"]}}},
+      "then": {"required": ["secret_ref"]}
+    }
+  ]
+}
