@@ -34,12 +34,14 @@ Implemented today:
 - tenant-prefixed S3/KMS media storage, ClamAV scanning and retention deletion;
 - secret-backed bounded HLS/RTSP/ONVIF segmentation with backpressure;
 - measured source coverage propagated into future forecast rows;
+- bounded allowlisted public-HLS capture into restricted `live_segment` MP4 assets;
+- backend-proxied Reka Vision upload/index/candidate analysis with strict output validation;
+- tenant-scoped candidate listing and immutable human confirmation/rejection;
 - a fixture-backed React/MapLibre dashboard and Docker demo setup.
 
 Contracted but not yet implemented:
 
-- backend-proxied Reka Vision upload/index/search/Q&A/tagging/highlights;
-- Reka-proposed candidate detection and human review;
+- Reka Vision video search, tagging and highlight generation;
 - future feature snapshot generation and an approved calibrated-model registry;
 - production identity-provider integration and FastAPI media upload/worker wiring;
 - recorded-video onboarding/review screens connected to the real APIs;

@@ -2,6 +2,7 @@ import { useRef, useState, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, ApiError, newIdempotencyKey } from "../api/client";
 import { useAuth } from "./AuthContext";
+import NearLiveReview from "../components/NearLiveReview";
 
 const MAX_UPLOAD_BYTES = 512 * 1024 * 1024;
 
@@ -201,6 +202,7 @@ export default function SourcesView() {
           )}
         </div>
       </div>
+      <NearLiveReview />
     </section>
   );
 }

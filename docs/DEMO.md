@@ -14,6 +14,11 @@ docker compose up --build
 # dashboard: http://localhost:8080
 ```
 
+The near-live workflow requires `ffmpeg` in the API container/host and a
+server-side `REKA_API_KEY`. Without the key, the application still captures the
+real public segment but clearly labels candidate analysis as deterministic test
+output.
+
 ## Local development
 
 ```bash
@@ -48,7 +53,12 @@ cd src/web && pnpm build           # typecheck + production build
 
 ## 3-minute presentation script
 
-1. Scroll the landing page: framing (aggregate risk, human review) and pipeline.
+1. Open **CCTV review** and click **Capture 20 seconds**. Point out the custody
+   rail: HLS capture → bounded MP4 → Reka upload/index → schema validation →
+   human review. The source URL is server-allowlisted and never supplied by the browser.
+2. Confirm or reject an unconfirmed candidate. Reka confidence is explicitly
+   not presented as probability that a crime occurred.
+3. Scroll the landing page: framing (aggregate risk, human review) and pipeline.
 2. Pick a forecast window and category; the H3 risk surface updates.
 3. Click a hot cell: risk, band, uncertainty interval, 14-day trend, drivers
    ("associations, not causes").
@@ -59,7 +69,31 @@ cd src/web && pnpm build           # typecheck + production build
 7. Ask the copilot "How did the model do on the test window?" — cited fact IDs,
    data freshness, model version. Then ask "Which person will commit a crime?"
    — refusal with `unsafe_request`.
-8. Close on the footer: forecasts, not verdicts.
+10. Close on the footer: forecasts, not verdicts.
+
+## Near-live API check
+
+Start the services, configure `REKA_API_KEY` in `.env`, then run:
+
+```bash
+curl -sS -X POST http://localhost:8000/v1/demo/near-live-cctv/captures \
+  -H 'Authorization: Bearer demo-token-one' \
+  -H 'Idempotency-Key: near-live-demo-0001' \
+  -H 'Content-Type: application/json' \
+  -d '{"source_key":"louisiana-dot-i20","duration_seconds":20}'
+```
+
+Poll the returned run ID:
+
+```bash
+curl -sS http://localhost:8000/v1/ingestion/runs/REPLACE_RUN_ID \
+  -H 'Authorization: Bearer demo-token-one'
+```
+
+The fixed demo feed is a public LADOTD/511 Louisiana HLS camera. Availability
+is outside this application's control. Public reachability does not grant a
+general redistribution licence: keep the segment restricted, attribute the
+source, apply the one-day demo retention policy, and do not publish raw footage.
 
 ## Reka
 
@@ -85,4 +119,6 @@ The Phase 2 video demo is:
 8. the local deterministic model creates the future aggregate forecast;
 9. Reka Chat may explain supplied aggregate facts but never creates the numeric risk score.
 
-Automated tests use fake Reka Vision/Chat providers and make no network calls. A separate opt-in deployment check may validate the real key, upload/index a tiny consented fixture, and delete it afterward.
+Automated tests use fake HLS capture and fake Reka Vision/Chat providers and
+make no network calls. The real demo uses the same services with the allowlisted
+HLS adapter and server-only Reka key.

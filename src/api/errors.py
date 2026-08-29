@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 
 from src.models.contracts import validate_contract
 from src.models.errors import DataContractError
+from src.data.video.errors import VideoPipelineError
 
 
 def problem(
@@ -105,5 +106,30 @@ def install_error_handlers(app: FastAPI) -> None:
                     "details": [],
                 },
                 422,
+            ),
+        )
+
+    @app.exception_handler(VideoPipelineError)
+    async def video_pipeline_error(request: Request, error: VideoPipelineError) -> JSONResponse:
+        status = {
+            "resource_not_found": 404,
+            "asset_not_found": 404,
+            "candidate_expired": 409,
+            "review_already_final": 409,
+            "review_forbidden": 403,
+            "reka_access_denied": 503,
+            "reka_key_missing": 503,
+        }.get(error.code, 503 if error.retryable else 422)
+        return JSONResponse(
+            status_code=status,
+            content=_payload(
+                request,
+                {
+                    "code": error.code,
+                    "message": str(error),
+                    "retryable": error.retryable,
+                    "details": [],
+                },
+                status,
             ),
         )

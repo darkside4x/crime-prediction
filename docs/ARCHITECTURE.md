@@ -14,8 +14,8 @@ The canonical integration semantics are in `docs/PHASE1_CONTRACTS.md`; JSON Sche
 ## End-to-end system
 
 ```text
-        Recorded MP4                         Tenant-owned live camera
-             |                                  RTSP / ONVIF at edge
+        Recorded MP4                   Tenant-owned or approved live camera
+             |                         RTSP / ONVIF at edge; allowlisted HLS demo
              +-------------------+----------------------+
                                  v
                     Restricted media and source layer

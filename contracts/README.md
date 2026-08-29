@@ -58,10 +58,15 @@ Every schema has a synthetic fixture with the same basename under `contracts/fix
 
 ## Changelog
 
-### 2026-08-30 — Live HLS transport
+### 2026-08-30 — allowlisted near-live HLS demo transport
 
-- Added `hls` as an explicit live-camera transport alongside RTSP and ONVIF.
-- Live endpoints and credentials remain restricted `secret://` references.
+- Added `hls` as an explicit live-camera transport. Public HLS sources require a
+  restricted `endpoint_ref`; RTSP and ONVIF continue to require both endpoint
+  and credential references.
+- Browser clients cannot supply HLS URLs. The demo adapter resolves only a
+  server allowlist and emits bounded `live_segment` assets through the same
+  Reka Vision and candidate-review boundary as recorded uploads.
+- Shared-contract review is still required before this addition is frozen.
 
 ### 2026-08-29 — Phase 1 implementation target
 

@@ -64,7 +64,10 @@ Recorded upload or tenant-owned live camera
 ### Camera and footage
 
 - `camera-source.schema.json` registers `recorded_video` or `live_camera` sources. Exact locations and endpoints use `secret://` references.
-- Recorded sources accept uploaded assets. Live sources use HLS, RTSP, or ONVIF through secret endpoint and credential references.
+- Recorded sources accept uploaded assets. Live sources use RTSP, ONVIF, or an
+  allowlisted public HLS endpoint through secret references. RTSP/ONVIF require
+  credential references; public HLS sources do not. Browsers never supply raw
+  stream URLs.
 - `video-asset.schema.json` is restricted metadata for an uploaded file or live segment. Its restricted storage reference resolves to the tenant-mapped Reka `video_id`; the public API never returns it. The maximum contract size is 10 GiB; Reka/account/runtime quotas may be lower.
 - Raw media is never stored in Git, logs, analytics exports, model artifacts, or public APIs.
 - Only tenant-owned, lawfully obtained, explicitly approved video may be uploaded to Reka Vision. Reka deletion is part of the retention workflow.

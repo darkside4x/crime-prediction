@@ -68,6 +68,22 @@ export interface CopilotInsight {
   refusal_code: string;
 }
 
+export interface NearLiveRun {
+  run_id: string;
+  state: "queued" | "running" | "completed" | "failed";
+  stage: string;
+  label: "near-live CCTV segment" | "recorded video upload";
+  source_name?: string;
+  source_attribution?: string;
+  capture_seconds?: number;
+  asset_id?: string;
+  candidate_count?: number;
+  error_code?: string;
+  analysis_mode: "reka_vision" | "deterministic_fake";
+  created_at: string;
+  updated_at: string;
+}
+
 export type PublicCandidate = Omit<RestrictedCandidateDetection, "evidence_ref"> & {
   evidence_available: boolean;
 };
@@ -157,7 +173,16 @@ export const api = {
       idempotencyKey,
     }),
   ingestionRun: (token: string, runId: string) =>
-    request<unknown>(`/v1/ingestion/runs/${encodeURIComponent(runId)}`, token),
+    request<NearLiveRun>(`/v1/ingestion/runs/${encodeURIComponent(runId)}`, token),
+  startNearLiveCapture: (token: string, durationSeconds = 20) =>
+    request<NearLiveRun>("/v1/demo/near-live-cctv/captures", token, {
+      method: "POST",
+      body: JSON.stringify({
+        source_key: "louisiana-dot-i20",
+        duration_seconds: durationSeconds,
+      }),
+      idempotencyKey: newIdempotencyKey(),
+    }),
   coverage: (token: string) =>
     request<{ items: SourceCoverageSnapshot[] }>("/v1/coverage", token),
   candidates: (token: string, limit = 50) =>

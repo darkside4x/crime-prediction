@@ -8,15 +8,27 @@ import json
 import math
 from pathlib import Path
 from typing import Any, Callable, Literal
+import shutil
+import threading
+import time
 import uuid
 
-from fastapi import Depends, FastAPI, Header, Query, Request
+from fastapi import Depends, FastAPI, File, Form, Header, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field
 
 from src.models.contracts import validate_contract
 from src.models.data import parse_utc
 from src.models.operational import ForecastService
+from src.data.store import IngestionStore
+from src.data.video import (
+    FakeRekaVisionProvider,
+    FfmpegHlsCapture,
+    RekaVisionProvider,
+    VideoPipelineService,
+    VideoStore,
+)
+from src.data.video.errors import VideoPipelineError
 
 from . import demo_data, reka
 from .errors import install_error_handlers, problem
@@ -41,6 +53,8 @@ LIMITATIONS = [
     "Drivers are associations, not causes; human interpretation is required.",
 ]
 CATEGORIES = ("property", "violence", "public_order", "traffic_safety")
+DEMO_HLS_SOURCE_ID = "20000000-0000-4000-8000-000000000099"
+DEMO_HLS_LOCATION_REF = "secret://demo-public-hls/louisiana-dot-i20/location"
 
 
 class RecordedSourceCreate(BaseModel):
@@ -73,6 +87,44 @@ class CopilotMessage(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     question: str = Field(min_length=1, max_length=2000)
+
+
+class NearLiveCaptureRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source_key: Literal["louisiana-dot-i20"] = "louisiana-dot-i20"
+    duration_seconds: int | None = Field(default=None, ge=5, le=60)
+
+
+class _DemoLocationResolver:
+    """Restricted demo coordinates; values never cross the public API boundary."""
+
+    def resolve(self, tenant_id: str, location_ref: str) -> dict[str, float]:
+        if location_ref != DEMO_HLS_LOCATION_REF:
+            raise VideoPipelineError("location_unavailable", "Source location could not be resolved")
+        return {"latitude": 32.46091, "longitude": -93.831}
+
+
+def _public_run(run: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: run.get(key)
+        for key in (
+            "run_id",
+            "state",
+            "stage",
+            "label",
+            "source_name",
+            "source_attribution",
+            "capture_seconds",
+            "asset_id",
+            "candidate_count",
+            "error_code",
+            "analysis_mode",
+            "created_at",
+            "updated_at",
+        )
+        if run.get(key) is not None
+    }
 
 
 def _load_fixture(name: str) -> dict[str, Any]:
@@ -176,6 +228,8 @@ def create_app(
     auth_provider: AuthenticationProvider | None = None,
     forecast_service: ForecastService | None = None,
     coverage_provider: Callable[[str, str], float] | None = None,
+    video_service: VideoPipelineService | None = None,
+    hls_capture: FfmpegHlsCapture | None = None,
 ) -> FastAPI:
     active_settings = settings or Settings.from_environment()
     if auth_provider is None and active_settings.app_environment == "production":
@@ -218,17 +272,55 @@ def create_app(
     candidate = _load_fixture("candidate-detection")
     app.state.candidates = {candidate["tenant_id"]: {candidate["detection_id"]: candidate}}
     app.state.reviews = {}
+    runtime_dir = active_settings.runtime_dir.resolve()
+    media_root = runtime_dir / "restricted-media"
+    media_root.mkdir(parents=True, exist_ok=True)
+    if video_service is None:
+        ingestion_store = IngestionStore(runtime_dir / "video-pipeline.sqlite3")
+        vision_provider = (
+            RekaVisionProvider(
+                active_settings.reka_api_key,
+                base_url=active_settings.reka_vision_base_url,
+                timeout_seconds=active_settings.reka_timeout_seconds,
+            )
+            if active_settings.reka_configured
+            else FakeRekaVisionProvider(
+                proposals=[
+                    {"offset_seconds": 3, "category": "traffic_safety", "confidence": 0.58}
+                ]
+            )
+        )
+        video_service = VideoPipelineService(
+            VideoStore(ingestion_store),
+            vision_provider,
+            _DemoLocationResolver(),
+            media_root=media_root,
+            prompt_version=active_settings.reka_prompt_version,
+        )
+    app.state.video_service = video_service
+    app.state.hls_capture = hls_capture or FfmpegHlsCapture()
+    app.state.video_runs = {}
+    app.state.vision_mode = "reka_vision" if active_settings.reka_configured else "deterministic_fake"
+    try:
+        app.state.video_service.register_recorded_source(
+            first_source, authenticated_tenant_id=first_source["tenant_id"]
+        )
+    except VideoPipelineError:
+        # A durable development store may already contain the fixture source.
+        pass
 
     @app.get("/health")
-    def health() -> dict[str, str]:
+    async def health() -> dict[str, str]:
         return {"status": "ok"}
 
     @app.get("/ready")
     def ready() -> dict[str, Any]:
         return {
-            "status": "degraded",
+            "status": "ready" if active_settings.reka_configured else "degraded",
             "reka_chat": "configured" if active_settings.reka_configured else "deterministic_fallback",
-            "video_service": "not_connected",
+            "reka_vision": "configured" if active_settings.reka_configured else "deterministic_fake",
+            "video_service": "connected",
+            "near_live_capture": "allowlisted_hls",
             "forecast_models": "historical_fallback_only",
         }
 
@@ -295,6 +387,9 @@ def create_app(
                 tenant_id=ctx.tenant_id, body=body, mode=mode, connection=connection
             )
             app.state.sources.setdefault(ctx.tenant_id, []).append(source)
+            app.state.video_service.register_source(
+                source, authenticated_tenant_id=ctx.tenant_id
+            )
             app.state.audit.record(
                 tenant_id=ctx.tenant_id,
                 principal_id=ctx.principal_id,
@@ -347,48 +442,247 @@ def create_app(
             },
         )
 
+    def process_asset_run(run_id: str, tenant_id: str, asset_id: str) -> None:
+        run = app.state.video_runs[run_id]
+        try:
+            run.update(state="running", stage="reka_upload", updated_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"))
+            candidates_found: list[dict[str, Any]] = []
+            for poll in range(active_settings.reka_index_max_polls):
+                candidates_found = app.state.video_service.process_asset(tenant_id, asset_id)
+                mapping = app.state.video_service.store.get_mapping(tenant_id, asset_id)
+                if mapping and mapping["indexing_status"] == "indexed":
+                    break
+                run.update(stage="reka_indexing", updated_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"))
+                if poll + 1 < active_settings.reka_index_max_polls:
+                    time.sleep(active_settings.reka_index_poll_seconds)
+            else:
+                raise VideoPipelineError(
+                    "reka_index_timeout", "Reka indexing did not complete in the bounded polling window", retryable=True
+                )
+            run.update(
+                state="completed",
+                stage="awaiting_human_review",
+                candidate_count=len(candidates_found),
+                updated_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            )
+        except VideoPipelineError as error:
+            run.update(
+                state="failed",
+                stage="failed",
+                error_code=error.code,
+                updated_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            )
+
     @app.post("/v1/video-assets/uploads", status_code=202)
-    def create_video_upload(
+    async def create_video_upload(
+        source_id: uuid.UUID = Form(...),
+        captured_start: str = Form(...),
+        captured_end: str = Form(...),
+        consent_confirmed: bool = Form(...),
+        file: UploadFile = File(...),
         idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
         ctx: TenantContext = Depends(require_owner),
     ) -> dict[str, Any]:
-        def unavailable() -> dict[str, Any]:
+        destination = app.state.video_service.media_root / ctx.tenant_id / f"{uuid.uuid4()}.mp4"
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with destination.open("wb") as handle:
+                shutil.copyfileobj(file.file, handle)
+            checksum = hashlib.sha256(destination.read_bytes()).hexdigest()
+        finally:
+            await file.close()
+
+        def accept() -> dict[str, Any]:
+            try:
+                asset = app.state.video_service.accept_upload(
+                    authenticated_tenant_id=ctx.tenant_id,
+                    source_id=str(source_id),
+                    path=destination,
+                    content_type=file.content_type or "application/octet-stream",
+                    captured_start=captured_start,
+                    captured_end=captured_end,
+                    duration_seconds=None,
+                    consent_confirmed=consent_confirmed,
+                    expected_sha256=checksum,
+                )
+            except Exception:
+                destination.unlink(missing_ok=True)
+                raise
+            run_id = str(uuid.uuid4())
+            now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            run = {
+                "run_id": run_id,
+                "tenant_id": ctx.tenant_id,
+                "state": "queued",
+                "stage": "accepted",
+                "label": "recorded video upload",
+                "asset_id": asset["asset_id"],
+                "candidate_count": 0,
+                "analysis_mode": app.state.vision_mode,
+                "created_at": now,
+                "updated_at": now,
+            }
+            app.state.video_runs[run_id] = run
+            threading.Thread(
+                target=process_asset_run,
+                args=(run_id, ctx.tenant_id, asset["asset_id"]),
+                name=f"video-worker-{run_id[:8]}",
+                daemon=True,
+            ).start()
             app.state.audit.record(
                 tenant_id=ctx.tenant_id,
                 principal_id=ctx.principal_id,
                 request_id=ctx.request_id,
-                action="video_upload_requested",
+                action="video_upload_accepted",
                 resource_type="video_asset",
-                resource_id="unassigned",
-                outcome="upstream_unavailable",
+                resource_id=asset["asset_id"],
             )
-            raise problem(
-                503,
-                "video_service_unavailable",
-                "The Person 1 bounded media-intake service is not connected",
-                retryable=True,
-            )
+            return _public_run(run)
 
         return app.state.idempotency.execute(
             tenant_id=ctx.tenant_id,
             operation="create_video_upload",
             key=idempotency_key,
-            payload={"request_id": ctx.request_id},
-            action=unavailable,
+            payload={
+                "source_id": str(source_id),
+                "captured_start": captured_start,
+                "captured_end": captured_end,
+                "consent_confirmed": consent_confirmed,
+                "sha256": checksum,
+            },
+            action=accept,
+        )
+
+    def ensure_demo_hls_source(tenant_id: str) -> dict[str, Any]:
+        try:
+            return app.state.video_service.store.get_source(tenant_id, DEMO_HLS_SOURCE_ID)
+        except VideoPipelineError:
+            now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            definition = app.state.hls_capture.source("louisiana-dot-i20")
+            source = {
+                "schema_version": "1.0.0",
+                "tenant_id": tenant_id,
+                "source_id": DEMO_HLS_SOURCE_ID,
+                "name": definition.name,
+                "mode": "live_camera",
+                "status": "active",
+                "timezone": "UTC",
+                "location_ref": DEMO_HLS_LOCATION_REF,
+                "connection": {
+                    "transport": "hls",
+                    "endpoint_ref": "secret://demo-public-hls/louisiana-dot-i20/endpoint",
+                },
+                "retention_policy_days": 1,
+                "created_at": now,
+                "updated_at": now,
+            }
+            app.state.video_service.register_source(source, authenticated_tenant_id=tenant_id)
+            app.state.sources.setdefault(tenant_id, []).append(source)
+            return source
+
+    def capture_near_live_run(run_id: str, tenant_id: str, source_key: str) -> None:
+        run = app.state.video_runs[run_id]
+        try:
+            run.update(state="running", stage="capturing_hls", updated_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"))
+            source = ensure_demo_hls_source(tenant_id)
+            destination = app.state.video_service.media_root / tenant_id / f"{run_id}.mp4"
+            segment = app.state.hls_capture.capture(
+                source_key, destination, duration_seconds=run["capture_seconds"]
+            )
+            duration = app.state.video_service.media_inspector.duration_seconds(segment.path)
+            start = datetime.fromisoformat(segment.captured_start.replace("Z", "+00:00"))
+            end = start + timedelta(seconds=duration)
+            asset = app.state.video_service.accept_upload(
+                authenticated_tenant_id=tenant_id,
+                source_id=source["source_id"],
+                path=segment.path,
+                content_type="video/mp4",
+                captured_start=segment.captured_start,
+                captured_end=end.isoformat().replace("+00:00", "Z"),
+                duration_seconds=duration,
+                consent_confirmed=True,
+                kind="live_segment",
+            )
+            run["asset_id"] = asset["asset_id"]
+            run["stage"] = "segment_validated"
+            process_asset_run(run_id, tenant_id, asset["asset_id"])
+        except VideoPipelineError as error:
+            run.update(
+                state="failed",
+                stage="failed",
+                error_code=error.code,
+                updated_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            )
+
+    @app.post("/v1/demo/near-live-cctv/captures", status_code=202)
+    def start_near_live_capture(
+        body: NearLiveCaptureRequest,
+        idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+        ctx: TenantContext = Depends(require_owner),
+    ) -> dict[str, Any]:
+        duration = body.duration_seconds or active_settings.near_live_capture_seconds
+
+        def start() -> dict[str, Any]:
+            definition = app.state.hls_capture.source(body.source_key)
+            run_id = str(uuid.uuid4())
+            now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            run = {
+                "run_id": run_id,
+                "tenant_id": ctx.tenant_id,
+                "state": "queued",
+                "stage": "capture_queued",
+                "label": "near-live CCTV segment",
+                "source_name": definition.name,
+                "source_attribution": definition.attribution,
+                "capture_seconds": duration,
+                "candidate_count": 0,
+                "analysis_mode": app.state.vision_mode,
+                "created_at": now,
+                "updated_at": now,
+            }
+            app.state.video_runs[run_id] = run
+            threading.Thread(
+                target=capture_near_live_run,
+                args=(run_id, ctx.tenant_id, body.source_key),
+                name=f"video-worker-{run_id[:8]}",
+                daemon=True,
+            ).start()
+            app.state.audit.record(
+                tenant_id=ctx.tenant_id,
+                principal_id=ctx.principal_id,
+                request_id=ctx.request_id,
+                action="near_live_capture_started",
+                resource_type="ingestion_run",
+                resource_id=run_id,
+            )
+            return _public_run(run)
+
+        return app.state.idempotency.execute(
+            tenant_id=ctx.tenant_id,
+            operation="near_live_cctv_capture",
+            key=idempotency_key,
+            payload=body.model_dump() | {"resolved_duration_seconds": duration},
+            action=start,
         )
 
     @app.get("/v1/ingestion/runs/{run_id}")
     def ingestion_run(
         run_id: uuid.UUID, ctx: TenantContext = Depends(require_tenant)
     ) -> dict[str, Any]:
-        raise problem(404, "ingestion_run_not_found", "Ingestion run was not found")
+        run = app.state.video_runs.get(str(run_id))
+        if run is None or run["tenant_id"] != ctx.tenant_id:
+            raise problem(404, "ingestion_run_not_found", "Ingestion run was not found")
+        return _public_run(run)
 
     @app.get("/v1/candidate-detections")
     def candidates(
         limit: int = Query(default=50, ge=1, le=100),
         ctx: TenantContext = Depends(require_reviewer),
     ) -> dict[str, Any]:
-        records = list(app.state.candidates.get(ctx.tenant_id, {}).values())[:limit]
+        durable = app.state.video_service.store.list_candidates(ctx.tenant_id)
+        fixture_records = list(app.state.candidates.get(ctx.tenant_id, {}).values())
+        seen = {record["detection_id"] for record in durable}
+        records = (durable + [record for record in fixture_records if record["detection_id"] not in seen])[:limit]
         return {
             "items": [
                 {
@@ -396,9 +690,16 @@ def create_app(
                     for key, value in record.items()
                     if key not in {"evidence_ref"}
                 }
-                | {"evidence_available": True}
+                | {
+                    "evidence_available": True,
+                    "record_type": "unconfirmed_candidate_detection",
+                }
                 for record in records
-            ]
+            ],
+            "limitations": [
+                "Candidates are unconfirmed machine proposals and are not declarations that a crime occurred.",
+                "Human review is required before any candidate can enter aggregate incident history.",
+            ],
         }
 
     @app.post("/v1/candidate-detections/{detection_id}/review", status_code=201)
@@ -408,7 +709,14 @@ def create_app(
         idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
         ctx: TenantContext = Depends(require_reviewer),
     ) -> dict[str, Any]:
-        candidate_record = app.state.candidates.get(ctx.tenant_id, {}).get(detection_id)
+        durable_candidate: dict[str, Any] | None = None
+        try:
+            durable_candidate = app.state.video_service.store.get_candidate(
+                ctx.tenant_id, detection_id
+            )
+        except VideoPipelineError:
+            pass
+        candidate_record = durable_candidate or app.state.candidates.get(ctx.tenant_id, {}).get(detection_id)
         if candidate_record is None:
             raise problem(404, "candidate_not_found", "Candidate detection was not found")
         if body.decision == "confirmed" and not body.confirmed_category:
@@ -417,6 +725,25 @@ def create_app(
             raise problem(422, "rejection_reason_required", "Rejected reviews require a reason")
 
         def action() -> dict[str, Any]:
+            if durable_candidate is not None:
+                result = app.state.video_service.review_candidate(
+                    authenticated_tenant_id=ctx.tenant_id,
+                    detection_id=detection_id,
+                    decision=body.decision,
+                    confirmed_category=body.confirmed_category,
+                    rejection_reason=body.rejection_reason,
+                    reviewed_by=ctx.principal_id,
+                    role=ctx.role,
+                )
+                app.state.audit.record(
+                    tenant_id=ctx.tenant_id,
+                    principal_id=ctx.principal_id,
+                    request_id=ctx.request_id,
+                    action=f"candidate_{body.decision}",
+                    resource_type="candidate_detection",
+                    resource_id=detection_id,
+                )
+                return result
             review_key = (ctx.tenant_id, detection_id)
             if review_key in app.state.reviews:
                 raise problem(409, "review_final", "A final review already exists")

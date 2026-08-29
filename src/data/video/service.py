@@ -121,12 +121,18 @@ class VideoPipelineService:
         self.media_storage = media_storage or LocalMediaStorage(self.media_root)
         self.media_scanner = media_scanner or NoOpMediaScanner()
 
-    def register_recorded_source(self, payload: dict[str, Any], *, authenticated_tenant_id: str) -> dict[str, Any]:
+    def register_source(self, payload: dict[str, Any], *, authenticated_tenant_id: str) -> dict[str, Any]:
         if payload.get("tenant_id") != authenticated_tenant_id:
             raise VideoPipelineError("tenant_mismatch", "Source does not belong to authenticated tenant")
         validate_contract("camera-source.schema.json", payload)
-        if payload["mode"] != "recorded_video" or payload["connection"]["transport"] != "uploaded_asset":
-            raise VideoPipelineError("source_mode_invalid", "This worker accepts recorded-video sources only")
+        transport = payload["connection"]["transport"]
+        valid = (
+            payload["mode"] == "recorded_video" and transport == "uploaded_asset"
+        ) or (
+            payload["mode"] == "live_camera" and transport in {"rtsp", "onvif", "hls"}
+        )
+        if not valid:
+            raise VideoPipelineError("source_mode_invalid", "Camera mode and transport are incompatible")
         self.store.put_source(payload)
         self.store.ingestion_store.register_camera_source(payload)
         self.store.audit(authenticated_tenant_id, "source.register", "source", payload["source_id"], "success")
@@ -135,15 +141,16 @@ class VideoPipelineService:
     def register_live_source(
         self, payload: dict[str, Any], *, authenticated_tenant_id: str
     ) -> dict[str, Any]:
-        if payload.get("tenant_id") != authenticated_tenant_id:
-            raise VideoPipelineError("tenant_mismatch", "Source does not belong to authenticated tenant")
-        validate_contract("camera-source.schema.json", payload)
-        if payload["mode"] != "live_camera" or payload["connection"]["transport"] not in {"hls", "rtsp", "onvif"}:
-            raise VideoPipelineError("source_mode_invalid", "Live sources require HLS, RTSP, or ONVIF")
-        self.store.put_source(payload)
-        self.store.ingestion_store.register_camera_source(payload)
-        self.store.audit(authenticated_tenant_id, "source.register", "source", payload["source_id"], "success")
-        return dict(payload)
+        """Backward-compatible live-source entrypoint."""
+        if payload.get("mode") != "live_camera":
+            raise VideoPipelineError("source_mode_invalid", "Expected a live-camera source")
+        return self.register_source(payload, authenticated_tenant_id=authenticated_tenant_id)
+
+    def register_recorded_source(self, payload: dict[str, Any], *, authenticated_tenant_id: str) -> dict[str, Any]:
+        """Backward-compatible recorded-source entrypoint."""
+        if payload.get("mode") != "recorded_video":
+            raise VideoPipelineError("source_mode_invalid", "Expected a recorded-video source")
+        return self.register_source(payload, authenticated_tenant_id=authenticated_tenant_id)
 
     def accept_upload(
         self,
@@ -158,8 +165,15 @@ class VideoPipelineService:
         consent_confirmed: bool,
         expected_sha256: str | None = None,
         received_at: str | None = None,
+        kind: str | None = None,
     ) -> dict[str, Any]:
         source = self.store.get_source(authenticated_tenant_id, source_id)
+        expected_kind = "recorded_upload" if source["mode"] == "recorded_video" else "live_segment"
+        asset_kind = kind or expected_kind
+        if asset_kind != expected_kind:
+            raise VideoPipelineError(
+                "asset_kind_invalid", "Video asset kind does not match its camera source"
+            )
         if not consent_confirmed:
             raise VideoPipelineError("consent_required", "Lawful-use and consent confirmation is required")
         if content_type != "video/mp4" or path.suffix.lower() != ".mp4":
@@ -196,7 +210,7 @@ class VideoPipelineService:
             "tenant_id": authenticated_tenant_id,
             "asset_id": asset_id,
             "source_id": source_id,
-            "kind": "live_segment" if source["mode"] == "live_camera" else "recorded_upload",
+            "kind": asset_kind,
             "status": "ready",
             "storage_ref": f"secret://video-assets/{asset_id}",
             "content_type": content_type,

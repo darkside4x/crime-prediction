@@ -20,7 +20,7 @@
       "additionalProperties": false,
       "required": ["transport"],
       "properties": {
-        "transport": {"enum": ["uploaded_asset", "hls", "rtsp", "onvif"]},
+        "transport": {"enum": ["uploaded_asset", "rtsp", "onvif", "hls"]},
         "endpoint_ref": {"type": "string", "pattern": "^secret://", "maxLength": 512},
         "credential_ref": {"type": "string", "pattern": "^secret://", "maxLength": 512}
       }
@@ -39,11 +39,23 @@
       "then": {
         "properties": {
           "connection": {
-            "required": ["endpoint_ref", "credential_ref"],
-            "properties": {"transport": {"enum": ["hls", "rtsp", "onvif"]}}
+            "required": ["endpoint_ref"],
+            "properties": {"transport": {"enum": ["rtsp", "onvif", "hls"]}}
           }
         }
       }
+    },
+    {
+      "if": {
+        "properties": {
+          "connection": {
+            "properties": {"transport": {"enum": ["rtsp", "onvif"]}},
+            "required": ["transport"]
+          }
+        },
+        "required": ["connection"]
+      },
+      "then": {"properties": {"connection": {"required": ["credential_ref"]}}}
     }
   ]
 }

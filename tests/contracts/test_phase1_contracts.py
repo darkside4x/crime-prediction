@@ -103,6 +103,19 @@ def test_live_camera_allows_secret_backed_hls_transport() -> None:
     validator("camera-source").validate(source)
 
 
+def test_public_hls_live_source_requires_endpoint_but_not_credentials() -> None:
+    source = load_json(FIXTURES / "camera-source.json")
+    source["source_id"] = "20000000-0000-4000-8000-000000000099"
+    source["name"] = "Allowlisted public traffic camera"
+    source["mode"] = "live_camera"
+    source["timezone"] = "UTC"
+    source["connection"] = {
+        "transport": "hls",
+        "endpoint_ref": "secret://demo-hls/endpoint",
+    }
+    validator("camera-source").validate(source)
+
+
 def test_coverage_fixture_obeys_frozen_formula() -> None:
     coverage = load_json(FIXTURES / "coverage-snapshot.json")
     durations = [

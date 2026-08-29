@@ -34,6 +34,8 @@ services:
     environment:
       CORS_ORIGINS: http://localhost:5173,http://localhost:8080
       DATABASE_URL: postgresql://crime_app:local-development-only@postgres:5432/crime_prediction
+      REKA_API_KEY: ${REKA_API_KEY:-}
+      RUNTIME_DIR: /app/data/runtime
     ports:
       - "8000:8000"
     healthcheck:
