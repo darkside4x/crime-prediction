@@ -1,6 +1,7 @@
 # Phase 1 Contract Freeze
 
-Status: **implementation target; teammate review required before final freeze**  
+Status: **implementation target; teammate review required before final freeze**
+
 Contract date: 2026-08-29
 
 This is the canonical integration guide for the recorded-video and live-camera product. JSON Schemas in `contracts/schemas/` are authoritative when prose and examples disagree.
