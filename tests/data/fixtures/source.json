@@ -1,0 +1,16 @@
+{
+  "schema_version": "1.0.0",
+  "tenant_id": "00000000-0000-4000-8000-000000000001",
+  "source_id": "00000000-0000-4000-8000-000000000101",
+  "name": "Consented recorded demo incidents",
+  "kind": "recorded_replay",
+  "status": "active",
+  "config": {
+    "format": "jsonl",
+    "location_ref": "incidents.jsonl",
+    "replay_speed": 1,
+    "loop": false,
+    "timezone": "UTC"
+  },
+  "created_at": "2026-08-01T00:00:00Z"
+}

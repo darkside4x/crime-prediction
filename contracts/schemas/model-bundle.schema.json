@@ -33,7 +33,7 @@
       "additionalProperties": false,
       "required": ["python_version", "dependency_lock_sha256"],
       "properties": {
-        "python_version": {"type": "string", "pattern": "^3\\.12(\\.[0-9]+)?$"},
+        "python_version": {"type": "string", "pattern": "^3\\.(1[2-9]|[2-9][0-9])(\\.[0-9]+)?$"},
         "dependency_lock_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
       }
     }

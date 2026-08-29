@@ -29,3 +29,14 @@ def test_reka_fact_contract_rejects_sensitive_or_unsuppressed_values() -> None:
     fixture["facts"][1]["value"] = 3
     with pytest.raises(DataContractError):
         validate_contract("reka-fact-bundle", fixture)
+
+
+def test_model_bundle_runtime_matches_supported_python_range() -> None:
+    fixture_path = REPOSITORY_ROOT / "contracts" / "fixtures" / "model-bundle.json"
+    fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+    fixture["runtime"]["python_version"] = "3.13.12"
+    validate_contract("model-bundle", fixture)
+
+    fixture["runtime"]["python_version"] = "3.11.9"
+    with pytest.raises(DataContractError):
+        validate_contract("model-bundle", fixture)
