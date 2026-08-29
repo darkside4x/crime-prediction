@@ -1,0 +1,11 @@
+{
+  "schema_version": "1.0.0",
+  "tenant_id": "00000000-0000-4000-8000-000000000001",
+  "review_id": "23000000-0000-4000-8000-000000000001",
+  "detection_id": "22000000-0000-4000-8000-000000000001",
+  "decision": "confirmed",
+  "confirmed_category": "public_order",
+  "reviewed_by": "user_demo_reviewer",
+  "reviewed_at": "2026-08-29T00:05:00Z",
+  "promoted_external_event_id": "detection:22000000-0000-4000-8000-000000000001"
+}

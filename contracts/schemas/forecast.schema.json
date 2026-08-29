@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://crime-hotspot.local/schemas/forecast.schema.json",
+  "title": "OperationalAggregateForecast",
+  "description": "Public aggregate forecast for a future interval. Suppressed values are null, never numeric zero.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "tenant_id", "forecast_id", "cell_id", "window_start", "window_end", "category", "generated_at", "data_as_of", "expected_count", "occurrence_probability", "risk_band", "coverage_ratio", "drivers", "model_version", "data_version", "feature_snapshot_version", "suppression"],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "tenant_id": {"type": "string", "format": "uuid"},
+    "forecast_id": {"type": "string", "format": "uuid"},
+    "cell_id": {"type": "string", "pattern": "^[0-9a-f]{15}$"},
+    "window_start": {"type": "string", "format": "date-time"},
+    "window_end": {"type": "string", "format": "date-time"},
+    "category": {"type": "string", "minLength": 1, "maxLength": 80},
+    "generated_at": {"type": "string", "format": "date-time"},
+    "data_as_of": {"type": "string", "format": "date-time"},
+    "expected_count": {"$ref": "#/$defs/estimate"},
+    "occurrence_probability": {"$ref": "#/$defs/probabilityEstimate"},
+    "risk_band": {"enum": ["low", "typical", "elevated", "high", "suppressed"]},
+    "coverage_ratio": {"type": "number", "minimum": 0, "maximum": 1},
+    "drivers": {
+      "type": "array",
+      "maxItems": 5,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["feature", "direction"],
+        "properties": {
+          "feature": {"type": "string", "minLength": 1, "maxLength": 100},
+          "direction": {"enum": ["higher", "lower"]}
+        }
+      }
+    },
+    "model_version": {"type": "string", "minLength": 1, "maxLength": 128},
+    "data_version": {"type": "string", "minLength": 1, "maxLength": 128},
+    "feature_snapshot_version": {"type": "string", "minLength": 1, "maxLength": 128},
+    "suppression": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["suppressed", "reason"],
+      "properties": {
+        "suppressed": {"type": "boolean"},
+        "reason": {"type": ["string", "null"], "enum": [null, "low_support", "low_coverage", "policy"]}
+      }
+    }
+  },
+  "$defs": {
+    "estimate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value", "lower", "upper", "interval_level", "method"],
+      "properties": {
+        "value": {"type": ["number", "null"], "minimum": 0},
+        "lower": {"type": ["number", "null"], "minimum": 0},
+        "upper": {"type": ["number", "null"], "minimum": 0},
+        "interval_level": {"type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1},
+        "method": {"type": "string", "minLength": 1, "maxLength": 128}
+      }
+    },
+    "probabilityEstimate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value", "lower", "upper", "interval_level", "method", "calibration_version"],
+      "properties": {
+        "value": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+        "lower": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+        "upper": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+        "interval_level": {"type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1},
+        "method": {"type": "string", "minLength": 1, "maxLength": 128},
+        "calibration_version": {"type": ["string", "null"], "maxLength": 128}
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"suppression": {"properties": {"suppressed": {"const": true}}}}},
+      "then": {
+        "properties": {
+          "risk_band": {"const": "suppressed"},
+          "drivers": {"maxItems": 0},
+          "expected_count": {"properties": {"value": {"type": "null"}, "lower": {"type": "null"}, "upper": {"type": "null"}}},
+          "occurrence_probability": {"properties": {"value": {"type": "null"}, "lower": {"type": "null"}, "upper": {"type": "null"}}},
+          "suppression": {"properties": {"reason": {"enum": ["low_support", "low_coverage", "policy"]}}}
+        }
+      },
+      "else": {
+        "properties": {
+          "risk_band": {"enum": ["low", "typical", "elevated", "high"]},
+          "expected_count": {"properties": {"value": {"type": "number"}, "lower": {"type": "number"}, "upper": {"type": "number"}}},
+          "occurrence_probability": {"properties": {"value": {"type": "number", "maximum": 1}, "lower": {"type": "number", "maximum": 1}, "upper": {"type": "number", "maximum": 1}}},
+          "suppression": {"properties": {"reason": {"type": "null"}}}
+        }
+      }
+    }
+  ]
+}

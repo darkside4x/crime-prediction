@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://crime-hotspot.local/schemas/video-asset.schema.json",
+  "title": "RestrictedVideoAsset",
+  "description": "Restricted video metadata. This object and storage_ref must never cross the public forecast boundary.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "tenant_id", "asset_id", "source_id", "kind", "status", "storage_ref", "content_type", "size_bytes", "sha256", "captured_start", "captured_end", "received_at", "retention_until"],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "tenant_id": {"type": "string", "format": "uuid"},
+    "asset_id": {"type": "string", "format": "uuid"},
+    "source_id": {"type": "string", "format": "uuid"},
+    "kind": {"enum": ["recorded_upload", "live_segment"]},
+    "status": {"enum": ["uploading", "ready", "processing", "processed", "failed", "expired", "deleted"]},
+    "storage_ref": {"type": "string", "pattern": "^secret://", "maxLength": 512},
+    "content_type": {"enum": ["video/mp4", "video/quicktime", "video/x-matroska"]},
+    "size_bytes": {"type": "integer", "minimum": 1, "maximum": 10737418240},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "captured_start": {"type": "string", "format": "date-time"},
+    "captured_end": {"type": "string", "format": "date-time"},
+    "received_at": {"type": "string", "format": "date-time"},
+    "retention_until": {"type": "string", "format": "date-time"},
+    "failure_code": {"type": "string", "minLength": 1, "maxLength": 80}
+  }
+}

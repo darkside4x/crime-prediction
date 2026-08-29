@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://crime-hotspot.local/schemas/api-error.schema.json",
+  "title": "TypedApiError",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "request_id", "code", "message", "retryable", "details"],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "request_id": {"type": "string", "format": "uuid"},
+    "code": {"type": "string", "pattern": "^[a-z][a-z0-9_]{2,79}$"},
+    "message": {"type": "string", "minLength": 1, "maxLength": 500},
+    "retryable": {"type": "boolean"},
+    "details": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["field", "code"],
+        "properties": {
+          "field": {"type": "string", "minLength": 1, "maxLength": 128},
+          "code": {"type": "string", "minLength": 1, "maxLength": 80}
+        }
+      }
+    }
+  }
+}

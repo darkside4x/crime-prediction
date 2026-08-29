@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://crime-hotspot.local/schemas/candidate-review.schema.json",
+  "title": "CandidateReviewDecision",
+  "description": "Immutable, tenant-scoped human review decision. Only confirmed decisions may promote an IncidentEvent.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "tenant_id", "review_id", "detection_id", "decision", "reviewed_by", "reviewed_at"],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "tenant_id": {"type": "string", "format": "uuid"},
+    "review_id": {"type": "string", "format": "uuid"},
+    "detection_id": {"type": "string", "format": "uuid"},
+    "decision": {"enum": ["confirmed", "rejected"]},
+    "confirmed_category": {"enum": ["property", "violence", "public_order", "traffic_safety", "other"]},
+    "rejection_reason": {"enum": ["false_positive", "insufficient_evidence", "duplicate", "outside_scope", "other"]},
+    "reviewed_by": {"type": "string", "minLength": 1, "maxLength": 128},
+    "reviewed_at": {"type": "string", "format": "date-time"},
+    "promoted_external_event_id": {"type": "string", "minLength": 1, "maxLength": 256}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"decision": {"const": "confirmed"}}, "required": ["decision"]},
+      "then": {"required": ["confirmed_category", "promoted_external_event_id"]},
+      "else": {"required": ["rejection_reason"]}
+    }
+  ]
+}

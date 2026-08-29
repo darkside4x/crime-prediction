@@ -1,0 +1,22 @@
+{
+  "schema_version": "1.0.0",
+  "tenant_id": "00000000-0000-4000-8000-000000000001",
+  "cell_id": "8861892581fffff",
+  "interval_start": "2026-08-30T00:00:00Z",
+  "category": "property",
+  "lag_1": 1,
+  "lag_2": 0,
+  "lag_7": 1,
+  "lag_14": 0,
+  "rolling_7_mean": 0.2857142857,
+  "rolling_14_mean": 0.2142857143,
+  "neighbor_lag_1": 1,
+  "recent_trend": 0.3333333333,
+  "hour_sin": 0,
+  "hour_cos": 1,
+  "day_of_week_sin": 0.7818314825,
+  "day_of_week_cos": 0.6234898019,
+  "coverage_ratio": 0.9166666667,
+  "data_as_of": "2026-08-29T23:59:59Z",
+  "feature_snapshot_version": "forecast-features-demo-one-20260830t000000z-v1"
+}

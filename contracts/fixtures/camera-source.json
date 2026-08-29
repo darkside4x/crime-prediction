@@ -1,0 +1,16 @@
+{
+  "schema_version": "1.0.0",
+  "tenant_id": "00000000-0000-4000-8000-000000000001",
+  "source_id": "20000000-0000-4000-8000-000000000001",
+  "name": "Synthetic entrance camera",
+  "mode": "recorded_video",
+  "status": "active",
+  "timezone": "Asia/Kolkata",
+  "location_ref": "secret://tenant/demo-one/cameras/entrance/location",
+  "connection": {
+    "transport": "uploaded_asset"
+  },
+  "retention_policy_days": 7,
+  "created_at": "2026-08-29T00:00:00Z",
+  "updated_at": "2026-08-29T00:00:00Z"
+}

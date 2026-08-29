@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://crime-hotspot.local/schemas/coverage-snapshot.schema.json",
+  "title": "SourceCoverageSnapshot",
+  "description": "Per-source availability telemetry for one UTC feature interval.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "tenant_id", "source_id", "interval_start", "interval_end", "expected_seconds", "connected_seconds", "processable_seconds", "detector_available_seconds", "coverage_ratio", "degraded_reason_codes", "computed_at"],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "tenant_id": {"type": "string", "format": "uuid"},
+    "source_id": {"type": "string", "format": "uuid"},
+    "interval_start": {"type": "string", "format": "date-time"},
+    "interval_end": {"type": "string", "format": "date-time"},
+    "expected_seconds": {"type": "integer", "minimum": 1},
+    "connected_seconds": {"type": "integer", "minimum": 0},
+    "processable_seconds": {"type": "integer", "minimum": 0},
+    "detector_available_seconds": {"type": "integer", "minimum": 0},
+    "coverage_ratio": {"type": "number", "minimum": 0, "maximum": 1},
+    "degraded_reason_codes": {"type": "array", "uniqueItems": true, "maxItems": 20, "items": {"type": "string", "minLength": 1, "maxLength": 80}},
+    "computed_at": {"type": "string", "format": "date-time"}
+  }
+}

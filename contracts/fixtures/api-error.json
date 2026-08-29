@@ -1,0 +1,8 @@
+{
+  "schema_version": "1.0.0",
+  "request_id": "25000000-0000-4000-8000-000000000001",
+  "code": "candidate_already_reviewed",
+  "message": "The candidate detection already has a final review decision.",
+  "retryable": false,
+  "details": []
+}

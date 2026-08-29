@@ -1,0 +1,16 @@
+{
+  "schema_version": "1.0.0",
+  "tenant_id": "00000000-0000-4000-8000-000000000001",
+  "asset_id": "21000000-0000-4000-8000-000000000001",
+  "source_id": "20000000-0000-4000-8000-000000000001",
+  "kind": "recorded_upload",
+  "status": "ready",
+  "storage_ref": "secret://tenant/demo-one/video/assets/demo.mp4",
+  "content_type": "video/mp4",
+  "size_bytes": 1048576,
+  "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "captured_start": "2026-08-28T12:00:00Z",
+  "captured_end": "2026-08-28T12:10:00Z",
+  "received_at": "2026-08-29T00:00:00Z",
+  "retention_until": "2026-09-05T00:00:00Z"
+}

@@ -1,6 +1,6 @@
 # Modeling configuration
 
-`default.json` defines the deterministic Person 2 experiment.
+`default.json` defines the deterministic forecasting-backend experiment.
 
 Install the combined data/model development environment from the repository root:
 

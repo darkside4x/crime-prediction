@@ -1,0 +1,8 @@
+{
+  "schema_version": "1.0.0",
+  "request_id": "25000000-0000-4000-8000-000000000001",
+  "principal_id": "user_demo_reviewer",
+  "tenant_id": "00000000-0000-4000-8000-000000000001",
+  "role": "reviewer",
+  "authenticated_at": "2026-08-29T00:00:00Z"
+}

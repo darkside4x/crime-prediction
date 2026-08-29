@@ -1,0 +1,15 @@
+{
+  "schema_version": "1.0.0",
+  "tenant_id": "00000000-0000-4000-8000-000000000001",
+  "detection_id": "22000000-0000-4000-8000-000000000001",
+  "source_id": "20000000-0000-4000-8000-000000000001",
+  "asset_id": "21000000-0000-4000-8000-000000000001",
+  "occurred_at": "2026-08-28T12:04:00Z",
+  "received_at": "2026-08-29T00:01:00Z",
+  "proposed_category": "public_order",
+  "confidence": 0.78,
+  "detector_version": "synthetic-detector-v1",
+  "evidence_ref": "secret://tenant/demo-one/detections/22000000/clip",
+  "review_status": "awaiting_review",
+  "expires_at": "2026-09-05T00:01:00Z"
+}

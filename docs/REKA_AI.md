@@ -1,5 +1,7 @@
 # Reka AI Integration
 
+Status: deferred until the deterministic Phase 1 upload, review, future-feature, forecast API, and map flow is complete. The authoritative current product boundary is `docs/PHASE1_CONTRACTS.md`.
+
 ## Role in the product
 
 Reka is the system's language and reasoning interface. The forecast itself remains a reproducible statistical/ML pipeline. This separation lets the demo showcase the sponsor meaningfully without making safety, evaluation, or availability depend on an LLM-generated number.

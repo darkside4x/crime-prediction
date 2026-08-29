@@ -8,11 +8,12 @@ Build a reproducible hackathon prototype that forecasts aggregate H3-cell incide
 
 Before changing code, read:
 
-1. `docs/ARCHITECTURE.md`
-2. `docs/TEAM_PLAN.md`
-3. `docs/PAPER_MATRIX.md`
-4. `docs/REKA_AI.md` when touching AI, API, facts, onboarding, or frontend copilot behavior
-5. the relevant prompt in `docs/PROMPTS.md`
+1. `docs/PHASE1_CONTRACTS.md`
+2. `docs/ARCHITECTURE.md`
+3. `docs/TEAM_PLAN.md`
+4. `docs/PAPER_MATRIX.md`
+5. `docs/REKA_AI.md` when touching AI, API, facts, onboarding, or frontend copilot behavior
+6. the relevant prompt in `docs/PROMPTS.md`
 
 ## Non-negotiable contracts
 
@@ -25,7 +26,10 @@ Before changing code, read:
 - Evaluation splits are chronological; random splits are prohibited.
 - Raw coordinates and event identifiers never leave the ingestion boundary.
 - Public predictions are aggregated and low-count outputs are suppressed.
-- The API contract in `docs/ARCHITECTURE.md` is the integration boundary.
+- Candidate detections are unconfirmed, reviewer-only records. Only an immutable confirmed review may promote an incident event.
+- Historical `feature-row` records contain labels; future `forecast-feature-row` records never contain `event_count`.
+- Public operational responses use `forecast.schema.json`; suppressed estimates are null and must never be presented as zero risk.
+- The endpoint, role, and payload rules in `docs/PHASE1_CONTRACTS.md` plus `contracts/schemas/` are the integration boundary.
 - Synthetic fixtures are updated before consumers when a schema changes.
 - Motion must communicate state, remain interruptible, and respect `prefers-reduced-motion`.
 - Reka AI may map schemas, summarize validated aggregate facts, and orchestrate allowlisted read-only tools; it must never calculate or modify risk scores.
@@ -34,9 +38,9 @@ Before changing code, read:
 
 ## Ownership
 
-- Person 1: `src/data/`, `src/features/`, their tests, data schemas/config.
-- Person 2: `src/models/`, model tests/config, prediction artifacts/model card.
-- Person 3: `src/api/`, `src/web/`, containers, end-to-end tests, demo docs.
+- Person 1 — video/data/platform backend: `src/data/`, `src/features/`, video/edge workers, storage/broker adapters, migrations, and their tests.
+- Person 2 — forecasting/API/auth backend: `src/models/`, `src/api/`, authentication/authorization, forecast orchestration, monitoring, and their tests.
+- Person 3 — frontend: `src/web/`, frontend fixtures, accessibility tests, and browser end-to-end tests.
 - Shared: root configuration, architecture, schemas, and safety text require review by another teammate.
 
 Do not edit another owner's area to work around a broken contract. Document the mismatch and make the smallest shared-contract proposal.

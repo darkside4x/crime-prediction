@@ -1,45 +1,27 @@
-# Reusable Agent Prompts
+# Team Work Prompts
 
-These prompts are designed for separate coding sessions. Give each agent the repository and its assigned prompt. Agents must follow `AGENTS.md` and stay within the owned paths unless coordinating a contract change.
+These prompts implement the current ownership plan. All contributors must first read `AGENTS.md`, `docs/PHASE1_CONTRACTS.md`, `docs/ARCHITECTURE.md`, and `docs/TEAM_PLAN.md`.
 
-## Person 1 prompt - Data and features
+## Person 1 — Video/data/platform backend
 
 ```text
-You are the data/geospatial engineer for an aggregate crime-hotspot forecasting hackathon. Read AGENTS.md, docs/ARCHITECTURE.md, docs/PAPER_MATRIX.md, and docs/TEAM_PLAN.md completely. Work only in src/data, src/features, tests/data, tests/features, and data schema/config files unless an interface change is explicitly agreed.
-
-Implement a deterministic, tenant-aware pipeline from the supplied public incident dataset to a time-complete (tenant_id, H3 cell, interval_start, category) feature table. Implement the versioned incident envelope in contracts/schemas and a recorded-stream replay adapter that uses the exact interface expected of later webhook/Kafka/MQTT adapters. Add idempotency, per-source checkpoints, bounded retries, quarantine/dead-letter output, and source health metrics. Normalize timestamps to UTC, validate coordinates, map categories through configuration, remove duplicates, aggregate before modeling, and never expose raw coordinates downstream. Implement lag/rolling/calendar/neighbor/coverage features using only information strictly before each prediction interval. Provide two-tenant synthetic fixtures and tests that inject future records, duplicates, and tenant collisions and prove they cannot affect past or other-tenant features. Write clear CLI commands and a manifest containing tenant, source version, parameters, row counts, date bounds, and checksum. Never place connector secrets in configuration or fixtures; accept only secret references.
-
-Also produce a redacted source profile containing column names, declared types, bounded category samples, and synthetic/redacted examples for Reka-assisted mapping. Never send raw coordinates, event identifiers, free-text narratives, or unexpected source columns. Reka proposals are drafts only; deterministic validated mappings remain authoritative.
-
-Before coding, report assumptions and the exact output schema. Do not add deep-learning infrastructure or external services. Run focused tests and summarize changed files, commands, and unresolved data-quality risks.
+Own src/data, src/features, video and edge workers, migrations, storage/broker adapters, and focused tests. Implement only against the versioned camera-source, video-asset, candidate-detection, candidate-review, coverage-snapshot, incident-event, and forecast-feature-row contracts. Raw media, evidence, exact locations, credentials, and event IDs remain restricted. Promotion requires one immutable confirmed review and must be idempotent. Generate measured coverage and unlabelled future feature rows with data_as_of strictly before interval_start. Test retries, expiration, malformed media, future leakage, and cross-tenant denial.
 ```
 
-## Person 2 prompt - Modeling and evaluation
+## Person 2 — Forecasting/API/auth backend
 
 ```text
-You are the ML/evaluation engineer for an aggregate crime-hotspot forecasting hackathon. Read AGENTS.md, docs/ARCHITECTURE.md, docs/PAPER_MATRIX.md, and docs/TEAM_PLAN.md completely. Work only in src/models, tests/models, configs/model, and versioned evaluation/model-card outputs unless an interface change is explicitly agreed.
-
-Consume the tenant-scoped feature-table contract. Implement historical-rate and regularized Poisson baselines first, then a LightGBM Poisson/Tweedie candidate. Use chronological train/validation/test windows and rolling-origin evaluation; never randomly split. Train and evaluate per tenant for the prototype; never pool tenants unless an explicit, audited future design is approved. Choose one primary metric appropriate to the target and report MAE/Poisson deviance or PR-AUC/Brier score plus calibration and top-k capture. Add slices by category, time, and geography/coverage. Export a reproducible tenant-scoped model bundle, precomputed prediction Parquet matching the API contract, and a model card with dataset dates, metrics, uncertainty, intended use, prohibited uses, and limitations.
-
-Export deterministic AI fact bundles derived only from aggregate evaluation and prediction outputs. Every fact has a stable fact_id, display-safe value, metric definition, data_as_of, and model_version. Reka may summarize these facts but may not compute, alter, or fill missing metrics.
-
-Prefer the simpler model unless the candidate has a defensible validation gain. Before coding, state the target, split dates, baseline, and selection rule. Run focused tests and summarize changed files, commands, results, and remaining validity risks.
+Own src/models, src/api, authentication, forecast orchestration, monitoring, and focused tests. Derive tenant context server-side and enforce the roles in PHASE1_CONTRACTS. Consume forecast-feature-row and return forecast; never use the legacy evaluation prediction as a public operational response. Refit after selection, calibrate on validation-only outputs, use temporal uncertainty, suppress with null values, and record all versions. Return typed api-error payloads. Test future-window semantics, cross-tenant denial, role denial, calibration provenance, suppressed output, and unavailable-model fallback.
 ```
 
-## Person 3 prompt - Product and integration
+## Person 3 — Frontend
 
 ```text
-You are the product/integration engineer for an aggregate crime-hotspot forecasting hackathon. Read AGENTS.md, docs/ARCHITECTURE.md, docs/PAPER_MATRIX.md, and docs/TEAM_PLAN.md completely. Own src/api, src/web, integration tests, Docker files, and demo documentation.
-
-Implement a typed FastAPI service and React/TypeScript MapLibre dashboard using the contracts in docs/ARCHITECTURE.md and contracts/. Resolve tenant context from authenticated server-side identity; do not accept tenant_id as an ordinary query parameter. Add source registration/status and recorded-replay controls for the demo, with authorization and audit events. Start with committed two-tenant synthetic fixtures so development does not wait for the model. The map needs source freshness, time/category controls, a clear risk legend, loading/empty/error states, cell click details, uncertainty, data freshness/model version, top drivers, and a persistent limitations/intended-use panel. Use the `motion` package imported from `motion/react` for purposeful, interruptible state transitions and respect reduced-motion preferences globally. Do not animate risk values in a way that exaggerates severity. Do not show raw incident coordinates, individual records, prescriptive patrol recommendations, or protected-attribute overlays. Generate or share API types rather than duplicating schemas manually. Add API isolation tests and one end-to-end smoke test covering tenant switch, replay status, and the main map flow.
-
-Implement a provider interface with a fake test provider and a Reka provider using the OpenAI-compatible API at REKA_BASE_URL. Keep REKA_API_KEY server-side and select the configured model through REKA_MODEL. Build two use cases: validated source-mapping proposals and a streamed analyst copilot limited to allowlisted aggregate tools. Validate responses against contracts/schemas/reka-*.schema.json, require fact_id citations, record audit metadata without raw prompts, apply per-tenant quotas/timeouts, and return deterministic facts when Reka is unavailable. Test injection attempts, malformed output, timeout, refusal, cross-tenant tool arguments, and secret leakage.
-
-Before coding, state the screen flow and fixture assumptions. Keep runtime local and reproducible, avoid proprietary dependencies, run focused tests, and summarize changed files, commands, and integration risks.
+Own src/web and frontend/browser tests. Use generated OpenAPI types and the committed fixtures; do not create private contract copies. Build tenant selection, recorded upload, live source setup, processing status, candidate review, coverage health, and H3 forecast map. Visually and textually distinguish unconfirmed candidate detections, confirmed aggregate incidents, and future forecasts. Respect role restrictions, suppression, uncertainty, freshness, provenance, limitations, accessibility, and reduced motion. Never expose secret references, raw coordinates, identities, or enforcement recommendations.
 ```
 
-## Paper-review prompt
+## Research review
 
 ```text
-Read every PDF in papers/ and update docs/PAPER_MATRIX.md. For each paper, capture citation, geography/dataset, spatial and temporal unit, target, features, model, split/evaluation protocol, baselines, key metrics, reproducibility assets, limitations, and concrete architectural implications. Distinguish claims made by the authors from your inference. Flag random splits, target leakage, selective baselines, unclear label availability, and uses that could create individual or protected-class harm. End with a short decision log: adopt, test, or reject each technique and why. Do not modify source PDFs.
+Read approved dataset documentation and every PDF under papers/. Record geography, time range, spatial unit, label process, licensing, features, model, chronological evaluation, baselines, reproducibility, limitations, and reporting/enforcement bias in docs/PAPER_MATRIX.md. Do not transfer published scores to this product without a comparable local evaluation.
 ```

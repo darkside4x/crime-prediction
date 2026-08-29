@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://crime-hotspot.local/schemas/camera-source.schema.json",
+  "title": "CameraSource",
+  "description": "Tenant-owned recorded-video or live-camera source. Credentials and exact location are referenced, never embedded.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "tenant_id", "source_id", "name", "mode", "status", "timezone", "location_ref", "connection", "retention_policy_days", "created_at"],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "tenant_id": {"type": "string", "format": "uuid"},
+    "source_id": {"type": "string", "format": "uuid"},
+    "name": {"type": "string", "minLength": 1, "maxLength": 120},
+    "mode": {"enum": ["recorded_video", "live_camera"]},
+    "status": {"enum": ["draft", "validating", "active", "degraded", "paused", "archived"]},
+    "timezone": {"type": "string", "minLength": 1, "maxLength": 80},
+    "location_ref": {"type": "string", "pattern": "^secret://", "maxLength": 512},
+    "connection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["transport"],
+      "properties": {
+        "transport": {"enum": ["uploaded_asset", "rtsp", "onvif"]},
+        "endpoint_ref": {"type": "string", "pattern": "^secret://", "maxLength": 512},
+        "credential_ref": {"type": "string", "pattern": "^secret://", "maxLength": 512}
+      }
+    },
+    "retention_policy_days": {"type": "integer", "minimum": 0, "maximum": 365},
+    "created_at": {"type": "string", "format": "date-time"},
+    "updated_at": {"type": "string", "format": "date-time"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"mode": {"const": "recorded_video"}}, "required": ["mode"]},
+      "then": {"properties": {"connection": {"properties": {"transport": {"const": "uploaded_asset"}}}}}
+    },
+    {
+      "if": {"properties": {"mode": {"const": "live_camera"}}, "required": ["mode"]},
+      "then": {
+        "properties": {
+          "connection": {
+            "required": ["endpoint_ref", "credential_ref"],
+            "properties": {"transport": {"enum": ["rtsp", "onvif"]}}
+          }
+        }
+      }
+    }
+  ]
+}

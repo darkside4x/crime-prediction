@@ -1,65 +1,68 @@
-# Contracts
+# Contract Index
 
-These schemas are the initial integration boundary. They use JSON Schema 2020-12 and are intentionally transport-neutral.
+JSON Schemas in `contracts/schemas/` are the authoritative integration boundary. The canonical product semantics and cross-field rules are in `docs/PHASE1_CONTRACTS.md`.
+
+Every schema has a synthetic fixture with the same basename under `contracts/fixtures/`. Fixtures demonstrate shape only; they are not observed events, detector results, forecasts, or measured performance.
+
+## Phase 1 product contracts
+
+| Schema | Visibility | Boundary |
+|---|---|---|
+| `camera-source.schema.json` | restricted | recorded/live tenant source with secret location/connection references |
+| `video-asset.schema.json` | restricted | uploaded recording or live segment metadata and retention |
+| `candidate-detection.schema.json` | reviewer-only | unconfirmed detector candidate and expiring evidence reference |
+| `candidate-review.schema.json` | restricted audit | immutable confirmation/rejection decision |
+| `coverage-snapshot.schema.json` | aggregate/public-safe after authorization | measured source availability for one interval |
+| `incident-event.schema.json` | restricted | confirmed canonical event envelope |
+| `feature-row.schema.json` | internal | labelled historical training/evaluation row |
+| `forecast-feature-row.schema.json` | internal | unlabelled future inference row |
+| `forecast.schema.json` | public after suppression | operational future aggregate forecast |
+| `tenant-context.schema.json` | internal | server-derived request tenant and role context |
+| `api-error.schema.json` | public | typed safe error response |
+
+## Existing model and AI artifact contracts
 
 | Schema | Boundary |
 |---|---|
-| `tenant.schema.json` | tenant identity and lifecycle metadata |
-| `data-source.schema.json` | tenant-owned recorded or live source definition; contains only a secret reference |
-| `incident-event.schema.json` | restricted ingestion envelope emitted by every adapter |
-| `feature-row.schema.json` | downstream tenant/cell/time modeling row with no raw event identity or coordinates |
-| `feature-table-manifest.schema.json` | tenant-scoped feature artifact provenance consumed by training |
-| `ingestion-run.schema.json` | replay/live run progress, checkpoint, and rejection summary |
-| `prediction.schema.json` | aggregate tenant-scoped prediction returned by the application API |
-| `model-bundle.schema.json` | fitted-estimator metadata, feature order, serializer, and payload integrity |
-| `model-run-manifest.schema.json` | chronological split, candidate selection, and checksummed model artifacts |
-| `evaluation-report.schema.json` | validation/test metrics, calibration, slices, and spatial error audit |
-| `model-card.schema.json` | structured intended use, prohibited use, performance, and limitations |
-| `reka-fact-bundle.schema.json` | deterministic aggregate facts supplied to Reka; suppressed values are null |
-| `reka-source-mapping.schema.json` | human-reviewable Reka proposal for mapping a source into the incident schema |
-| `reka-insight.schema.json` | grounded Reka explanation whose claims cite supplied aggregate fact IDs |
+| `tenant.schema.json` | tenant identity/lifecycle metadata |
+| `data-source.schema.json` | legacy structured-event source definition |
+| `ingestion-run.schema.json` | replay/live processing status |
+| `feature-table-manifest.schema.json` | historical feature artifact provenance |
+| `prediction.schema.json` | legacy held-out evaluation prediction; not the public operational forecast |
+| `model-bundle.schema.json` | fitted estimator metadata and payload integrity |
+| `model-run-manifest.schema.json` | split, selection, and artifact provenance |
+| `evaluation-report.schema.json` | validation/test metrics and slices |
+| `model-card.schema.json` | intended use, performance, and limitations |
+| `reka-fact-bundle.schema.json` | deterministic aggregate AI facts |
+| `reka-source-mapping.schema.json` | human-reviewed mapping proposal |
+| `reka-insight.schema.json` | fact-cited aggregate explanation |
 
-Representative payloads live in `contracts/fixtures/`. Fixtures are synthetic interface examples, not measured model results. Each fixture uses the schema basename with `.schema` omitted.
+## Security invariants
 
-## Modeling artifact flow
+- Authentication creates tenant context; payload tenant IDs never grant access.
+- Raw footage, evidence, exact locations, coordinates, event identifiers, and secret references never cross the public forecast boundary.
+- Only confirmed review decisions promote candidate detections to incident events.
+- Historical feature rows have labels; future forecast feature rows never do.
+- Suppressed operational forecasts use null estimates, a `suppressed` band, and no drivers.
+- Reka receives only approved aggregate facts and never calculates forecast values.
 
-```text
-feature-row + feature-table-manifest
-                |
-                v
-       model-run-manifest
-          /     |      \
-         v      v       v
- evaluation  model-card  prediction
-         \      |       /
-          v     v      v
-          reka-fact-bundle
-                  |
-                  v
-             reka-insight
-```
+## Versioning and changes
 
-- Feature tables and all downstream artifacts contain exactly one `tenant_id`.
-- `data_version` identifies the feature dataset used for training or inference; `model_version` identifies the selected trained artifact.
-- Model selection uses validation/rolling-origin results. The untouched test window is evaluated only after selection.
-- Reka receives only facts already computed by deterministic code. It does not derive missing values or alter predictions.
-- A suppressed fact must set `suppressed: true` and `value: null`.
+- Semantic versions are carried in each payload.
+- Additive optional changes increment the minor version.
+- Removed fields, renamed fields, or changed meaning require a new major version.
+- Consumers reject unsupported major versions.
+- Update fixture, schema, producers, consumers, generated types, and tests as one coordinated migration.
+- Shared contract changes require review by a teammate outside the author's primary area.
 
-## Versioning
+## Changelog
 
-- `schema_version` uses semantic versioning.
-- Additive optional fields are minor changes.
-- Removing/renaming fields or changing meaning requires a new major version.
-- Producers state a version; consumers reject unsupported major versions.
-- Fixtures must validate against these files in CI.
+### 2026-08-29 — Phase 1 implementation target
 
-The current major versions are:
+- Added recorded/live camera, video asset, candidate detection, immutable review, and coverage contracts.
+- Separated labelled historical features from unlabelled future forecast features.
+- Added an operational forecast contract distinct from held-out evaluation predictions.
+- Defined server tenant context, product roles, and typed API errors.
+- Defined suppression as null/unavailable rather than numeric zero risk.
 
-- `feature-row`, `prediction`, `reka-insight`, and `reka-source-mapping`: `2.0.0`.
-- All other schemas: `1.0.0`.
-
-## Security boundary
-
-The incident event is internal and may contain raw coordinates. It must not be returned by public endpoints, logged as a payload, placed in analytics exports, or sent to remote MCP servers. Downstream records replace location with an H3 cell and omit event identifiers.
-
-Authentication supplies `tenant_id`; schemas include it for storage, routing, audit, and validation—not as authorization proof.
+Status remains implementation target until the required teammate review is recorded.

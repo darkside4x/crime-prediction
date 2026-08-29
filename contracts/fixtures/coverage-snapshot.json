@@ -1,0 +1,14 @@
+{
+  "schema_version": "1.0.0",
+  "tenant_id": "00000000-0000-4000-8000-000000000001",
+  "source_id": "20000000-0000-4000-8000-000000000001",
+  "interval_start": "2026-08-29T00:00:00Z",
+  "interval_end": "2026-08-29T06:00:00Z",
+  "expected_seconds": 21600,
+  "connected_seconds": 21000,
+  "processable_seconds": 20400,
+  "detector_available_seconds": 19800,
+  "coverage_ratio": 0.9166666667,
+  "degraded_reason_codes": ["short_decode_gap"],
+  "computed_at": "2026-08-29T06:01:00Z"
+}
