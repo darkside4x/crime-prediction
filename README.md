@@ -12,6 +12,7 @@ It does not identify people, decide guilt, predict individual behaviour, expose 
 4. [Team plan](docs/TEAM_PLAN.md) — one frontend and two backend owners
 5. [Research evidence matrix](docs/PAPER_MATRIX.md) — dataset/model evidence status
 6. [Reka AI and Vision](docs/REKA_AI.md) — managed video intelligence and grounded forecast explanations
+7. [Reka platform research](docs/REKA_PLATFORM_RESEARCH.md) — current APIs, limits, AWS architecture, and product decisions
 
 Repository instructions are in [AGENTS.md](AGENTS.md).
 
@@ -25,7 +26,9 @@ Implemented today:
 - point-in-time historical feature generation;
 - historical-rate, previous-period, regularized Poisson, and LightGBM candidates;
 - chronological evaluation and versioned model artifacts;
-- fixture-backed FastAPI risk/model/copilot endpoints with demo tenant isolation;
+- authenticated FastAPI forecast/model/copilot endpoints with demo tenant isolation, typed errors, idempotency, and audit records;
+- schema-valid operational historical-rate fallback with coverage/support suppression;
+- live server-side Reka Chat explanations with strict grounding and deterministic failure fallback;
 - a fixture-backed React/MapLibre dashboard and Docker demo setup.
 
 Contracted but not yet implemented:
@@ -33,8 +36,8 @@ Contracted but not yet implemented:
 - backend-proxied Reka Vision upload/index/search/Q&A/tagging/highlights;
 - Reka-proposed candidate detection and human review;
 - measured source coverage;
-- future feature snapshots and operational inference;
-- production authentication/authorization, upload/review, and operational forecast endpoints;
+- future feature snapshot generation and an approved calibrated-model registry;
+- production identity-provider integration and Person 1 media upload/worker connection;
 - recorded-video onboarding/review screens connected to the real APIs;
 - Postgres/RLS, durable workers, monitoring, and drift checks.
 
