@@ -38,6 +38,7 @@ class PlatformSettings:
     queue_url: str = field(repr=False)
     queue_dlq_url: str = field(repr=False)
     operation_queue_urls: dict[str, str] = field(repr=False)
+    operation_dlq_urls: dict[str, str] = field(repr=False)
     media_bucket: str
     media_kms_key_id: str
     media_bucket_owner: str | None
@@ -90,6 +91,15 @@ class PlatformSettings:
                 for operation in ("upload", "index", "analyze", "delete")
                 if os.getenv(f"VIDEO_QUEUE_URL_{operation.upper()}", "").strip()
             },
+            operation_dlq_urls={
+                operation: os.getenv(
+                    f"VIDEO_QUEUE_DLQ_URL_{operation.upper()}", ""
+                ).strip()
+                for operation in ("upload", "index", "analyze", "delete")
+                if os.getenv(
+                    f"VIDEO_QUEUE_DLQ_URL_{operation.upper()}", ""
+                ).strip()
+            },
         )
         settings = cls(**values)
         if not settings.reka_vision_base_url.startswith("https://"):
@@ -113,6 +123,15 @@ class PlatformSettings:
         }:
             raise ValueError(
                 "Configure all four operation-specific VIDEO_QUEUE_URL_* values"
+            )
+        if settings.operation_dlq_urls and set(settings.operation_dlq_urls) != {
+            "upload",
+            "index",
+            "analyze",
+            "delete",
+        }:
+            raise ValueError(
+                "Configure all four operation-specific VIDEO_QUEUE_DLQ_URL_* values"
             )
         return settings
 
@@ -146,6 +165,7 @@ def create_platform_runtime(
         queue_url=settings.queue_url,
         dead_letter_queue_url=settings.queue_dlq_url,
         queue_urls=settings.operation_queue_urls or None,
+        dead_letter_queue_urls=settings.operation_dlq_urls or None,
         region_name=settings.aws_region,
         visibility_seconds=settings.worker_lease_seconds,
     )

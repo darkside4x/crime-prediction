@@ -453,10 +453,12 @@ def test_sqs_operation_queues_route_each_stage_without_worker_contention() -> No
         operation: f"https://sqs.example/{operation}"
         for operation in ("upload", "index", "analyze", "delete")
     }
+    dlqs = {operation: f"{url}-dlq" for operation, url in queues.items()}
     broker = SqsJobBroker(
         queue_url=queues["upload"],
         queue_urls=queues,
         dead_letter_queue_url="https://sqs.example/jobs-dlq",
+        dead_letter_queue_urls=dlqs,
         region_name="ap-south-1",
         wait_seconds=0,
         client=client,
@@ -473,5 +475,6 @@ def test_sqs_operation_queues_route_each_stage_without_worker_contention() -> No
     ]
     delivery = broker.receive(operations=("index",))[0]
     assert client.receives[-1]["QueueUrl"] == queues["index"]
-    broker.acknowledge(delivery)
+    broker.dead_letter(delivery, error_code="reka_index_failed")
+    assert client.sent[-1]["QueueUrl"] == dlqs["index"]
     assert client.deleted[-1]["QueueUrl"] == queues["index"]

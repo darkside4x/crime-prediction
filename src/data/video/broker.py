@@ -74,6 +74,7 @@ class SqsJobBroker:
         dead_letter_queue_url: str,
         region_name: str,
         queue_urls: dict[str, str] | None = None,
+        dead_letter_queue_urls: dict[str, str] | None = None,
         visibility_seconds: int = 120,
         wait_seconds: int = 10,
         client: object | None = None,
@@ -87,6 +88,13 @@ class SqsJobBroker:
             raise ValueError(
                 "Operation queue URLs must define upload, index, analyze, and delete"
             )
+        if dead_letter_queue_urls is not None and (
+            set(dead_letter_queue_urls) != {"upload", "index", "analyze", "delete"}
+            or any(not value for value in dead_letter_queue_urls.values())
+        ):
+            raise ValueError(
+                "Operation dead-letter queue URLs must define upload, index, analyze, and delete"
+            )
         if client is None:
             try:
                 import boto3
@@ -99,11 +107,15 @@ class SqsJobBroker:
         self.queue_url = queue_url
         self.queue_urls = dict(queue_urls or {})
         self.dead_letter_queue_url = dead_letter_queue_url
+        self.dead_letter_queue_urls = dict(dead_letter_queue_urls or {})
         self.visibility_seconds = visibility_seconds
         self.wait_seconds = min(max(wait_seconds, 0), 20)
 
     def _queue_for(self, operation: str) -> str:
         return self.queue_urls.get(operation, self.queue_url)
+
+    def _dead_letter_queue_for(self, operation: str) -> str:
+        return self.dead_letter_queue_urls.get(operation, self.dead_letter_queue_url)
 
     def publish(self, message: JobMessage, *, delay_seconds: int = 0) -> None:
         kwargs: dict[str, Any] = {
@@ -220,11 +232,12 @@ class SqsJobBroker:
             sort_keys=True,
             separators=(",", ":"),
         )
+        queue_url = self._dead_letter_queue_for(delivery.message.operation)
         kwargs: dict[str, Any] = {
-            "QueueUrl": self.dead_letter_queue_url,
+            "QueueUrl": queue_url,
             "MessageBody": body,
         }
-        if self.dead_letter_queue_url.endswith(".fifo"):
+        if queue_url.endswith(".fifo"):
             kwargs.update(
                 MessageGroupId=f"{delivery.message.tenant_id}:{delivery.message.operation}",
                 MessageDeduplicationId=f"{delivery.message.job_id}:{error_code}",
