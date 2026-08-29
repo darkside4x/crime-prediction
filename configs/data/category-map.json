@@ -1,0 +1,27 @@
+{
+  "schema_version": "1.0.0",
+  "unknown_policy": "other",
+  "canonical_categories": [
+    "property",
+    "violence",
+    "public_order",
+    "traffic_safety",
+    "other"
+  ],
+  "aliases": {
+    "burglary": "property",
+    "robbery": "property",
+    "shoplifting": "property",
+    "stealing": "property",
+    "theft": "property",
+    "arson": "property",
+    "abuse": "violence",
+    "assault": "violence",
+    "fighting": "violence",
+    "shooting": "violence",
+    "vandalism": "public_order",
+    "disturbance": "public_order",
+    "road accident": "traffic_safety",
+    "traffic accident": "traffic_safety"
+  }
+}

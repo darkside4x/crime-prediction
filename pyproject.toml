@@ -1,0 +1,29 @@
+[project]
+name = "crime-hotspot-prototype"
+version = "0.1.0"
+description = "Tenant-aware incident replay and leakage-safe aggregate feature pipeline"
+requires-python = ">=3.12"
+dependencies = [
+  "h3==4.3.1",
+  "jsonschema[format]==4.25.1",
+  "polars==1.32.3",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest==8.4.1",
+]
+
+[project.scripts]
+crime-data = "src.data.cli:main"
+
+[build-system]
+requires = ["hatchling==1.27.0"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
