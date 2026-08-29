@@ -180,6 +180,26 @@ def _risk_band(value: float, thresholds: tuple[float, float, float]) -> str:
     return "high"
 
 
+def _rolling_residual_interval(
+    *,
+    model_name: str,
+    rows: list[dict[str, Any]],
+    config: ModelConfig,
+) -> tuple[float, float]:
+    """Estimate a 90% error interval using only pre-test rolling origins."""
+    factory = dict(_candidate_factories(config))[model_name]
+    residuals: list[float] = []
+    for fold_train, fold_validation in rolling_origin_folds(rows, config):
+        model = factory().fit(fold_train)
+        actual = target_vector(fold_validation, config.target)
+        predicted = model.predict(fold_validation)
+        residuals.extend((actual - predicted).tolist())
+    if not residuals:
+        return 0.0, 0.0
+    lower, upper = np.quantile(np.asarray(residuals, dtype=float), [0.05, 0.95])
+    return float(lower), float(upper)
+
+
 def _prediction_rows(
     *,
     rows: list[dict[str, Any]],
@@ -344,6 +364,7 @@ def _evaluation_report(
             "Drivers are model associations, not causal explanations.",
             "Performance may shift across time, categories, coverage levels, and geographies.",
             "This aggregate forecast must not be used for individual assessment or automated enforcement decisions.",
+            "Occurrence probabilities currently use the Poisson link without a promoted tenant calibration artifact.",
         ],
     }
     validate_contract("evaluation-report", report)
@@ -375,7 +396,10 @@ def _model_card(
         "model_name": selected_name,
         "target": "next_window_count",
         "prediction_unit": f"Expected aggregate incident count for one tenant, H3 cell, category, and {config.window_hours}-hour UTC window.",
-        "training_period": {"start": format_utc(split.train_start), "end": format_utc(split.train_end)},
+        "training_period": {
+            "start": format_utc(split.train_start),
+            "end": format_utc(split.validation_end),
+        },
         "evaluation_period": {"start": format_utc(split.test_start), "end": format_utc(split.test_end)},
         "primary_metric": {
             "name": metric_name,
@@ -399,8 +423,8 @@ def _model_card(
             "Treating model drivers as causes or forecasts as observed ground truth.",
         ],
         "limitations": list(report["limitations"]),
-        "uncertainty_method": "A model-implied approximate 90% Poisson interval is computed as expected count plus or minus 1.645 square roots of the expected count and clipped at zero.",
-        "suppression_policy": f"Cell/category outputs with fewer than {config.min_training_events_to_publish} training events are marked suppressed and expose zeroed public fields; Reka facts expose null.",
+        "uncertainty_method": "A 90% rolling-origin residual interval is estimated from chronological pre-test folds and applied to held-out expected counts.",
+        "suppression_policy": f"Legacy evaluation rows with fewer than {config.min_training_events_to_publish} pre-test events are marked suppressed and zeroed for schema compatibility; operational forecast responses expose null estimates.",
         "feature_interpretation": "Feature drivers indicate the direction of model association for an aggregate row and must never be described as causal.",
         "human_review_required": True,
     }
@@ -432,9 +456,15 @@ def _export_tenant(
     tenant_id = manifest["tenant_id"]
     data_version = manifest["dataset_version"]
     split = chronological_split(rows, config)
-    models, _, validation_metrics, report_metrics = _train_and_compare(split, config)
+    _, _, validation_metrics, report_metrics = _train_and_compare(split, config)
     selected_name, observed_gain, reason = _select_model(validation_metrics, config)
-    selected_model = models[selected_name]
+    # Selection sees only the original training/validation blocks.  Once the
+    # candidate is fixed, refit it on all pre-test observations before the
+    # untouched test evaluation and artifact export.
+    factories = dict(_candidate_factories(config))
+    refit_rows = split.train + split.validation
+    selected_model = factories[selected_name]().fit(refit_rows)
+    refit_baseline = factories["historical_rate"]().fit(refit_rows)
     generated_at = utc_now()
     repository_version = code_version(REPOSITORY_ROOT)
     config_checksum = sha256_file(config_path)
@@ -451,13 +481,17 @@ def _export_tenant(
         reason=reason,
         report_metrics=report_metrics,
         selected_model=selected_model,
-        baseline_model=models["historical_rate"],
+        baseline_model=refit_baseline,
         split=split,
         config=config,
     )
-    poisson_scale = np.sqrt(np.maximum(test_expected, 0.0))
-    lower = np.maximum(test_expected - 1.645 * poisson_scale, 0.0)
-    upper = np.maximum(test_expected + 1.645 * poisson_scale, 0.0)
+    residual_lower, residual_upper = _rolling_residual_interval(
+        model_name=selected_name,
+        rows=refit_rows,
+        config=config,
+    )
+    lower = np.maximum(np.minimum(test_expected + residual_lower, test_expected), 0.0)
+    upper = np.maximum(test_expected + residual_upper, test_expected)
     predictions = _prediction_rows(
         rows=split.test,
         expected=test_expected,
@@ -465,7 +499,7 @@ def _export_tenant(
         lower=lower,
         upper=upper,
         estimator=selected_model,
-        training_rows=split.train,
+        training_rows=refit_rows,
         tenant_id=tenant_id,
         model_version=model_version,
         data_version=data_version,
