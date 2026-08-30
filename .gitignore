@@ -27,4 +27,6 @@ dist/
 # Web
 src/web/node_modules/
 src/web/dist/
+src/web/test-results/
+src/web/playwright-report/
 .pnpm-store/

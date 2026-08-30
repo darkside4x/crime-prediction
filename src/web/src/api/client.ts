@@ -133,9 +133,11 @@ async function request<T>(
 ): Promise<T> {
   const headers: Record<string, string> = {
     Authorization: `Bearer ${token}`,
-    "Content-Type": "application/json",
     ...(init?.headers as Record<string, string> | undefined),
   };
+  if (init?.body && !(init.body instanceof FormData)) {
+    headers["Content-Type"] = "application/json";
+  }
   if (init?.idempotencyKey) headers["Idempotency-Key"] = init.idempotencyKey;
   const response = await fetch(`${BASE}${path}`, { ...init, headers });
   if (!response.ok) {
@@ -167,11 +169,29 @@ export const api = {
       body: JSON.stringify(body),
       idempotencyKey,
     }),
-  requestVideoUpload: (token: string, idempotencyKey: string) =>
-    request<unknown>("/v1/video-assets/uploads", token, {
+  uploadVideo: (
+    token: string,
+    upload: {
+      sourceId: string;
+      capturedStart: string;
+      capturedEnd: string;
+      consentConfirmed: boolean;
+      file: File;
+    },
+    idempotencyKey: string,
+  ) => {
+    const body = new FormData();
+    body.append("source_id", upload.sourceId);
+    body.append("captured_start", upload.capturedStart);
+    body.append("captured_end", upload.capturedEnd);
+    body.append("consent_confirmed", String(upload.consentConfirmed));
+    body.append("file", upload.file, upload.file.name);
+    return request<NearLiveRun>("/v1/video-assets/uploads", token, {
       method: "POST",
+      body,
       idempotencyKey,
-    }),
+    });
+  },
   ingestionRun: (token: string, runId: string) =>
     request<NearLiveRun>(`/v1/ingestion/runs/${encodeURIComponent(runId)}`, token),
   startNearLiveCapture: (token: string, durationSeconds = 20) =>

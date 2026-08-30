@@ -7,6 +7,11 @@ and each worker stage independently. Multi-host production should move the same
 containers to ECS/Fargate and mount the model registry from EFS or replace it
 with a transactional artifact registry.
 
+The review-two foundation provisions encrypted EFS and the production Compose
+stack requires it at `MODEL_REGISTRY_HOST_PATH`. A long-running `freshclam`
+service updates the shared malware definitions twice daily; API replicas mount
+those definitions read-only and fail closed while scanning uploads.
+
 ## Required AWS controls
 
 - EC2 has no inbound database, API or Docker daemon ports. Put an ALB or an
@@ -27,8 +32,44 @@ with a transactional artifact registry.
 - The Reka key and PostgreSQL DSN are root-owned `0400` files under
   `/opt/crime-platform/secrets`; they are mounted as Compose secrets and never
   stored in the image or ordinary container environment.
+- Mount the foundation EFS access point with TLS and IAM authorization at the
+  configured `MODEL_REGISTRY_HOST_PATH` before starting Compose.
 
 ## Start
+
+Provision the review foundation with CloudFormation (choose three subnets in
+different availability zones):
+
+```bash
+aws cloudformation deploy \
+  --region ap-south-1 \
+  --stack-name crime-prediction-review2-foundation \
+  --template-file deploy/aws-vm/review2-foundation.yml \
+  --parameter-overrides \
+    EnvironmentName=review2 \
+    VpcId=vpc-replace-me \
+    DatabaseSubnetIds=subnet-one,subnet-two,subnet-three \
+    AllowDatabaseBootstrap=true \
+  --capabilities CAPABILITY_IAM
+```
+
+Run `bootstrap-database.sh` once on the SSM-managed host using the stack's
+database address and secret ARN outputs. Then immediately redeploy the
+foundation with `AllowDatabaseBootstrap=false`. That removes the host's
+temporary master-secret read and app-secret write permissions; normal runtime
+can read only the sealed application DSN.
+
+The host template defaults to a private SSM-managed EC2 host with no inbound
+rule. Set `CreateReviewEndpoint=true` only after the AWS account is permitted to
+create CloudFront distributions. That endpoint uses the CloudFront default TLS
+certificate and an origin-verification header; the ALB rejects direct requests.
+For a custom domain, use an ACM certificate and HTTPS listener instead.
+
+The generated Reka secret is deliberately a placeholder. Replace it with a
+newly rotated key before writing the container secret file. Never reuse a key
+that has appeared in chat or shell history.
+
+After the host is online and EFS is mounted:
 
 ```bash
 cp deploy/aws-vm/.env.production.example deploy/aws-vm/.env.production

@@ -14,6 +14,10 @@ x-platform-environment: &platform-environment
   VIDEO_QUEUE_URL_ANALYZE: ${VIDEO_QUEUE_URL_ANALYZE:?Set VIDEO_QUEUE_URL_ANALYZE}
   VIDEO_QUEUE_URL_DELETE: ${VIDEO_QUEUE_URL_DELETE:?Set VIDEO_QUEUE_URL_DELETE}
   VIDEO_QUEUE_DLQ_URL: ${VIDEO_QUEUE_DLQ_URL:?Set VIDEO_QUEUE_DLQ_URL}
+  VIDEO_QUEUE_DLQ_URL_UPLOAD: ${VIDEO_QUEUE_DLQ_URL_UPLOAD:?Set VIDEO_QUEUE_DLQ_URL_UPLOAD}
+  VIDEO_QUEUE_DLQ_URL_INDEX: ${VIDEO_QUEUE_DLQ_URL_INDEX:?Set VIDEO_QUEUE_DLQ_URL_INDEX}
+  VIDEO_QUEUE_DLQ_URL_ANALYZE: ${VIDEO_QUEUE_DLQ_URL_ANALYZE:?Set VIDEO_QUEUE_DLQ_URL_ANALYZE}
+  VIDEO_QUEUE_DLQ_URL_DELETE: ${VIDEO_QUEUE_DLQ_URL_DELETE:?Set VIDEO_QUEUE_DLQ_URL_DELETE}
   VIDEO_MEDIA_BUCKET: ${VIDEO_MEDIA_BUCKET:?Set VIDEO_MEDIA_BUCKET}
   VIDEO_MEDIA_KMS_KEY_ID: ${VIDEO_MEDIA_KMS_KEY_ID:?Set VIDEO_MEDIA_KMS_KEY_ID}
   VIDEO_MEDIA_BUCKET_OWNER: ${VIDEO_MEDIA_BUCKET_OWNER:?Set VIDEO_MEDIA_BUCKET_OWNER}
@@ -65,8 +69,9 @@ services:
       OIDC_MEMBERSHIPS_CLAIM: ${OIDC_MEMBERSHIPS_CLAIM:-tenant_memberships}
       API_WORKERS: ${API_WORKERS:-2}
     volumes:
-      - model-registry:/app/data/models
+      - ${MODEL_REGISTRY_HOST_PATH:?Mount the EFS model registry on the host}:/app/data/models
       - api-runtime:/app/data/runtime
+      - clamav-db:/var/lib/clamav:ro
     expose:
       - "8000"
     healthcheck:
@@ -78,6 +83,34 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
+      clamav-updater:
+        condition: service_healthy
+
+  clamav-updater:
+    build:
+      context: ../..
+      dockerfile: docker/api.Dockerfile
+    command: ["freshclam", "--foreground=true", "--checks=12", "--stdout"]
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    volumes:
+      - clamav-db:/var/lib/clamav
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          test -s /var/lib/clamav/daily.cvd ||
+          test -s /var/lib/clamav/daily.cld
+      interval: 30s
+      timeout: 3s
+      retries: 20
+      start_period: 90s
 
   web:
     build:
@@ -133,4 +166,4 @@ secrets:
 
 volumes:
   api-runtime:
-  model-registry:
+  clamav-db:

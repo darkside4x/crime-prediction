@@ -9,7 +9,8 @@ from src.api.app import create_app
 from src.api.forecasting import ForecastOrchestrator, PostgresForecastRepository
 from src.api.settings import Settings
 from src.api.state import PostgresAuditLog, PostgresIdempotencyStore
-from src.data.platform_security import PostgresRateLimiter
+from src.api.tenancy import OidcAuthenticationProvider
+from src.data.platform_security import PostgresActiveTenantStore, PostgresRateLimiter
 from src.models.operational import ForecastService
 from src.models.registry import FilesystemApprovedModelRegistry
 
@@ -42,8 +43,17 @@ def build_production_app():
         forecast_service,
         PostgresForecastRepository(runtime.database),
     )
+    auth_provider = OidcAuthenticationProvider(
+        issuer=api_settings.oidc_issuer,
+        audience=api_settings.oidc_audience,
+        jwks_url=api_settings.oidc_jwks_url,
+        algorithms=api_settings.oidc_algorithms,
+        memberships_claim=api_settings.oidc_memberships_claim,
+        active_tenant_store=PostgresActiveTenantStore(runtime.database),
+    )
     app = create_app(
         settings=api_settings,
+        auth_provider=auth_provider,
         forecast_service=forecast_service,
         coverage_provider=StoreCoverageProvider(runtime.video_store),
         video_service=runtime.service,

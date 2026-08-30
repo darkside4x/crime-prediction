@@ -53,3 +53,38 @@ class PostgresRateLimiter:
             0 if allowed else max(1, math.ceil(bucket + self.window_seconds - current))
         )
         return allowed, retry_after
+
+
+class PostgresActiveTenantStore:
+    """Cross-replica OIDC active-tenant selection without storing subject PII."""
+
+    development_only = False
+
+    def __init__(self, database: Any) -> None:
+        self.database = database
+
+    @staticmethod
+    def _principal_hash(principal_id: str) -> str:
+        if not 1 <= len(principal_id) <= 200:
+            raise ValueError("principal_id is outside the supported range")
+        return hashlib.sha256(principal_id.encode("utf-8")).hexdigest()
+
+    def get(self, principal_id: str) -> str | None:
+        with self.database.system_transaction() as cursor:
+            cursor.execute(
+                "SELECT tenant_id FROM principal_active_tenants WHERE principal_hash=%s",
+                (self._principal_hash(principal_id),),
+            )
+            row = cursor.fetchone()
+        return str(row["tenant_id"]) if row else None
+
+    def set(self, principal_id: str, tenant_id: str) -> None:
+        with self.database.system_transaction() as cursor:
+            cursor.execute(
+                """INSERT INTO principal_active_tenants
+                   (principal_hash,tenant_id,updated_at)
+                   VALUES (%s,%s,now())
+                   ON CONFLICT (principal_hash) DO UPDATE
+                   SET tenant_id=excluded.tenant_id,updated_at=excluded.updated_at""",
+                (self._principal_hash(principal_id), tenant_id),
+            )

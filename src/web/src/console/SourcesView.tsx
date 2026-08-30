@@ -44,10 +44,31 @@ export default function SourcesView() {
   });
 
   const [file, setFile] = useState<File | null>(null);
+  const [uploadSourceId, setUploadSourceId] = useState("");
+  const [consentConfirmed, setConsentConfirmed] = useState(false);
   const [fileError, setFileError] = useState<string | null>(null);
   const uploadKey = useRef(newIdempotencyKey());
   const upload = useMutation({
-    mutationFn: () => api.requestVideoUpload(token, uploadKey.current),
+    mutationFn: () => {
+      if (!file || !uploadSourceId || !consentConfirmed) {
+        throw new Error("Upload prerequisites are incomplete");
+      }
+      const now = Date.now();
+      const capturedStart = new Date(
+        Math.min(file.lastModified || now - 60_000, now - 1_000),
+      ).toISOString();
+      return api.uploadVideo(
+        token,
+        {
+          sourceId: uploadSourceId,
+          capturedStart,
+          capturedEnd: new Date(now).toISOString(),
+          consentConfirmed,
+          file,
+        },
+        uploadKey.current,
+      );
+    },
     onSettled: () => {
       uploadKey.current = newIdempotencyKey();
     },
@@ -162,6 +183,30 @@ export default function SourcesView() {
             />
             {file ? `${file.name} (${(file.size / 1_048_576).toFixed(1)} MB)` : "Choose an MP4 recording"}
           </label>
+          <label>
+            Recorded source
+            <select
+              value={uploadSourceId}
+              onChange={(event) => setUploadSourceId(event.target.value)}
+            >
+              <option value="">Select a registered recorded source</option>
+              {sources.data?.items
+                .filter((source) => source.mode === "recorded_video")
+                .map((source) => (
+                  <option key={source.source_id} value={source.source_id}>
+                    {source.name}
+                  </option>
+                ))}
+            </select>
+          </label>
+          <label className="row">
+            <input
+              type="checkbox"
+              checked={consentConfirmed}
+              onChange={(event) => setConsentConfirmed(event.target.checked)}
+            />
+            I confirm this tenant is authorized to process this recording.
+          </label>
           {fileError && (
             <p role="alert" className="error-banner">
               {fileError}
@@ -170,7 +215,7 @@ export default function SourcesView() {
           <div className="row">
             <button
               type="button"
-              disabled={!file || upload.isPending}
+              disabled={!file || !uploadSourceId || !consentConfirmed || upload.isPending}
               onClick={() => upload.mutate()}
             >
               {upload.isPending ? "Requesting upload…" : "Start upload"}
@@ -199,6 +244,11 @@ export default function SourcesView() {
                 </p>
               )}
             </div>
+          )}
+          {upload.isSuccess && (
+            <p className="ok-banner">
+              Upload accepted. Processing run {upload.data.run_id.slice(0, 8)} is {upload.data.state}.
+            </p>
           )}
         </div>
       </div>

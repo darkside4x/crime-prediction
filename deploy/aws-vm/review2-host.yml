@@ -1,0 +1,291 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Crime prediction review-two EC2 host with an optional AWS-hosted TLS review endpoint.
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: review2
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+  PublicSubnetOne:
+    Type: AWS::EC2::Subnet::Id
+  PublicSubnetTwo:
+    Type: AWS::EC2::Subnet::Id
+  AppSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+  InstanceProfileName:
+    Type: String
+  PlatformKmsKeyArn:
+    Type: String
+  ModelRegistryFileSystemId:
+    Type: String
+  ModelRegistryAccessPointId:
+    Type: String
+  CloudFrontPrefixListId:
+    Type: String
+    Default: pl-9aa247f3
+  CreateReviewEndpoint:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+  OriginVerifyHeader:
+    Type: String
+    NoEcho: true
+    MinLength: 32
+  InstanceType:
+    Type: String
+    Default: t3.large
+    AllowedValues: [t3.medium, t3.large, t3.xlarge]
+  RepositoryUrl:
+    Type: String
+    Default: https://github.com/darkside4x/crime-prediction.git
+  RepositoryBranch:
+    Type: String
+    Default: sakthi/security-scale
+  DockerComposeVersion:
+    Type: String
+    Default: v5.5.0
+  DockerComposeSha256:
+    Type: String
+    Default: c57ab918abd5b05ca7e7d0f275875dd1330a695074f309dc9eab1b49efafcd4b
+    AllowedPattern: "[a-f0-9]{64}"
+  LatestAmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+
+Conditions:
+  CreateReviewEndpointCondition: !Equals [!Ref CreateReviewEndpoint, "true"]
+
+Resources:
+  LoadBalancerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Condition: CreateReviewEndpointCondition
+    Properties:
+      GroupDescription: Accept origin traffic only from the CloudFront managed prefix list
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourcePrefixListId: !Ref CloudFrontPrefixListId
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          DestinationSecurityGroupId: !Ref AppSecurityGroupId
+
+  AppIngressFromLoadBalancer:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: CreateReviewEndpointCondition
+    Properties:
+      GroupId: !Ref AppSecurityGroupId
+      IpProtocol: tcp
+      FromPort: 8080
+      ToPort: 8080
+      SourceSecurityGroupId: !Ref LoadBalancerSecurityGroup
+
+  ReviewHost:
+    Type: AWS::EC2::Instance
+    CreationPolicy:
+      ResourceSignal:
+        Count: 1
+        Timeout: PT20M
+    Properties:
+      IamInstanceProfile: !Ref InstanceProfileName
+      ImageId: !Ref LatestAmiId
+      InstanceType: !Ref InstanceType
+      Monitoring: true
+      NetworkInterfaces:
+        - AssociatePublicIpAddress: true
+          DeleteOnTermination: true
+          DeviceIndex: "0"
+          GroupSet:
+            - !Ref AppSecurityGroupId
+          SubnetId: !Ref PublicSubnetOne
+      PropagateTagsToVolumeOnCreation: true
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            DeleteOnTermination: true
+            Encrypted: true
+            KmsKeyId: !Ref PlatformKmsKeyArn
+            VolumeSize: 50
+            VolumeType: gp3
+      Tags:
+        - Key: Name
+          Value: !Sub "crime-prediction-${EnvironmentName}"
+        - Key: application
+          Value: crime-prediction
+        - Key: environment
+          Value: !Ref EnvironmentName
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -euo pipefail
+          trap "/opt/aws/bin/cfn-signal --exit-code 1 --stack '${AWS::StackName}' --resource ReviewHost --region '${AWS::Region}'" ERR
+          dnf update -y
+          dnf install -y docker git amazon-efs-utils jq postgresql17
+          systemctl enable --now docker
+          usermod -aG docker ec2-user
+          mkdir -p /opt/crime-platform/app /opt/crime-platform/secrets /mnt/crime-model-registry
+          chmod 0700 /opt/crime-platform/secrets
+          mount -t efs -o tls,iam,accesspoint=${ModelRegistryAccessPointId} ${ModelRegistryFileSystemId}:/ /mnt/crime-model-registry
+          echo '${ModelRegistryFileSystemId}:/ /mnt/crime-model-registry efs _netdev,tls,iam,accesspoint=${ModelRegistryAccessPointId} 0 0' >> /etc/fstab
+          chown ec2-user:ec2-user /opt/crime-platform/app
+          sudo -u ec2-user git clone --branch '${RepositoryBranch}' --single-branch '${RepositoryUrl}' /opt/crime-platform/app
+          install -d -m 0755 /usr/local/libexec/docker/cli-plugins
+          curl --fail --location --silent --show-error \
+            "https://github.com/docker/compose/releases/download/${DockerComposeVersion}/docker-compose-linux-x86_64" \
+            --output /tmp/docker-compose
+          echo "${DockerComposeSha256}  /tmp/docker-compose" | sha256sum --check
+          install -m 0755 /tmp/docker-compose /usr/local/libexec/docker/cli-plugins/docker-compose
+          rm -f /tmp/docker-compose
+          docker compose version
+          touch /opt/crime-platform/bootstrap-ready
+          /opt/aws/bin/cfn-signal --exit-code 0 --stack '${AWS::StackName}' --resource ReviewHost --region '${AWS::Region}'
+
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Condition: CreateReviewEndpointCondition
+    Properties:
+      HealthCheckEnabled: true
+      HealthCheckIntervalSeconds: 15
+      HealthCheckPath: /health
+      HealthCheckPort: traffic-port
+      HealthCheckProtocol: HTTP
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      Matcher:
+        HttpCode: "200"
+      Port: 8080
+      Protocol: HTTP
+      TargetType: instance
+      Targets:
+        - Id: !Ref ReviewHost
+          Port: 8080
+      UnhealthyThresholdCount: 3
+      VpcId: !Ref VpcId
+
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Condition: CreateReviewEndpointCondition
+    Properties:
+      Scheme: internet-facing
+      SecurityGroups:
+        - !Ref LoadBalancerSecurityGroup
+      Subnets:
+        - !Ref PublicSubnetOne
+        - !Ref PublicSubnetTwo
+      Type: application
+
+  Listener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Condition: CreateReviewEndpointCondition
+    Properties:
+      DefaultActions:
+        - Type: fixed-response
+          FixedResponseConfig:
+            ContentType: text/plain
+            MessageBody: forbidden
+            StatusCode: "403"
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 80
+      Protocol: HTTP
+
+  VerifiedOriginRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Condition: CreateReviewEndpointCondition
+    Properties:
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+      Conditions:
+        - Field: http-header
+          HttpHeaderConfig:
+            HttpHeaderName: X-Origin-Verify
+            Values:
+              - !Ref OriginVerifyHeader
+      ListenerArn: !Ref Listener
+      Priority: 1
+
+  ReviewDistribution:
+    Type: AWS::CloudFront::Distribution
+    Condition: CreateReviewEndpointCondition
+    Properties:
+      DistributionConfig:
+        Comment: !Sub "Crime prediction ${EnvironmentName} TLS review endpoint"
+        DefaultCacheBehavior:
+          AllowedMethods: [DELETE, GET, HEAD, OPTIONS, PATCH, POST, PUT]
+          CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+          Compress: true
+          OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac
+          TargetOriginId: review-alb
+          ViewerProtocolPolicy: redirect-to-https
+        Enabled: true
+        HttpVersion: http2and3
+        IPV6Enabled: true
+        Origins:
+          - CustomOriginConfig:
+              HTTPPort: 80
+              OriginKeepaliveTimeout: 5
+              OriginProtocolPolicy: http-only
+              OriginReadTimeout: 60
+            DomainName: !GetAtt LoadBalancer.DNSName
+            Id: review-alb
+            OriginCustomHeaders:
+              - HeaderName: X-Origin-Verify
+                HeaderValue: !Ref OriginVerifyHeader
+        PriceClass: PriceClass_200
+        ViewerCertificate:
+          CloudFrontDefaultCertificate: true
+          MinimumProtocolVersion: TLSv1.2_2021
+
+  InstanceCpuAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Review host CPU is sustained above 85 percent
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: InstanceId
+          Value: !Ref ReviewHost
+      EvaluationPeriods: 3
+      MetricName: CPUUtilization
+      Namespace: AWS/EC2
+      Period: 300
+      Statistic: Average
+      Threshold: 85
+      TreatMissingData: notBreaching
+
+  UnhealthyHostAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: CreateReviewEndpointCondition
+    Properties:
+      AlarmDescription: Review application target is unhealthy
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: LoadBalancer
+          Value: !GetAtt LoadBalancer.LoadBalancerFullName
+        - Name: TargetGroup
+          Value: !GetAtt TargetGroup.TargetGroupFullName
+      EvaluationPeriods: 2
+      MetricName: UnHealthyHostCount
+      Namespace: AWS/ApplicationELB
+      Period: 60
+      Statistic: Maximum
+      Threshold: 0
+      TreatMissingData: breaching
+
+Outputs:
+  InstanceId:
+    Value: !Ref ReviewHost
+  LoadBalancerDnsName:
+    Condition: CreateReviewEndpointCondition
+    Value: !GetAtt LoadBalancer.DNSName
+  ReviewUrl:
+    Value: !If
+      - CreateReviewEndpointCondition
+      - !Sub "https://${ReviewDistribution.DomainName}"
+      - pending-cloudfront-account-verification-or-acm-domain
+  TargetGroupArn:
+    Condition: CreateReviewEndpointCondition
+    Value: !Ref TargetGroup
