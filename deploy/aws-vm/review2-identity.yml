@@ -12,9 +12,21 @@ Parameters:
   CallbackUrl:
     Type: String
     AllowedPattern: "https://.*"
+  AdditionalCallbackUrl:
+    Type: String
+    Default: ""
+    AllowedPattern: "^$|https://.*"
   LogoutUrl:
     Type: String
     AllowedPattern: "https://.*"
+  AdditionalLogoutUrl:
+    Type: String
+    Default: ""
+    AllowedPattern: "^$|https://.*"
+
+Conditions:
+  HasAdditionalCallbackUrl: !Not [!Equals [!Ref AdditionalCallbackUrl, ""]]
+  HasAdditionalLogoutUrl: !Not [!Equals [!Ref AdditionalLogoutUrl, ""]]
 
 Resources:
   TokenClaimsRole:
@@ -168,8 +180,10 @@ Resources:
         - openid
       CallbackURLs:
         - !Ref CallbackUrl
+        - !If [HasAdditionalCallbackUrl, !Ref AdditionalCallbackUrl, !Ref "AWS::NoValue"]
       LogoutURLs:
         - !Ref LogoutUrl
+        - !If [HasAdditionalLogoutUrl, !Ref AdditionalLogoutUrl, !Ref "AWS::NoValue"]
       SupportedIdentityProviders:
         - COGNITO
       AccessTokenValidity: 60
