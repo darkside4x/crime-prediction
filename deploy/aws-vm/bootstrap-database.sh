@@ -87,10 +87,14 @@ SELECT 'CREATE ROLE crime_app'
 WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'crime_app')
 \gexec
 
+-- Amazon RDS master users are members of rds_superuser rather than true
+-- PostgreSQL superusers. They cannot spell SUPERUSER/BYPASSRLS clauses even
+-- when setting them false. New roles already default to both false, and the
+-- verification block below fails closed if either attribute is ever present.
 ALTER ROLE crime_migrator WITH LOGIN PASSWORD :'migrator_password'
-  NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
+  NOCREATEDB NOCREATEROLE NOINHERIT;
 ALTER ROLE crime_app WITH LOGIN PASSWORD :'runtime_password'
-  NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
+  NOCREATEDB NOCREATEROLE NOINHERIT;
 
 -- Remove legacy memberships so neither service role can use SET ROLE to
 -- recover administrative or BYPASSRLS privileges through another principal.

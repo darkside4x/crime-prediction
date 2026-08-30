@@ -14,7 +14,11 @@ def test_bootstrap_removes_runtime_ddl_ownership_and_bypass_paths() -> None:
 
     for required in (
         "ALTER ROLE crime_app WITH LOGIN",
-        "NOINHERIT NOBYPASSRLS",
+        "NOCREATEDB NOCREATEROLE NOINHERIT;",
+        (
+            "rolsuper OR rolcreatedb OR rolcreaterole OR rolinherit "
+            "OR rolbypassrls"
+        ),
         "REASSIGN OWNED BY crime_app TO crime_migrator",
         "REVOKE CONNECT, TEMPORARY ON DATABASE",
         "REVOKE ALL PRIVILEGES ON DATABASE",
