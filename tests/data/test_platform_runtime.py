@@ -204,6 +204,7 @@ def test_s3_storage_is_tenant_prefixed_kms_encrypted_and_reference_safe(
     assert args[2].startswith(f"tenants/{TENANT}/video-assets/{SOURCE}/")
     assert kwargs["ExtraArgs"]["ServerSideEncryption"] == "aws:kms"
     assert kwargs["ExtraArgs"]["SSEKMSKeyId"] == "alias/video"
+    assert "BucketKeyEnabled" not in kwargs["ExtraArgs"]
     assert "restricted" not in ref and args[2] not in ref
     with storage.materialize(ref, tenant_id=TENANT, asset_id=SOURCE) as materialized:
         assert materialized.read_bytes() == b"media"

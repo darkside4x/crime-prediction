@@ -52,6 +52,13 @@ Parameters:
     Type: String
     Default: c57ab918abd5b05ca7e7d0f275875dd1330a695074f309dc9eab1b49efafcd4b
     AllowedPattern: "[a-f0-9]{64}"
+  DockerBuildxVersion:
+    Type: String
+    Default: v0.36.1
+  DockerBuildxSha256:
+    Type: String
+    Default: 48af8a397ebd60178778bf63611dbcebe5f5e7a9be90eb9147b24b9587455778
+    AllowedPattern: "[a-f0-9]{64}"
   LatestAmiId:
     Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
     Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
@@ -179,7 +186,14 @@ Resources:
           echo "${DockerComposeSha256}  /tmp/docker-compose" | sha256sum --check
           install -m 0755 /tmp/docker-compose /usr/local/libexec/docker/cli-plugins/docker-compose
           rm -f /tmp/docker-compose
+          curl --fail --location --silent --show-error \
+            "https://github.com/docker/buildx/releases/download/${DockerBuildxVersion}/buildx-${DockerBuildxVersion}.linux-amd64" \
+            --output /tmp/docker-buildx
+          echo "${DockerBuildxSha256}  /tmp/docker-buildx" | sha256sum --check
+          install -m 0755 /tmp/docker-buildx /usr/local/libexec/docker/cli-plugins/docker-buildx
+          rm -f /tmp/docker-buildx
           docker compose version
+          docker buildx version
           touch /opt/crime-platform/bootstrap-ready
           /opt/aws/bin/cfn-signal --exit-code 0 --stack '${AWS::StackName}' --resource ReviewHost --region '${AWS::Region}'
 

@@ -244,6 +244,7 @@ def _new_source(
 def create_app(
     provider: reka.RekaProvider | None = None,
     *,
+    lifespan: Any | None = None,
     settings: Settings | None = None,
     auth_provider: AuthenticationProvider | None = None,
     forecast_service: ForecastService | None = None,
@@ -307,6 +308,7 @@ def create_app(
         title="Aggregate Incident Forecasting API",
         version="0.2.0",
         description="Tenant-isolated aggregate forecasts. No identity analysis or automated enforcement.",
+        lifespan=lifespan,
     )
     install_error_handlers(app)
     app.add_middleware(
@@ -407,10 +409,26 @@ def create_app(
 
     @app.get("/ready")
     def ready() -> dict[str, Any]:
+        provider_ready = (
+            active_settings.reka_configured
+            and active_settings.reka_provider_verified
+        )
         return {
-            "status": "ready" if active_settings.reka_configured else "degraded",
-            "reka_chat": "configured" if active_settings.reka_configured else "deterministic_fallback",
-            "reka_vision": "configured" if active_settings.reka_configured else "deterministic_fake",
+            "status": "ready" if provider_ready else "degraded",
+            "reka_chat": (
+                "verified"
+                if provider_ready
+                else "configured_unverified"
+                if active_settings.reka_configured
+                else "deterministic_fallback"
+            ),
+            "reka_vision": (
+                "verified"
+                if provider_ready
+                else "configured_unverified"
+                if active_settings.reka_configured
+                else "deterministic_fake"
+            ),
             "video_service": "connected",
             "near_live_capture": "allowlisted_hls",
             "forecast_models": "historical_fallback_only",

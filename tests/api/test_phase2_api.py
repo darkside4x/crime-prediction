@@ -186,6 +186,19 @@ def test_secret_configuration_never_appears_in_repr_or_openapi():
     assert "secret_ref" not in serialized
 
 
+def test_readiness_does_not_treat_an_unverified_reka_key_as_ready():
+    settings = Settings(reka_api_key="configured-but-unverified")
+    with TestClient(
+        create_app(provider=reka.FakeRekaProvider(), settings=settings)
+    ) as client:
+        response = client.get("/ready")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "degraded"
+    assert response.json()["reka_chat"] == "configured_unverified"
+    assert response.json()["reka_vision"] == "configured_unverified"
+
+
 def test_production_rejects_the_development_authentication_provider():
     with pytest.raises(ValueError, match="production AuthenticationProvider"):
         create_app(

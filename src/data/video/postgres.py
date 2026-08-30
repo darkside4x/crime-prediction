@@ -40,7 +40,7 @@ class PostgresVideoStore:
     def list_source_ids(self, tenant_id: str) -> tuple[str, ...]:
         with self.database.transaction(tenant_id) as cursor:
             cursor.execute(
-                "SELECT source_id FROM camera_sources WHERE tenant_id=%s AND definition->>'status'='active'",
+                "SELECT source_id FROM camera_sources WHERE tenant_id=%s ORDER BY created_at, source_id",
                 (tenant_id,),
             )
             return tuple(str(row["source_id"]) for row in cursor.fetchall())
