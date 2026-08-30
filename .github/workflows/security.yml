@@ -100,6 +100,10 @@ jobs:
         run: |
           test "$(docker image inspect crime-prediction-api --format '{{.Config.User}}')" = "10001:10001"
           test "$(docker image inspect crime-prediction-web --format '{{.Config.User}}')" = "101:101"
+      - name: Verify production console commands
+        run: |
+          docker run --rm --entrypoint sh crime-prediction-api -c \
+            'command -v crime-platform-migrate && command -v crime-video-worker'
       - name: Scan images for high and critical vulnerabilities
         run: |
           docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
