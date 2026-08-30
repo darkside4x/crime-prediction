@@ -208,6 +208,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/dispatch-cases/{dispatch_case_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Dispatch Case */
+        get: operations["get_dispatch_case_v1_dispatch_cases__dispatch_case_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/dispatch-cases/{dispatch_case_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Cancel Dispatch */
+        post: operations["cancel_dispatch_v1_dispatch_cases__dispatch_case_id__cancel_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/forecasts": {
         parameters: {
             query?: never;
@@ -234,6 +268,40 @@ export interface paths {
         };
         /** Forecast Detail */
         get: operations["forecast_detail_v1_forecasts__forecast_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/incidents/{incident_id}/dispatch-authorizations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Authorize Dispatch */
+        post: operations["authorize_dispatch_v1_incidents__incident_id__dispatch_authorizations_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/incidents/{incident_id}/dispatch-preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Preview Dispatch */
+        get: operations["preview_dispatch_v1_incidents__incident_id__dispatch_preview_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -412,6 +480,60 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/response-contacts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Response Contacts */
+        get: operations["list_response_contacts_v1_response_contacts_get"];
+        put?: never;
+        /** Create Response Contact */
+        post: operations["create_response_contact_v1_response_contacts_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/response-contacts/{contact_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Response Contact */
+        get: operations["get_response_contact_v1_response_contacts__contact_id__get"];
+        put?: never;
+        post?: never;
+        /** Delete Response Contact */
+        delete: operations["delete_response_contact_v1_response_contacts__contact_id__delete"];
+        options?: never;
+        head?: never;
+        /** Update Response Contact */
+        patch: operations["update_response_contact_v1_response_contacts__contact_id__patch"];
+        trace?: never;
+    };
+    "/v1/response-contacts/{contact_id}/test-calls": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Test Call */
+        post: operations["create_test_call_v1_response_contacts__contact_id__test_calls_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/sources": {
         parameters: {
             query?: never;
@@ -517,10 +639,145 @@ export interface components {
              */
             source_id: string;
         };
+        /** CancelDispatchRequest */
+        CancelDispatchRequest: {
+            /**
+             * Cancel Pending Calls
+             * @default true
+             * @constant
+             */
+            cancel_pending_calls: true;
+            /** Reason */
+            reason: string;
+        };
         /** CopilotMessage */
         CopilotMessage: {
             /** Question */
             question: string;
+        };
+        /** DispatchAttemptView */
+        DispatchAttemptView: {
+            /** Attempt Id */
+            attempt_id: string;
+            /** Attempt Number */
+            attempt_number: number;
+            /** Contact Name */
+            contact_name: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Phone Masked */
+            phone_masked: string;
+            /** Safe Error Code */
+            safe_error_code?: string | null;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "queued" | "dialing" | "ringing" | "answered" | "acknowledged" | "retry_scheduled" | "manual_follow_up" | "unacknowledged" | "failed" | "canceled";
+            /**
+             * Target Role
+             * @enum {string}
+             */
+            target_role: "primary" | "supervisor";
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** DispatchAuthorizationRequest */
+        DispatchAuthorizationRequest: {
+            /**
+             * Authorize Call
+             * @constant
+             */
+            authorize_call: true;
+            /**
+             * Message Template Version
+             * @default dispatch-alert-v1
+             */
+            message_template_version: string;
+        };
+        /** DispatchCaseView */
+        DispatchCaseView: {
+            /** Attempts */
+            attempts?: components["schemas"]["DispatchAttemptView"][];
+            /**
+             * Authorized At
+             * Format: date-time
+             */
+            authorized_at: string;
+            /** Authorized By Principal Id */
+            authorized_by_principal_id: string;
+            /** Canceled At */
+            canceled_at?: string | null;
+            /** Case Reference */
+            case_reference: string;
+            /** Category */
+            category: string;
+            /** Dispatch Case Id */
+            dispatch_case_id: string;
+            /** Incident Id */
+            incident_id: string;
+            /** Message Template Version */
+            message_template_version: string;
+            /** Next Attempt At */
+            next_attempt_at?: string | null;
+            /**
+             * Occurred At
+             * Format: date-time
+             */
+            occurred_at: string;
+            primary_contact: components["schemas"]["DispatchContactSummary"];
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "queued" | "dialing" | "ringing" | "answered" | "acknowledged" | "retry_scheduled" | "escalated" | "manual_follow_up" | "unacknowledged" | "failed" | "canceled";
+            supervisor_contact: components["schemas"]["DispatchContactSummary"];
+            /** Zone Label */
+            zone_label: string;
+        };
+        /** DispatchContactSummary */
+        DispatchContactSummary: {
+            /** Display Name */
+            display_name: string;
+            /** Phone Masked */
+            phone_masked: string;
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "primary" | "supervisor";
+        };
+        /** DispatchPreviewView */
+        DispatchPreviewView: {
+            /** Case Reference */
+            case_reference: string;
+            /** Category */
+            category: string;
+            /** Incident Id */
+            incident_id: string;
+            /**
+             * Maximum Attempts
+             * @default 3
+             * @constant
+             */
+            maximum_attempts: 3;
+            /**
+             * Occurred At
+             * Format: date-time
+             */
+            occurred_at: string;
+            primary_contact: components["schemas"]["DispatchContactSummary"];
+            /** Retry Delay Seconds */
+            retry_delay_seconds: number;
+            supervisor_contact: components["schemas"]["DispatchContactSummary"];
+            /** Zone Label */
+            zone_label: string;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -585,6 +842,125 @@ export interface components {
             /** Timezone */
             timezone: string;
         };
+        /** ResponseContactCreate */
+        ResponseContactCreate: {
+            /** Broad Location Label */
+            broad_location_label: string;
+            /** Calling Window End */
+            calling_window_end: string;
+            /** Calling Window Start */
+            calling_window_start: string;
+            /** Coverage H3 Cells */
+            coverage_h3_cells: string[];
+            /** Display Name */
+            display_name: string;
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled: boolean;
+            /**
+             * Last Verified At
+             * Format: date-time
+             */
+            last_verified_at: string;
+            /**
+             * Opted In For Demo
+             * @default false
+             */
+            opted_in_for_demo: boolean;
+            /**
+             * Phone Number
+             * Format: password
+             */
+            phone_number: string;
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "primary" | "supervisor";
+            /** Timezone */
+            timezone: string;
+            /** Zone Id */
+            zone_id: string;
+        };
+        /** ResponseContactPage */
+        ResponseContactPage: {
+            /** Items */
+            items: components["schemas"]["ResponseContactView"][];
+            /** Next Cursor */
+            next_cursor?: string | null;
+        };
+        /** ResponseContactPatch */
+        ResponseContactPatch: {
+            /** Broad Location Label */
+            broad_location_label?: string | null;
+            /** Calling Window End */
+            calling_window_end?: string | null;
+            /** Calling Window Start */
+            calling_window_start?: string | null;
+            /** Coverage H3 Cells */
+            coverage_h3_cells?: string[] | null;
+            /** Display Name */
+            display_name?: string | null;
+            /** Enabled */
+            enabled?: boolean | null;
+            /** Last Verified At */
+            last_verified_at?: string | null;
+            /** Opted In For Demo */
+            opted_in_for_demo?: boolean | null;
+            /** Phone Number */
+            phone_number?: string | null;
+            /** Role */
+            role?: ("primary" | "supervisor") | null;
+            /** Timezone */
+            timezone?: string | null;
+        };
+        /** ResponseContactView */
+        ResponseContactView: {
+            /** Broad Location Label */
+            broad_location_label: string;
+            /** Calling Window End */
+            calling_window_end: string;
+            /** Calling Window Start */
+            calling_window_start: string;
+            /** Contact Id */
+            contact_id: string;
+            /** Coverage H3 Cells */
+            coverage_h3_cells: string[];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Display Name */
+            display_name: string;
+            /** Enabled */
+            enabled: boolean;
+            /**
+             * Last Verified At
+             * Format: date-time
+             */
+            last_verified_at: string;
+            /** Opted In For Demo */
+            opted_in_for_demo: boolean;
+            /** Phone Masked */
+            phone_masked: string;
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "primary" | "supervisor";
+            /** Timezone */
+            timezone: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Zone Id */
+            zone_id: string;
+        };
         /** ReviewRequest */
         ReviewRequest: {
             /** Confirmed Category */
@@ -604,6 +980,35 @@ export interface components {
              * @default 8
              */
             duration_seconds: number;
+        };
+        /** TestCallRequest */
+        TestCallRequest: {
+            /**
+             * Authorize Test Call
+             * @constant
+             */
+            authorize_test_call: true;
+        };
+        /** TestCallView */
+        TestCallView: {
+            /** Contact Id */
+            contact_id: string;
+            /** Contact Name */
+            contact_name: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Phone Masked */
+            phone_masked: string;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "queued" | "simulated";
+            /** Test Call Id */
+            test_call_id: string;
         };
         /** ValidationError */
         ValidationError: {
@@ -993,6 +1398,74 @@ export interface operations {
             };
         };
     };
+    get_dispatch_case_v1_dispatch_cases__dispatch_case_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                dispatch_case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DispatchCaseView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cancel_dispatch_v1_dispatch_cases__dispatch_case_id__cancel_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: string | null;
+            };
+            path: {
+                dispatch_case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CancelDispatchRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DispatchCaseView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     forecasts_v1_forecasts_get: {
         parameters: {
             query: {
@@ -1050,6 +1523,74 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    authorize_dispatch_v1_incidents__incident_id__dispatch_authorizations_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: string | null;
+            };
+            path: {
+                incident_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DispatchAuthorizationRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DispatchCaseView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    preview_dispatch_v1_incidents__incident_id__dispatch_preview_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                incident_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DispatchPreviewView"];
                 };
             };
             /** @description Validation Error */
@@ -1348,6 +1889,211 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_response_contacts_v1_response_contacts_get: {
+        parameters: {
+            query?: {
+                zone_id?: string | null;
+                enabled?: boolean | null;
+                limit?: number;
+                cursor?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResponseContactPage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_response_contact_v1_response_contacts_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResponseContactCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResponseContactView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_response_contact_v1_response_contacts__contact_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                contact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResponseContactView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_response_contact_v1_response_contacts__contact_id__delete: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: string | null;
+            };
+            path: {
+                contact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_response_contact_v1_response_contacts__contact_id__patch: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: string | null;
+            };
+            path: {
+                contact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResponseContactPatch"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResponseContactView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_test_call_v1_response_contacts__contact_id__test_calls_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: string | null;
+            };
+            path: {
+                contact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TestCallRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TestCallView"];
                 };
             };
             /** @description Validation Error */

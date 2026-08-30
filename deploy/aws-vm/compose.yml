@@ -29,6 +29,23 @@ x-platform-environment: &platform-environment
   VIDEO_SPOOL_ROOT: /var/lib/crime-video-spool
   MODEL_REGISTRY_ROOT: /app/data/models
 
+x-dispatch-environment: &dispatch-environment
+  APP_ENVIRONMENT: production
+  AWS_REGION: ${AWS_REGION:-ap-south-1}
+  DATABASE_URL_FILE: /run/secrets/database_url
+  DISPATCH_MODE: ${DISPATCH_MODE:-mock}
+  DISPATCH_QUEUE_URL: ${DISPATCH_QUEUE_URL:?Set DISPATCH_QUEUE_URL}
+  DISPATCH_QUEUE_DLQ_URL: ${DISPATCH_QUEUE_DLQ_URL:?Set DISPATCH_QUEUE_DLQ_URL}
+  DISPATCH_PUBLIC_BASE_URL: ${DISPATCH_PUBLIC_BASE_URL:?Set the public HTTPS API base URL}
+  DISPATCH_TWILIO_SECRET_FILE: /run/secrets/twilio_voice
+  DISPATCH_CONTACT_SECRET_PREFIX: ${DISPATCH_CONTACT_SECRET_PREFIX:?Set DISPATCH_CONTACT_SECRET_PREFIX}
+  DISPATCH_CONTACT_KMS_KEY_ID: ${VIDEO_MEDIA_KMS_KEY_ID:?Set VIDEO_MEDIA_KMS_KEY_ID}
+  DISPATCH_WORKER_LEASE_SECONDS: ${DISPATCH_WORKER_LEASE_SECONDS:-90}
+  DISPATCH_MAX_CASES_PER_TENANT_DAY: ${DISPATCH_MAX_CASES_PER_TENANT_DAY:-20}
+  DISPATCH_RETRY_SECONDS: ${DISPATCH_RETRY_SECONDS:-30}
+  DISPATCH_EXTERNAL_CALLS_ENABLED: ${DISPATCH_EXTERNAL_CALLS_ENABLED:-false}
+  DISPATCH_APPROVED_DESTINATION_SHA256: ${DISPATCH_APPROVED_DESTINATION_SHA256:-}
+
 x-platform-service: &platform-service
   build:
     context: ../..
@@ -63,6 +80,19 @@ services:
         --no-server-header --proxy-headers
     environment:
       <<: *platform-environment
+      DISPATCH_MODE: ${DISPATCH_MODE:-mock}
+      DISPATCH_QUEUE_URL: ${DISPATCH_QUEUE_URL:?Set DISPATCH_QUEUE_URL}
+      DISPATCH_QUEUE_DLQ_URL: ${DISPATCH_QUEUE_DLQ_URL:?Set DISPATCH_QUEUE_DLQ_URL}
+      DISPATCH_PUBLIC_BASE_URL: ${DISPATCH_PUBLIC_BASE_URL:?Set the public HTTPS API base URL}
+      DISPATCH_TWILIO_SECRET_FILE: /run/secrets/twilio_voice
+      DISPATCH_CONTACT_SECRET_PREFIX: ${DISPATCH_CONTACT_SECRET_PREFIX:?Set DISPATCH_CONTACT_SECRET_PREFIX}
+      DISPATCH_CONTACT_KMS_KEY_ID: ${VIDEO_MEDIA_KMS_KEY_ID:?Set VIDEO_MEDIA_KMS_KEY_ID}
+      DISPATCH_WORKER_LEASE_SECONDS: ${DISPATCH_WORKER_LEASE_SECONDS:-90}
+      DISPATCH_MAX_CASES_PER_TENANT_DAY: ${DISPATCH_MAX_CASES_PER_TENANT_DAY:-20}
+      DISPATCH_RETRY_SECONDS: ${DISPATCH_RETRY_SECONDS:-30}
+      DISPATCH_TEST_CALLS_ENABLED: ${DISPATCH_TEST_CALLS_ENABLED:-false}
+      DISPATCH_EXTERNAL_CALLS_ENABLED: ${DISPATCH_EXTERNAL_CALLS_ENABLED:-false}
+      DISPATCH_APPROVED_DESTINATION_SHA256: ${DISPATCH_APPROVED_DESTINATION_SHA256:-}
       CORS_ORIGINS: ${CORS_ORIGINS:?Set CORS_ORIGINS to HTTPS origins}
       TRUSTED_HOSTS: ${TRUSTED_HOSTS:?Set TRUSTED_HOSTS}
       OIDC_ISSUER: ${OIDC_ISSUER:?Set OIDC_ISSUER}
@@ -71,6 +101,10 @@ services:
       OIDC_ALGORITHMS: ${OIDC_ALGORITHMS:-RS256}
       OIDC_MEMBERSHIPS_CLAIM: ${OIDC_MEMBERSHIPS_CLAIM:-tenant_memberships}
       API_WORKERS: ${API_WORKERS:-2}
+    secrets:
+      - database_url
+      - reka_api_key
+      - twilio_voice
     volumes:
       - ${MODEL_REGISTRY_HOST_PATH:?Mount the EFS model registry on the host}:/app/data/models
       - api-runtime:/app/data/runtime
@@ -177,11 +211,34 @@ services:
       migrate:
         condition: service_completed_successfully
 
+  worker-dispatch:
+    build:
+      context: ../..
+      dockerfile: docker/api.Dockerfile
+    command: ["crime-dispatch-worker"]
+    environment: *dispatch-environment
+    secrets:
+      - database_url
+      - twilio_voice
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
 secrets:
   database_url:
     file: ${DATABASE_URL_SECRET_FILE:?Set DATABASE_URL_SECRET_FILE}
   reka_api_key:
     file: ${REKA_API_KEY_SECRET_FILE:?Set REKA_API_KEY_SECRET_FILE}
+  twilio_voice:
+    file: ${DISPATCH_TWILIO_SECRET_FILE:?Set DISPATCH_TWILIO_SECRET_FILE}
 
 volumes:
   api-runtime:

@@ -5,14 +5,20 @@ import SignIn from "./SignIn";
 
 const ForecastView = lazy(() => import("./ForecastView"));
 const LiveOperations = lazy(() => import("../components/NearLiveReview"));
+const SourcesView = lazy(() => import("./SourcesView"));
 const ProcessingView = lazy(() => import("./ProcessingView"));
 const ReviewView = lazy(() => import("./ReviewView"));
+const ResponseDirectoryView = lazy(() => import("./ResponseDirectoryView"));
+const MobileCaptureView = lazy(() => import("./MobileCaptureView"));
 const ModelCardView = lazy(() => import("./ModelCardView"));
 
 const NAV: Array<{ route: ConsoleRoute; label: string; minRole: "viewer" | "reviewer" | "tenant_admin" }> = [
   { route: "live", label: "Live", minRole: "tenant_admin" },
   { route: "review", label: "Review", minRole: "reviewer" },
   { route: "map", label: "Prediction", minRole: "viewer" },
+  { route: "response", label: "Response", minRole: "tenant_admin" },
+  { route: "sources", label: "Sources", minRole: "tenant_admin" },
+  { route: "mobile-capture", label: "Capture", minRole: "tenant_admin" },
   { route: "processing", label: "System", minRole: "viewer" },
   { route: "model-card", label: "Model", minRole: "viewer" },
 ];
@@ -21,6 +27,9 @@ const ROUTE_CONTEXT: Record<ConsoleRoute, { title: string; code: string }> = {
   live: { title: "Live monitor", code: "REKA / VISION" },
   review: { title: "Review queue", code: "HUMAN / REVIEW" },
   map: { title: "Prediction map", code: "H3 / 06H" },
+  response: { title: "Response directory", code: "VOICE / POC" },
+  sources: { title: "Sources & upload", code: "MEDIA / INTAKE" },
+  "mobile-capture": { title: "Mobile capture", code: "PHONE / CAMERA" },
   processing: { title: "System status", code: "NODE / ALPHA" },
   "model-card": { title: "Model card", code: "MODEL / DOSSIER" },
 };
@@ -187,10 +196,16 @@ export default function ConsoleShell() {
               <LiveOperations />
             ) : route === "map" ? (
               <ForecastView />
+            ) : route === "sources" ? (
+              <SourcesView />
             ) : route === "processing" ? (
               <ProcessingView />
             ) : route === "review" ? (
               <ReviewView />
+            ) : route === "response" ? (
+              <ResponseDirectoryView />
+            ) : route === "mobile-capture" ? (
+              <MobileCaptureView />
             ) : (
               <ModelCardView />
             )}

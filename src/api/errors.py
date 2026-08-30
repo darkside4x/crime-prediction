@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse
 from src.models.contracts import validate_contract
 from src.models.errors import DataContractError
 from src.data.video.errors import VideoPipelineError
+from src.data.dispatch.errors import DispatchError
 
 
 def problem(
@@ -138,5 +139,21 @@ def install_error_handlers(app: FastAPI) -> None:
                     "details": [],
                 },
                 status,
+            ),
+        )
+
+    @app.exception_handler(DispatchError)
+    async def dispatch_error(request: Request, error: DispatchError) -> JSONResponse:
+        return JSONResponse(
+            status_code=error.http_status,
+            content=_payload(
+                request,
+                {
+                    "code": error.code,
+                    "message": str(error),
+                    "retryable": error.retryable,
+                    "details": [],
+                },
+                error.http_status,
             ),
         )

@@ -36,6 +36,12 @@ those definitions read-only and fail closed while scanning uploads.
 - The Reka key and PostgreSQL DSN are root-owned `0400` files under
   `/opt/crime-platform/secrets`; they are mounted as Compose secrets and never
   stored in the image or ordinary container environment.
+- Voice dispatch has a separate encrypted SQS queue/DLQ and Twilio secret. It
+  defaults to `DISPATCH_MODE=mock`, so no telephone call can leave the system.
+  Live mode is permitted only after a human-confirmed incident, an explicit
+  reviewer dispatch authorization, opted-in demo contacts, and valid Twilio
+  webhook signatures. The policy is fixed at two primary attempts followed by
+  one supervisor attempt; acknowledgement stops escalation.
 - Mount the foundation EFS access point with TLS and IAM authorization at the
   configured `MODEL_REGISTRY_HOST_PATH` before starting Compose.
 
@@ -108,7 +114,23 @@ install -o 10001 -g 10001 -m 0400 /secure/input/database-url \
   /opt/crime-platform/secrets/database-url
 install -o 10001 -g 10001 -m 0400 /secure/input/reka-api-key \
   /opt/crime-platform/secrets/reka-api-key
+install -o 10001 -g 10001 -m 0400 /secure/input/twilio-voice.json \
+  /opt/crime-platform/secrets/twilio-voice.json
 ```
+
+For mock demonstrations, materialize the generated Secrets Manager JSON with
+`configured` set to `false`; it also contains a generated callback-token key
+needed for restart-safe opaque webhook routing. Do not replace it with a
+hand-written one-field file. For
+an opted-in live demo, update the Secrets Manager value directly (never Git or
+chat) with the provider credentials and approved originating-number secret
+reference, materialize the protected file, and only then set
+`DISPATCH_MODE=live`. Hash each explicitly opted-in E.164 destination with
+SHA-256, place only those hashes in `DISPATCH_APPROVED_DESTINATION_SHA256`, and
+set `DISPATCH_EXTERNAL_CALLS_ENABLED=true` immediately before the supervised
+demo. The provider rechecks this server-side allowlist for every call. Return
+the kill switch to `false` afterward. Contact destinations remain separate
+`secret://` references and are never returned by the API.
 
 In AWS, retrieve each value from Secrets Manager directly into a protected
 temporary file, install it as above, and securely remove the temporary file.

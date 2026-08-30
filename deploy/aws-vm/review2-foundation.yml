@@ -320,6 +320,20 @@ Resources:
         ExcludePunctuation: true
         PasswordLength: 48
 
+  TwilioVoiceSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: >-
+        Fail-closed Twilio Voice configuration placeholder. Replace with opted-in
+        demo credentials before setting DISPATCH_MODE=live.
+      KmsKeyId: !GetAtt PlatformKey.Arn
+      Name: !Sub "crime-prediction/${EnvironmentName}/twilio-voice"
+      GenerateSecretString:
+        SecretStringTemplate: '{"configured":false}'
+        GenerateStringKey: callback_token_secret
+        ExcludePunctuation: true
+        PasswordLength: 48
+
   LocationSecretPlaceholder:
     Type: AWS::SecretsManager::Secret
     Properties:
@@ -398,6 +412,24 @@ Resources:
         maxReceiveCount: 5
       VisibilityTimeout: 180
 
+  DispatchDlq:
+    Type: AWS::SQS::Queue
+    Properties:
+      KmsMasterKeyId: !GetAtt PlatformKey.Arn
+      MessageRetentionPeriod: 1209600
+      SqsManagedSseEnabled: false
+
+  DispatchQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      DelaySeconds: 0
+      KmsMasterKeyId: !GetAtt PlatformKey.Arn
+      MessageRetentionPeriod: 345600
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt DispatchDlq.Arn
+        maxReceiveCount: 5
+      VisibilityTimeout: 90
+
   PlatformInstanceRole:
     Type: AWS::IAM::Role
     Properties:
@@ -435,17 +467,29 @@ Resources:
                   - !GetAtt VideoIndexQueue.Arn
                   - !GetAtt VideoAnalyzeQueue.Arn
                   - !GetAtt VideoDeleteQueue.Arn
+                  - !GetAtt DispatchQueue.Arn
                   - !GetAtt VideoUploadDlq.Arn
                   - !GetAtt VideoIndexDlq.Arn
                   - !GetAtt VideoAnalyzeDlq.Arn
                   - !GetAtt VideoDeleteDlq.Arn
+                  - !GetAtt DispatchDlq.Arn
               - Sid: RuntimeSecrets
                 Effect: Allow
                 Action: secretsmanager:GetSecretValue
                 Resource:
                   - !Ref AppDatabaseSecret
                   - !Ref RekaApiSecret
+                  - !Ref TwilioVoiceSecret
                   - !Sub "arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:crime-prediction/${EnvironmentName}/tenants/*"
+              - Sid: DispatchContactSecrets
+                Effect: Allow
+                Action:
+                  - secretsmanager:CreateSecret
+                  - secretsmanager:DeleteSecret
+                  - secretsmanager:GetSecretValue
+                  - secretsmanager:PutSecretValue
+                  - secretsmanager:TagResource
+                Resource: !Sub "arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:crime-prediction/${EnvironmentName}/tenants/*"
               - !If
                 - AllowDatabaseBootstrapCondition
                 - Sid: OneTimeDatabaseBootstrap
@@ -592,6 +636,23 @@ Resources:
       Threshold: 0
       TreatMissingData: notBreaching
 
+  DispatchDlqAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmActions: [!Ref AlarmTopic]
+      AlarmDescription: Authorized voice-dispatch jobs entered the dead-letter queue
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt DispatchDlq.QueueName
+      EvaluationPeriods: 1
+      MetricName: ApproximateNumberOfMessagesVisible
+      Namespace: AWS/SQS
+      Period: 60
+      Statistic: Maximum
+      Threshold: 0
+      TreatMissingData: notBreaching
+
   DatabaseCpuAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
@@ -657,6 +718,12 @@ Outputs:
     Value: !Ref ModelRegistryFileSystem
   RekaApiSecretArn:
     Value: !Ref RekaApiSecret
+  TwilioVoiceSecretArn:
+    Value: !Ref TwilioVoiceSecret
+  DispatchDlqUrl:
+    Value: !Ref DispatchDlq
+  DispatchQueueUrl:
+    Value: !Ref DispatchQueue
   VideoAnalyzeDlqUrl:
     Value: !Ref VideoAnalyzeDlq
   VideoAnalyzeQueueUrl:

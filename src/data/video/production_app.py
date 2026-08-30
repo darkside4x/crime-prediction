@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
 import os
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import AsyncIterator
 
 from fastapi import FastAPI
 
@@ -14,6 +14,7 @@ from src.api.forecasting import ForecastOrchestrator, PostgresForecastRepository
 from src.api.settings import Settings
 from src.api.state import PostgresAuditLog, PostgresIdempotencyStore
 from src.api.tenancy import OidcAuthenticationProvider
+from src.data.dispatch.runtime import DispatchSettings, create_dispatch_runtime
 from src.data.platform_security import PostgresActiveTenantStore, PostgresRateLimiter
 from src.models.operational import ForecastService
 from src.models.registry import FilesystemApprovedModelRegistry
@@ -55,6 +56,14 @@ def build_production_app():
         memberships_claim=api_settings.oidc_memberships_claim,
         active_tenant_store=PostgresActiveTenantStore(runtime.database),
     )
+    audit_log = PostgresAuditLog(runtime.database)
+    idempotency_store = PostgresIdempotencyStore(runtime.database)
+    dispatch_runtime = create_dispatch_runtime(
+        DispatchSettings.from_environment(),
+        database=runtime.database,
+        audit_log=audit_log,
+        idempotency_store=idempotency_store,
+    )
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -77,11 +86,13 @@ def build_production_app():
         ),
         forecast_orchestrator=forecasts,
         model_registry=model_registry,
-        audit_log=PostgresAuditLog(runtime.database),
-        idempotency_store=PostgresIdempotencyStore(runtime.database),
+        audit_log=audit_log,
+        idempotency_store=idempotency_store,
         video_broker=runtime.broker,
+        dispatch_dependencies=dispatch_runtime.api_dependencies,
     )
     app.state.platform_runtime = runtime
+    app.state.dispatch_runtime = dispatch_runtime
     return app
 
 
