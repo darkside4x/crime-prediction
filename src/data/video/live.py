@@ -203,7 +203,7 @@ class SimulatedVideoCapture:
             )
         destination = destination.resolve()
         destination.parent.mkdir(parents=True, exist_ok=True)
-        started = datetime.now(timezone.utc)
+        started = datetime.now(UTC)
         road_filter = (
             "drawbox=x=0:y=350:w=1280:h=4:color=0xd9c9bd:t=fill,"
             "drawbox=x=0:y=230:w=1280:h=2:color=0x6c6264:t=fill,"

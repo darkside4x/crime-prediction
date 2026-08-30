@@ -122,7 +122,9 @@ class AwsPhoneSecretStore:
             arguments["KmsKeyId"] = self.kms_key_id
         try:
             self.client.create_secret(**arguments)
-        except Exception:
+        # SDK clients and test doubles expose different exception hierarchies; never
+        # leak provider details through the API boundary.
+        except Exception:  # noqa: BLE001
             raise DispatchConfigurationError(
                 "dispatch_phone_secret_unavailable"
             ) from None
@@ -137,7 +139,8 @@ class AwsPhoneSecretStore:
                     {"phone_number": phone_number}, separators=(",", ":")
                 ),
             )
-        except Exception:
+        # Convert every provider-specific failure into the stable public error code.
+        except Exception:  # noqa: BLE001
             raise DispatchConfigurationError(
                 "dispatch_phone_secret_unavailable"
             ) from None
@@ -148,7 +151,8 @@ class AwsPhoneSecretStore:
                 SecretId=self._name_from_reference(secret_reference),
                 RecoveryWindowInDays=7,
             )
-        except Exception:
+        # Convert every provider-specific failure into the stable public error code.
+        except Exception:  # noqa: BLE001
             raise DispatchConfigurationError(
                 "dispatch_phone_secret_unavailable"
             ) from None
@@ -162,7 +166,8 @@ class AwsPhoneSecretStore:
             phone_number = str(document["phone_number"])
             mask_phone(phone_number)
             return phone_number
-        except Exception:
+        # This block also sanitizes malformed secret payloads and invalid phone data.
+        except Exception:  # noqa: BLE001
             raise DispatchConfigurationError(
                 "dispatch_phone_secret_unavailable"
             ) from None

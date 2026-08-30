@@ -2,17 +2,17 @@
 
 from __future__ import annotations
 
-from typing import Any
 import uuid
+from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
+from src.data.dispatch.errors import DispatchError
+from src.data.video.errors import VideoPipelineError
 from src.models.contracts import validate_contract
 from src.models.errors import DataContractError
-from src.data.video.errors import VideoPipelineError
-from src.data.dispatch.errors import DispatchError
 
 
 def problem(

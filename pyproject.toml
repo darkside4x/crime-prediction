@@ -57,3 +57,7 @@ packages = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+
+[tool.ruff.lint.per-file-ignores]
+# FastAPI intentionally evaluates dependency/parameter marker factories in route defaults.
+"src/api/app.py" = ["B008"]

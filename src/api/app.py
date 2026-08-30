@@ -2,29 +2,25 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import math
 import os
-from pathlib import Path
-from typing import Any, Callable, Literal
 import threading
 import time
 import uuid
+from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from typing import Any, Literal
 
 from fastapi import Depends, FastAPI, File, Form, Header, Query, Request, UploadFile
-from fastapi.responses import Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.background import BackgroundTask
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.responses import FileResponse
 
-from src.models.contracts import validate_contract
-from src.models.data import parse_utc
-from src.models.operational import ForecastService
-from src.models.registry import FilesystemApprovedModelRegistry
 from src.data.store import IngestionStore
 from src.data.video import (
     FakeRekaVisionProvider,
@@ -34,9 +30,13 @@ from src.data.video import (
     VideoPipelineService,
     VideoStore,
 )
-from src.data.video.errors import VideoPipelineError
 from src.data.video.broker import JobBroker, JobMessage
+from src.data.video.errors import VideoPipelineError
 from src.data.video.transcode import FfmpegWebmTranscoder
+from src.models.contracts import validate_contract
+from src.models.data import parse_utc
+from src.models.operational import ForecastService
+from src.models.registry import FilesystemApprovedModelRegistry
 
 from . import demo_data, reka
 from .dispatch import DispatchApiDependencies, create_dispatch_router
@@ -46,8 +46,8 @@ from .dispatch_development import (
 )
 from .errors import install_error_handlers, problem
 from .forecasting import ForecastOrchestrator, InMemoryForecastRepository
-from .settings import Settings
 from .security import ApiSecurityMiddleware, InMemoryRateLimiter, RateLimiter
+from .settings import Settings
 from .state import AuditLog, IdempotencyStore
 from .tenancy import (
     AuthenticationProvider,
@@ -55,8 +55,8 @@ from .tenancy import (
     OidcAuthenticationProvider,
     TenantContext,
     context_for,
-    require_owner,
     require_operator,
+    require_owner,
     require_reviewer,
     require_tenant,
 )
@@ -295,7 +295,7 @@ def _future_row(
         hashlib.sha256(f"{tenant_id}|{cell_id}|{category}".encode()).hexdigest()[:8], 16
     )
     lag_1, lag_2, lag_7, lag_14 = ((seed >> shift) % 4 for shift in (0, 3, 6, 9))
-    data_as_of = min(datetime.now(timezone.utc), window_start - timedelta(seconds=1))
+    data_as_of = min(datetime.now(UTC), window_start - timedelta(seconds=1))
     hour_angle = 2 * math.pi * window_start.hour / 24
     day_angle = 2 * math.pi * window_start.weekday() / 7
 
@@ -326,7 +326,7 @@ def _future_row(
 def _new_source(
     *, tenant_id: str, body: RecordedSourceCreate, mode: str, connection: dict[str, str]
 ) -> dict[str, Any]:
-    now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
     source = {
         "schema_version": "1.0.0",
         "tenant_id": tenant_id,
@@ -868,7 +868,7 @@ def create_app(
             run.update(
                 state="running",
                 stage="reka_upload",
-                updated_at=datetime.now(timezone.utc)
+                updated_at=datetime.now(UTC)
                 .isoformat()
                 .replace("+00:00", "Z"),
             )
@@ -882,7 +882,7 @@ def create_app(
                     break
                 run.update(
                     stage="reka_indexing",
-                    updated_at=datetime.now(timezone.utc)
+                    updated_at=datetime.now(UTC)
                     .isoformat()
                     .replace("+00:00", "Z"),
                 )
@@ -898,7 +898,7 @@ def create_app(
                 state="completed",
                 stage="awaiting_human_review",
                 candidate_count=len(candidates_found),
-                updated_at=datetime.now(timezone.utc)
+                updated_at=datetime.now(UTC)
                 .isoformat()
                 .replace("+00:00", "Z"),
             )
@@ -907,13 +907,13 @@ def create_app(
                 state="failed",
                 stage="failed",
                 error_code=error.code,
-                updated_at=datetime.now(timezone.utc)
+                updated_at=datetime.now(UTC)
                 .isoformat()
                 .replace("+00:00", "Z"),
             )
 
     def enqueue_asset_run(tenant_id: str, asset_id: str, label: str) -> dict[str, Any]:
-        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
         if app.state.video_broker is not None:
             job = app.state.video_service.store.enqueue(tenant_id, asset_id, "upload")
             app.state.video_broker.publish(
@@ -1081,7 +1081,7 @@ def create_app(
                 tenant_id, DEMO_HLS_SOURCE_ID
             )
         except VideoPipelineError:
-            now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
             definition = app.state.hls_capture.source("louisiana-dot-i20")
             source = {
                 "schema_version": "1.0.0",
@@ -1112,7 +1112,7 @@ def create_app(
                 tenant_id, DEMO_SIMULATED_SOURCE_ID
             )
         except VideoPipelineError:
-            now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
             source = {
                 "schema_version": "1.0.0",
                 "tenant_id": tenant_id,
@@ -1142,7 +1142,7 @@ def create_app(
             run.update(
                 state="running",
                 stage="capturing_hls",
-                updated_at=datetime.now(timezone.utc)
+                updated_at=datetime.now(UTC)
                 .isoformat()
                 .replace("+00:00", "Z"),
             )
@@ -1156,9 +1156,7 @@ def create_app(
             duration = app.state.video_service.media_inspector.duration_seconds(
                 segment.path
             )
-            start = datetime.fromisoformat(
-                segment.captured_start.replace("Z", "+00:00")
-            )
+            start = datetime.fromisoformat(segment.captured_start)
             end = start + timedelta(seconds=duration)
             asset = app.state.video_service.accept_upload(
                 authenticated_tenant_id=tenant_id,
@@ -1180,7 +1178,7 @@ def create_app(
                     state="running",
                     stage="reka_upload_queued",
                     durable_run_id=durable["run_id"],
-                    updated_at=datetime.now(timezone.utc)
+                    updated_at=datetime.now(UTC)
                     .isoformat()
                     .replace("+00:00", "Z"),
                 )
@@ -1191,7 +1189,7 @@ def create_app(
                 state="failed",
                 stage="failed",
                 error_code=error.code,
-                updated_at=datetime.now(timezone.utc)
+                updated_at=datetime.now(UTC)
                 .isoformat()
                 .replace("+00:00", "Z"),
             )
@@ -1202,7 +1200,7 @@ def create_app(
             run.update(
                 state="running",
                 stage="generating_simulated_segment",
-                updated_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                updated_at=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
             )
             source = ensure_demo_simulated_source(tenant_id)
             destination = (
@@ -1214,9 +1212,7 @@ def create_app(
             duration = app.state.video_service.media_inspector.duration_seconds(
                 segment.path
             )
-            start = datetime.fromisoformat(
-                segment.captured_start.replace("Z", "+00:00")
-            )
+            start = datetime.fromisoformat(segment.captured_start)
             end = start + timedelta(seconds=duration)
             asset = app.state.video_service.accept_upload(
                 authenticated_tenant_id=tenant_id,
@@ -1238,7 +1234,7 @@ def create_app(
                     state="running",
                     stage="reka_upload_queued",
                     durable_run_id=durable["run_id"],
-                    updated_at=datetime.now(timezone.utc)
+                    updated_at=datetime.now(UTC)
                     .isoformat()
                     .replace("+00:00", "Z"),
                 )
@@ -1249,7 +1245,7 @@ def create_app(
                 state="failed",
                 stage="failed",
                 error_code=error.code,
-                updated_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                updated_at=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
             )
 
     @app.post("/v1/demo/near-live-cctv/captures", status_code=202)
@@ -1268,7 +1264,7 @@ def create_app(
 
         def start() -> dict[str, Any]:
             definition = app.state.hls_capture.source(body.source_key)
-            now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
             run_id = str(uuid.uuid4())
             run = {
                 "run_id": run_id,
@@ -1324,7 +1320,7 @@ def create_app(
             )
 
         def start() -> dict[str, Any]:
-            now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
             run_id = str(uuid.uuid4())
             run = {
                 "run_id": run_id,
@@ -1544,7 +1540,7 @@ def create_app(
             )
         except VideoPipelineError:
             raise problem(404, "candidate_not_found", "Candidate was not found")
-        if parse_utc(candidate["expires_at"]) <= datetime.now(timezone.utc):
+        if parse_utc(candidate["expires_at"]) <= datetime.now(UTC):
             raise problem(410, "evidence_expired", "Candidate evidence has expired")
         materialized = app.state.video_service.candidate_evidence(
             ctx.tenant_id,
@@ -1635,7 +1631,7 @@ def create_app(
                 "detection_id": detection_id,
                 "decision": body.decision,
                 "reviewed_by": ctx.principal_id,
-                "reviewed_at": datetime.now(timezone.utc)
+                "reviewed_at": datetime.now(UTC)
                 .isoformat()
                 .replace("+00:00", "Z"),
             }
@@ -1682,7 +1678,7 @@ def create_app(
             raise problem(404, "demo_refresh_unavailable", "Integrated demo refresh is unavailable")
 
         def action() -> dict[str, Any]:
-            result = forecast_refresher(ctx.tenant_id, datetime.now(timezone.utc))
+            result = forecast_refresher(ctx.tenant_id, datetime.now(UTC))
             app.state.audit.record(
                 tenant_id=ctx.tenant_id,
                 principal_id=ctx.principal_id,
@@ -1713,7 +1709,7 @@ def create_app(
         if category not in CATEGORIES:
             raise problem(422, "invalid_category", "Category is not allowlisted")
         start = parse_utc(window_start)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         if start <= now:
             raise problem(
                 422, "window_not_future", "Forecast window must start in the future"
@@ -1758,14 +1754,17 @@ def create_app(
             import h3
 
             west, south, east, north = bounds
+
+            def inside_bounds(item: dict[str, Any]) -> bool:
+                latitude, longitude = h3.cell_to_latlng(item["cell_id"])
+                return (
+                    south <= latitude <= north and west <= longitude <= east
+                )
+
             items = [
                 item
                 for item in items
-                if (
-                    lambda point: (
-                        south <= point[0] <= north and west <= point[1] <= east
-                    )
-                )(h3.cell_to_latlng(item["cell_id"]))
+                if inside_bounds(item)
             ]
         total = len(items)
         offset = (page - 1) * page_size
