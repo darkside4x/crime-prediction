@@ -54,7 +54,7 @@ _CHAT_TEXT_BLOCK_TYPES = frozenset({"output_text", "text"})
 _MAX_CHAT_TEXT_BLOCKS = 16
 _MAX_CHAT_TEXT_CHARS = 16_384
 _MAX_HTTP_RESPONSE_BYTES = 1024 * 1024
-_MAX_PROVIDER_CANDIDATES = 100
+_MAX_PROVIDER_CANDIDATES = 25
 _SCREEN_TOKEN_PATTERN = re.compile(
     r'(?:CLEAR|INCIDENT|"(?:CLEAR|INCIDENT)"|`(?:CLEAR|INCIDENT)`|'
     r"\*\*(?:CLEAR|INCIDENT)\*\*|"
@@ -293,7 +293,7 @@ class RekaVisionProvider:
         *,
         base_url: str = "https://vision-agent.api.reka.ai",
         chat_base_url: str = "https://api.reka.ai/v1",
-        chat_model: str = "reka-flash-3",
+        chat_model: str = "reka-edge-2603",
         timeout_seconds: float = 30.0,
     ) -> None:
         if not api_key or not api_key.strip():
@@ -359,10 +359,17 @@ class RekaVisionProvider:
             return value
         except VideoPipelineError:
             raise
-        except (OSError, TimeoutError) as error:
-            raise VideoPipelineError("reka_timeout", "Reka Vision request failed or timed out", retryable=True) from error
-        except (json.JSONDecodeError, TypeError, ValueError) as error:
-            raise VideoPipelineError("reka_response_invalid", "Reka Vision returned malformed structured data") from error
+        except (OSError, TimeoutError, http.client.HTTPException):
+            raise VideoPipelineError(
+                "reka_timeout",
+                "Reka Vision request failed or timed out",
+                retryable=True,
+            ) from None
+        except (json.JSONDecodeError, RecursionError, TypeError, ValueError):
+            raise VideoPipelineError(
+                "reka_response_invalid",
+                "Reka Vision returned malformed structured data",
+            ) from None
         finally:
             connection.close()
 
@@ -407,10 +414,17 @@ class RekaVisionProvider:
             return video_id
         except VideoPipelineError:
             raise
-        except (OSError, TimeoutError) as error:
-            raise VideoPipelineError("reka_timeout", "Reka Vision upload failed or timed out", retryable=True) from error
-        except (json.JSONDecodeError, TypeError, ValueError) as error:
-            raise VideoPipelineError("reka_response_invalid", "Reka Vision returned malformed upload data") from error
+        except (OSError, TimeoutError, http.client.HTTPException):
+            raise VideoPipelineError(
+                "reka_timeout",
+                "Reka Vision upload failed or timed out",
+                retryable=True,
+            ) from None
+        except (json.JSONDecodeError, RecursionError, TypeError, ValueError):
+            raise VideoPipelineError(
+                "reka_response_invalid",
+                "Reka Vision returned malformed upload data",
+            ) from None
         finally:
             connection.close()
 
@@ -592,14 +606,14 @@ class RekaVisionProvider:
             return value
         except VideoPipelineError:
             raise
-        except (OSError, TimeoutError) as error:
+        except (OSError, TimeoutError, http.client.HTTPException):
             raise VideoPipelineError(
                 "reka_timeout", "Reka Chat request failed or timed out", retryable=True
-            ) from error
-        except (json.JSONDecodeError, TypeError, ValueError) as error:
+            ) from None
+        except (json.JSONDecodeError, RecursionError, TypeError, ValueError):
             raise VideoPipelineError(
                 "reka_response_invalid", "Reka Chat returned malformed structured data"
-            ) from error
+            ) from None
         finally:
             connection.close()
 
@@ -655,33 +669,33 @@ class RekaVisionProvider:
                 candidate,
                 parse_constant=_reject_nonfinite_json_number,
             )
-        except json.JSONDecodeError as complete_error:
+        except (json.JSONDecodeError, RecursionError):
             if assistant_prefilled:
                 try:
                     return json.loads(
                         "[" + candidate,
                         parse_constant=_reject_nonfinite_json_number,
                     )
-                except (json.JSONDecodeError, ValueError) as continuation_error:
+                except (json.JSONDecodeError, RecursionError, ValueError):
                     raise _format_error(
                         "reka_output_invalid",
                         "Reka candidate output was not valid JSON",
                         stage=stage,
                         reason="json_format_invalid",
-                    ) from continuation_error
+                    ) from None
             raise _format_error(
                 "reka_output_invalid",
                 "Reka candidate output was not valid JSON",
                 stage=stage,
                 reason="json_format_invalid",
-            ) from complete_error
-        except ValueError as error:
+            ) from None
+        except ValueError:
             raise _format_error(
                 "reka_output_invalid",
                 "Reka candidate output was not valid JSON",
                 stage=stage,
                 reason="json_format_invalid",
-            ) from error
+            ) from None
 
     def delete(self, video_id: str) -> None:
         self._json_request(

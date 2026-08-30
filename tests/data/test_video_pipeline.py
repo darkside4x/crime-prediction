@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import hashlib
+import http.client
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -384,6 +384,7 @@ def test_retry_state_and_key_errors_are_safe(tmp_path: Path) -> None:
     secret = "rk-secret-never-log"
     client = RekaVisionProvider(secret)
     assert secret not in repr(client)
+    assert client.chat_model == "reka-edge-2603"
     with pytest.raises(VideoPipelineError) as missing:
         RekaVisionProvider("")
     assert missing.value.code == "reka_key_missing"
@@ -418,10 +419,10 @@ def test_reka_candidate_boundary_classifies_unhashable_category() -> None:
     }
 
 
-def test_reka_candidate_boundary_rejects_more_than_one_hundred_proposals() -> None:
+def test_reka_candidate_boundary_rejects_more_than_twenty_five_proposals() -> None:
     proposal = {"offset_seconds": 2, "category": "property", "confidence": 0.7}
     with pytest.raises(VideoPipelineError) as caught:
-        _allowlisted_candidate_output([proposal] * 101)
+        _allowlisted_candidate_output([proposal] * 26)
     assert caught.value.code == "reka_output_invalid"
     assert caught.value.safe_diagnostics == {}
 
@@ -434,6 +435,39 @@ def test_reka_http_response_body_is_bounded() -> None:
     with pytest.raises(VideoPipelineError) as caught:
         _read_bounded_http_response(OversizedResponse())  # type: ignore[arg-type]
     assert caught.value.code == "reka_response_invalid"
+
+
+def test_reka_http_protocol_failure_is_safe_and_retryable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class TruncatedResponse:
+        status = 200
+
+        def read(self, amount: int) -> bytes:
+            del amount
+            raise http.client.IncompleteRead(b"provider-value-must-not-escape")
+
+    class FakeConnection:
+        def request(self, *args: object, **kwargs: object) -> None:
+            return None
+
+        def getresponse(self) -> TruncatedResponse:
+            return TruncatedResponse()
+
+        def close(self) -> None:
+            return None
+
+    connection = FakeConnection()
+    monkeypatch.setattr(
+        "src.data.video.reka.http.client.HTTPSConnection",
+        lambda *args, **kwargs: connection,
+    )
+    client = RekaVisionProvider("rk-test-only")
+    with pytest.raises(VideoPipelineError) as caught:
+        client._chat_json_request({"model": "reka-edge-2603", "messages": []})
+    assert caught.value.code == "reka_timeout"
+    assert caught.value.retryable
+    assert caught.value.__cause__ is None
 
 
 def test_reka_http_object_envelope_is_required(
@@ -469,6 +503,44 @@ def test_reka_http_object_envelope_is_required(
     with pytest.raises(VideoPipelineError) as chat_error:
         client._chat_json_request({"model": "reka-edge-2603", "messages": []})
     assert chat_error.value.code == "reka_response_invalid"
+    assert chat_error.value.__cause__ is None
+
+
+def test_reka_candidate_json_parse_failure_does_not_retain_provider_value() -> None:
+    provider_value = "provider-value-must-not-escape"
+    with pytest.raises(VideoPipelineError) as caught:
+        RekaVisionProvider._decode_candidate_json(
+            provider_value,
+            stage="short_video_candidate",
+            assistant_prefilled=True,
+        )
+    assert caught.value.code == "reka_output_invalid"
+    assert caught.value.__cause__ is None
+    assert provider_value not in str(caught.value)
+
+
+def test_reka_candidate_json_recursion_error_is_sanitized(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider_value = "provider-recursion-value-must-not-escape"
+
+    def recursive_loads(*args: object, **kwargs: object) -> object:
+        raise RecursionError(provider_value)
+
+    monkeypatch.setattr("src.data.video.reka.json.loads", recursive_loads)
+    with pytest.raises(VideoPipelineError) as caught:
+        RekaVisionProvider._decode_candidate_json(
+            "[]",
+            stage="short_video_candidate",
+            assistant_prefilled=True,
+        )
+    assert caught.value.code == "reka_output_invalid"
+    assert caught.value.safe_diagnostics == {
+        "format_stage": "short_video_candidate",
+        "format_reason": "json_format_invalid",
+    }
+    assert caught.value.__cause__ is None
+    assert provider_value not in str(caught.value)
 
 
 def test_reka_repairs_explanatory_no_incident_shape_to_empty_result() -> None:
