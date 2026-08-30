@@ -1,23 +1,24 @@
 # Demo path (Person 3)
 
-This file distinguishes the currently committed fixture-backed dashboard from the Phase 2 Reka Vision recorded-video flow.
-
-The dashboard works from a clean checkout without Reka and without real model
-output: predictions are deterministic fixtures that satisfy the frozen
-prediction contract. Swapping in Person 2's exported Parquet only replaces
-`src/api/demo_data.py` internals — no contract changes.
+This is the live-only deployment demonstration. It uses the same tenant,
+review, feature and forecast contracts as production. The demo substitutes
+Postgres queueing, shared restricted storage and development personas for cloud
+infrastructure, but live video analysis uses the real server-side Reka provider.
 
 ## One-command demo (Docker)
 
 ```bash
-docker compose up --build
+REKA_API_KEY=<server-side-key> docker compose up --build
 # dashboard: http://localhost:8080
 ```
 
-The near-live workflow requires `ffmpeg` in the API container/host and a
-server-side `REKA_API_KEY`. Without the key, the application still captures the
-real public segment but clearly labels candidate analysis as deterministic test
-output.
+The stack contains Postgres, migrations, API, web, and isolated upload, index
+and analyze workers. Processing state, reviews, promoted events, measured
+coverage, future features and forecasts survive API/worker restarts.
+The UI has no MP4 upload route. It continuously plays a fixed, allowlisted
+LADOTD HLS source; analysis captures one 12-second segment on demand. If Reka is
+not configured, the analysis control is disabled—no fabricated candidate is
+substituted.
 
 ## Local development
 
@@ -38,7 +39,11 @@ pnpm dev
 | Tenant | Bearer token | Role | Region |
 |---|---|---|---|
 | Demo Tenant One | `demo-token-one` | admin | Bengaluru |
-| Demo Tenant Two | `demo-token-two` | analyst | Chennai |
+| Demo Tenant One | `demo-reviewer-one` | reviewer | Bengaluru |
+| Demo Tenant One | `demo-viewer-one` | viewer | Bengaluru |
+| Demo Tenant Two | `demo-admin-two` | admin | Chennai |
+| Demo Tenant Two | `demo-reviewer-two` | reviewer | Chennai |
+| Demo Tenant Two | `demo-token-two` | viewer | Chennai |
 
 The web UI switches tokens with the tenant chips. Grids are disjoint by
 construction; `tests/api` proves tenant A cannot read tenant B's cells and that
@@ -51,25 +56,42 @@ python -m pytest tests/api        # tenant isolation, contracts, AI fail-safety
 cd src/web && pnpm build           # typecheck + production build
 ```
 
-## 3-minute presentation script
+## Integrated presentation flow
 
-1. Open **CCTV review** and click **Capture 20 seconds**. Point out the custody
-   rail: HLS capture → bounded MP4 → Reka upload/index → schema validation →
-   human review. The source URL is server-allowlisted and never supplied by the browser.
-2. Confirm or reject an unconfirmed candidate. Reka confidence is explicitly
-   not presented as probability that a crime occurred.
-3. Scroll the landing page: framing (aggregate risk, human review) and pipeline.
-2. Pick a forecast window and category; the H3 risk surface updates.
-3. Click a hot cell: risk, band, uncertainty interval, 14-day trend, drivers
-   ("associations, not causes").
-4. Point at a grey cell: low-support suppression, no numeric value published.
-5. Switch to Demo Tenant Two: different city, disjoint grid — isolation live.
-6. Model card strip: candidate vs. historical-rate baseline on an untouched
-   window; today the baseline ships honestly ("beats baseline: NO").
-7. Ask the copilot "How did the model do on the test window?" — cited fact IDs,
-   data freshness, model version. Then ask "Which person will commit a crime?"
-   — refusal with `unsafe_request`.
-10. Close on the footer: forecasts, not verdicts.
+1. Open the landing page and choose **See live prediction**. Sign in as
+   **Tenant admin · Demo One**.
+2. On **Live operations**, show the continuously playing CCTV feed and select
+   **Analyze next 12 seconds**. Playback continues while the server captures a
+   bounded MP4 and persists an upload job.
+3. Follow live capture → Reka upload → Vision indexing → candidate analysis in
+   the custody rail. Dedicated workers own each provider operation.
+4. Open **View evidence** on any unconfirmed candidate. The browser receives a
+   private, no-store response only after reviewer authorization; no storage key
+   or Reka video ID is exposed.
+5. Select **Confirm & predict** once. The immutable review promotes one aggregate
+   incident, builds an unlabelled future feature snapshot with `data_as_of <
+   interval_start`, and atomically publishes the next six-hour window.
+6. Open the updated **Crime prediction** map. The supported cell exposes the
+   historical-rate forecast and uncertainty; unsupported cells are suppressed,
+   never shown as zero.
+7. Switch to **Tenant admin · Demo Two**. Tenant One's jobs, candidates, evidence,
+   coverage, events and forecasts are absent because tenant context is resolved
+   server-side and enforced by Postgres RLS.
+
+If Reka proposes no incident, say so: that is a valid model result. Capture a
+different interval instead of claiming a deterministic detection.
+
+## Restart check
+
+During a queued or running upload:
+
+```bash
+docker compose restart api worker-index
+docker compose ps
+```
+
+Refresh the processing page. Postgres preserves the run and an expired broker
+lease becomes available to a restarted worker.
 
 ## Near-live API check
 
@@ -80,7 +102,7 @@ curl -sS -X POST http://localhost:8000/v1/demo/near-live-cctv/captures \
   -H 'Authorization: Bearer demo-token-one' \
   -H 'Idempotency-Key: near-live-demo-0001' \
   -H 'Content-Type: application/json' \
-  -d '{"source_key":"louisiana-dot-i20","duration_seconds":20}'
+  -d '{"source_key":"louisiana-dot-i20","duration_seconds":12}'
 ```
 
 Poll the returned run ID:
@@ -112,12 +134,20 @@ The Phase 2 video demo is:
 1. tenant admin uploads an approved MP4 to FastAPI;
 2. FastAPI calls Reka Vision upload with indexing enabled;
 3. the UI shows upload/index/analysis status without exposing the Reka video ID;
-4. Reka Q&A/tagging returns structured candidate proposals;
-5. schema-invalid or prohibited output fails safely;
+4. Reka Q&A/tagging returns structured candidate proposals; a validated empty
+   array completes as “No candidate in this segment”;
+5. schema-invalid or prohibited output fails safely, and exhausted indexing is
+   reported as `reka_index_timeout` rather than as an empty result;
 6. a human reviewer confirms one candidate and rejects another;
 7. only the confirmed candidate becomes an incident event;
 8. the local deterministic model creates the future aggregate forecast;
 9. Reka Chat may explain supplied aggregate facts but never creates the numeric risk score.
+
+Near-live capture returns `202 Accepted` immediately with a temporary capture run.
+The client polls that run while the bounded HLS segment is recorded; after media
+validation, the capture run exposes the asset and the durable upload/index/analyze
+jobs continue. A client disconnect therefore does not lose or duplicate accepted
+capture work.
 
 Automated tests use fake HLS capture and fake Reka Vision/Chat providers and
 make no network calls. The real demo uses the same services with the allowlisted

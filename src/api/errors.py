@@ -115,9 +115,14 @@ def install_error_handlers(app: FastAPI) -> None:
         status = {
             "resource_not_found": 404,
             "asset_not_found": 404,
+            "job_not_found": 404,
             "candidate_expired": 409,
             "review_already_final": 409,
             "review_forbidden": 403,
+            "reanalysis_not_allowed": 409,
+            "reanalysis_in_progress": 409,
+            "reanalysis_already_completed": 409,
+            "job_active_conflict": 409,
             "reka_access_denied": 503,
             "reka_key_missing": 503,
         }.get(error.code, 503 if error.retryable else 422)

@@ -58,6 +58,14 @@ Every schema has a synthetic fixture with the same basename under `contracts/fix
 
 ## Changelog
 
+### 2026-08-30 — fail-closed video re-analysis
+
+- Missing candidate fields now have a distinct safe error classification; only
+  bounded, value-free structural diagnostics are retained internally.
+- Added an authenticated, tenant-scoped re-analysis mutation that creates fresh
+  durable work and never reopens or mutates a dead-letter job.
+- Shared endpoint-contract review is required before this addition is frozen.
+
 ### 2026-08-30 — calibrated operational model artifacts
 
 - Model-run manifests now record validation-only probability-calibration and

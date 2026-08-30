@@ -41,6 +41,8 @@ export const DEV_PERSONAS = [
   { label: "Tenant admin · Demo One", token: "demo-token-one" },
   { label: "Reviewer · Demo One", token: "demo-reviewer-one" },
   { label: "Viewer · Demo One", token: "demo-viewer-one" },
+  { label: "Tenant admin · Demo Two", token: "demo-admin-two" },
+  { label: "Reviewer · Demo Two", token: "demo-reviewer-two" },
   { label: "Viewer · Demo Two", token: "demo-token-two" },
 ] as const;
 
@@ -61,12 +63,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setExpired(false);
       try {
         const me = await api.meTenants(token);
+        const role = roleFor(me);
+        if (role === "tenant_admin" || role === "platform_operator") {
+          await api.startDemoSession(token, crypto.randomUUID());
+        }
         queryClient.clear();
         setSession({
           token,
           principalLabel: label,
           activeTenantId: me.active_tenant_id,
-          role: roleFor(me),
+          role,
           memberships: me.tenants,
         });
       } catch (error) {

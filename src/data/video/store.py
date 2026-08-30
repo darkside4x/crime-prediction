@@ -69,6 +69,7 @@ class VideoStore:
                     attempts INTEGER NOT NULL DEFAULT 0,
                     max_attempts INTEGER NOT NULL,
                     last_error_code TEXT,
+                    safe_diagnostics_json TEXT NOT NULL DEFAULT '{}',
                     available_at TEXT NOT NULL,
                     started_at TEXT,
                     finished_at TEXT,
@@ -83,6 +84,9 @@ class VideoStore:
                 );
                 CREATE INDEX IF NOT EXISTS video_jobs_ready
                   ON video_processing_jobs (state, available_at);
+                CREATE UNIQUE INDEX IF NOT EXISTS video_jobs_one_active_analysis
+                  ON video_processing_jobs (tenant_id, asset_id)
+                  WHERE operation='analyze' AND state IN ('queued','running','retry');
                 CREATE TABLE IF NOT EXISTS candidate_detections_restricted (
                     tenant_id TEXT NOT NULL,
                     detection_id TEXT NOT NULL,
@@ -140,6 +144,11 @@ class VideoStore:
             for name in ("lease_expires_at", "heartbeat_at", "worker_id", "dead_lettered_at"):
                 if name not in columns:
                     connection.execute(f"ALTER TABLE video_processing_jobs ADD COLUMN {name} TEXT")
+            if "safe_diagnostics_json" not in columns:
+                connection.execute(
+                    "ALTER TABLE video_processing_jobs "
+                    "ADD COLUMN safe_diagnostics_json TEXT NOT NULL DEFAULT '{}'"
+                )
 
     def put_source(self, payload: dict[str, Any]) -> None:
         with self.ingestion_store.connect() as connection:
@@ -266,15 +275,20 @@ class VideoStore:
                 (tenant_id, key),
             ).fetchone()
             if row:
-                return dict(row)
+                return self._job(row)
             job_id = str(uuid.uuid4())
-            connection.execute(
-                """INSERT INTO video_processing_jobs
-                   (tenant_id, job_id, asset_id, operation, idempotency_key, state, attempts,
-                    max_attempts, available_at, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, 'queued', 0, ?, ?, ?, ?)""",
-                (tenant_id, job_id, asset_id, operation, key, max_attempts, now, now, now),
-            )
+            try:
+                connection.execute(
+                    """INSERT INTO video_processing_jobs
+                       (tenant_id, job_id, asset_id, operation, idempotency_key, state, attempts,
+                        max_attempts, available_at, created_at, updated_at)
+                       VALUES (?, ?, ?, ?, ?, 'queued', 0, ?, ?, ?, ?)""",
+                    (tenant_id, job_id, asset_id, operation, key, max_attempts, now, now, now),
+                )
+            except sqlite3.IntegrityError as error:
+                raise VideoPipelineError(
+                    "job_active_conflict", "Equivalent processing work is already active"
+                ) from error
         return self.get_job(tenant_id, job_id)
 
     def get_job(self, tenant_id: str, job_id: str) -> dict[str, Any]:
@@ -284,7 +298,16 @@ class VideoStore:
             ).fetchone()
         if row is None:
             raise VideoPipelineError("job_not_found", "Processing job was not found")
-        return dict(row)
+        return self._job(row)
+
+    def list_jobs(self, tenant_id: str, *, limit: int = 50) -> list[dict[str, Any]]:
+        with self.ingestion_store.connect() as connection:
+            rows = connection.execute(
+                """SELECT * FROM video_processing_jobs WHERE tenant_id=?
+                   ORDER BY created_at DESC LIMIT ?""",
+                (tenant_id, min(max(limit, 1), 100)),
+            ).fetchall()
+        return [self._job(row) for row in rows]
 
     def transition_job(
         self,
@@ -294,6 +317,7 @@ class VideoStore:
         error_code: str | None = None,
         *,
         retry_delay_seconds: float = 0,
+        safe_diagnostics: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         if state not in {"queued", "running", "completed", "failed", "cancelled", "retry"}:
             raise ValueError("Invalid job state")
@@ -312,11 +336,13 @@ class VideoStore:
             ).isoformat().replace("+00:00", "Z")
             connection.execute(
                 """UPDATE video_processing_jobs SET state=?, attempts=?, last_error_code=?,
+                   safe_diagnostics_json=?,
                    started_at=?, finished_at=?, available_at=?, lease_expires_at=NULL,
                    heartbeat_at=NULL, worker_id=NULL, updated_at=?
                    WHERE tenant_id=? AND job_id=?""",
                 (
-                    state, attempts, error_code, started, finished, available_at,
+                    state, attempts, error_code, _json(safe_diagnostics or {}),
+                    started, finished, available_at,
                     now, tenant_id, job_id,
                 ),
             )
@@ -330,11 +356,18 @@ class VideoStore:
             rows = connection.execute(
                 f"""SELECT * FROM video_processing_jobs
                     WHERE state IN ('queued','retry') AND available_at <= ?
-                      AND operation IN ({placeholders}) AND attempts < max_attempts
+                      AND operation IN ({placeholders})
+                      AND (
+                        attempts < max_attempts
+                        OR (
+                          operation='index' AND state='retry'
+                          AND last_error_code='reka_index_pending'
+                        )
+                      )
                     ORDER BY available_at, created_at LIMIT ?""",  # nosec B608
                 (utc_now(), *operations, limit),
             ).fetchall()
-        return [dict(row) for row in rows]
+        return [self._job(row) for row in rows]
 
     def claim_job(
         self, tenant_id: str, job_id: str, *, worker_id: str, lease_seconds: int
@@ -374,6 +407,24 @@ class VideoStore:
             )
         if cursor.rowcount != 1:
             raise VideoPipelineError("job_lease_lost", "Worker no longer owns the job lease")
+
+    def extend_index_attempt_limit(
+        self, tenant_id: str, job_id: str, *, max_attempts: int
+    ) -> dict[str, Any]:
+        with self.ingestion_store.connect() as connection:
+            cursor = connection.execute(
+                """UPDATE video_processing_jobs SET max_attempts=?, updated_at=?
+                   WHERE tenant_id=? AND job_id=? AND operation='index'
+                     AND state='retry' AND last_error_code='reka_index_pending'
+                     AND attempts >= max_attempts AND max_attempts < ?""",
+                (max_attempts, utc_now(), tenant_id, job_id, max_attempts),
+            )
+        if cursor.rowcount != 1:
+            raise VideoPipelineError(
+                "job_attempt_limit_not_extendable",
+                "Only an exhausted pending index job can receive the configured bound",
+            )
+        return self.get_job(tenant_id, job_id)
 
     def mark_dead_lettered(self, tenant_id: str, job_id: str) -> None:
         now = utc_now()
@@ -437,6 +488,34 @@ class VideoStore:
                 "SELECT payload_json FROM candidate_detections_restricted WHERE tenant_id=? ORDER BY created_at", (tenant_id,)
             ).fetchall()
         return [json.loads(row["payload_json"]) for row in rows]
+
+    def delete_pending_candidates(self, tenant_id: str) -> int:
+        """Delete unreviewed demo-session candidates while preserving final reviews."""
+        with self.ingestion_store.connect() as connection:
+            rows = connection.execute(
+                """SELECT detection_id, payload_json FROM candidate_detections_restricted
+                   WHERE tenant_id=?""",
+                (tenant_id,),
+            ).fetchall()
+            pending_ids = [
+                row["detection_id"]
+                for row in rows
+                if json.loads(row["payload_json"]).get("review_status")
+                == "awaiting_review"
+            ]
+            deleted = 0
+            for detection_id in pending_ids:
+                cursor = connection.execute(
+                    """DELETE FROM candidate_detections_restricted
+                       WHERE tenant_id=? AND detection_id=?
+                         AND NOT EXISTS (
+                           SELECT 1 FROM candidate_reviews_restricted
+                           WHERE tenant_id=? AND detection_id=?
+                         )""",
+                    (tenant_id, detection_id, tenant_id, detection_id),
+                )
+                deleted += cursor.rowcount
+        return deleted
 
     def update_candidate(self, payload: dict[str, Any]) -> None:
         with self.ingestion_store.connect() as connection:
@@ -630,3 +709,10 @@ class VideoStore:
         if row is None:
             raise VideoPipelineError("resource_not_found", "Tenant-scoped resource was not found")
         return json.loads(row["payload_json"])
+
+    @staticmethod
+    def _job(row: sqlite3.Row) -> dict[str, Any]:
+        result = dict(row)
+        encoded = result.pop("safe_diagnostics_json", "{}")
+        result["safe_diagnostics"] = json.loads(encoded or "{}")
+        return result

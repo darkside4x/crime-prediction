@@ -381,8 +381,16 @@ class VideoPipelineService:
             updated = self.store.get_job(tenant_id, job["job_id"])
             retry = error.retryable and updated["attempts"] < updated["max_attempts"]
             self.store.transition_job(
-                tenant_id, job["job_id"], "retry" if retry else "failed", error.code
+                tenant_id,
+                job["job_id"],
+                "retry" if retry else "failed",
+                error.code,
+                safe_diagnostics=error.safe_diagnostics,
             )
+            if not retry and operation in {"upload", "index", "analyze"}:
+                self.store.update_asset_status(
+                    tenant_id, asset_id, "failed", error.code
+                )
             self.store.audit(
                 tenant_id, f"reka.{operation}", "asset", asset_id, "failure", error.code
             )
@@ -450,8 +458,13 @@ class VideoPipelineService:
                     "Reka returned malformed or excessive candidate proposals",
                 )
             candidates = [
-                self._candidate(asset, mapping["reka_video_id"], proposal)
-                for proposal in proposals
+                self._candidate(
+                    asset,
+                    mapping["reka_video_id"],
+                    proposal,
+                    proposal_index=proposal_index,
+                )
+                for proposal_index, proposal in enumerate(proposals)
             ]
             for candidate, semantic_key in candidates:
                 self.store.put_candidate(candidate, semantic_key)
@@ -477,6 +490,68 @@ class VideoPipelineService:
             )
         return self._execute(tenant_id, asset_id, operation)
 
+    def request_reanalysis(
+        self,
+        tenant_id: str,
+        failed_job_id: str,
+        *,
+        idempotency_key: str,
+    ) -> dict[str, Any]:
+        """Create fresh analysis work without mutating a terminal job."""
+        failed_job = self.store.get_job(tenant_id, failed_job_id)
+        if failed_job["operation"] != "analyze" or failed_job["state"] != "failed":
+            raise VideoPipelineError(
+                "reanalysis_not_allowed",
+                "Only a terminal failed analysis job can be re-analyzed",
+            )
+        asset_id = failed_job["asset_id"]
+        asset = self.store.get_asset(tenant_id, asset_id)
+        if asset.get("status") == "deleted":
+            raise VideoPipelineError(
+                "reanalysis_not_allowed", "Deleted media cannot be re-analyzed"
+            )
+        mapping = self.store.get_mapping(tenant_id, asset_id)
+        if mapping is None or mapping.get("indexing_status") != "indexed":
+            raise VideoPipelineError(
+                "reanalysis_not_allowed",
+                "Re-analysis requires an indexed tenant-scoped video",
+            )
+        related = [
+            job
+            for job in self.store.list_jobs(tenant_id, limit=100)
+            if job["asset_id"] == asset_id
+            and job["operation"] == "analyze"
+            and job["job_id"] != failed_job_id
+        ]
+        if any(job["state"] in {"queued", "running", "retry"} for job in related):
+            raise VideoPipelineError(
+                "reanalysis_in_progress", "A fresh analysis job is already active"
+            )
+        if any(
+            job["state"] == "completed"
+            and job["created_at"] > failed_job["created_at"]
+            for job in related
+        ):
+            raise VideoPipelineError(
+                "reanalysis_already_completed",
+                "A newer analysis job has already completed",
+            )
+        job = self.store.enqueue(
+            tenant_id,
+            asset_id,
+            "analyze",
+            idempotency_key=f"reanalysis:{failed_job_id}:{idempotency_key}",
+        )
+        self.store.update_asset_status(tenant_id, asset_id, "processing")
+        self.store.audit(
+            tenant_id,
+            "reka.analyze_requeued",
+            "asset",
+            asset_id,
+            "success",
+        )
+        return job
+
     def _asset_storage_ref(self, tenant_id: str, asset_id: str) -> str:
         getter = getattr(self.store, "asset_storage_ref", None)
         if getter is not None:
@@ -484,16 +559,40 @@ class VideoPipelineService:
         return f"file://{self.store.asset_path(tenant_id, asset_id).resolve()}"
 
     def _candidate(
-        self, asset: dict[str, Any], remote_id: str, proposal: dict[str, Any]
+        self,
+        asset: dict[str, Any],
+        remote_id: str,
+        proposal: dict[str, Any],
+        *,
+        proposal_index: int = 0,
     ) -> tuple[dict[str, Any], str]:
-        if not isinstance(proposal, dict) or set(proposal) != {
-            "offset_seconds",
-            "category",
-            "confidence",
-        }:
+        required_fields = {"offset_seconds", "category", "confidence"}
+        if not isinstance(proposal, dict):
             raise VideoPipelineError(
                 "reka_output_prohibited",
-                "Candidate output contained prohibited or missing fields",
+                "Candidate output was not an allowlisted object",
+                safe_diagnostics={"proposal_index": proposal_index},
+            )
+        proposal_fields = set(proposal)
+        unexpected_fields = proposal_fields - required_fields
+        if unexpected_fields:
+            raise VideoPipelineError(
+                "reka_output_prohibited",
+                "Candidate output contained prohibited fields",
+                safe_diagnostics={
+                    "proposal_index": proposal_index,
+                    "unexpected_field_count": min(len(unexpected_fields), 100),
+                },
+            )
+        missing_fields = required_fields - proposal_fields
+        if missing_fields:
+            raise VideoPipelineError(
+                "reka_output_missing_fields",
+                "Candidate output omitted required fields",
+                safe_diagnostics={
+                    "proposal_index": proposal_index,
+                    "missing_fields": sorted(missing_fields),
+                },
             )
         offset = proposal["offset_seconds"]
         category = proposal["category"]
@@ -776,7 +875,11 @@ class VideoPipelineService:
                     else "failed"
                 )
                 self.store.transition_job(
-                    asset_tenant_id, job["job_id"], state, error.code
+                    asset_tenant_id,
+                    job["job_id"],
+                    state,
+                    error.code,
+                    safe_diagnostics=error.safe_diagnostics,
                 )
                 self.store.audit(
                     asset_tenant_id,

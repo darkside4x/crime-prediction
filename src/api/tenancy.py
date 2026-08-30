@@ -99,6 +99,12 @@ class DevelopmentAuthenticationProvider:
         tenant_two_viewer = TenantMembership(
             DEMO_TENANT_TWO, "demo-two", "Demo Tenant Two", "viewer"
         )
+        tenant_two_admin = TenantMembership(
+            DEMO_TENANT_TWO, "demo-two", "Demo Tenant Two", "tenant_admin"
+        )
+        tenant_two_reviewer = TenantMembership(
+            DEMO_TENANT_TWO, "demo-two", "Demo Tenant Two", "reviewer"
+        )
         tenant_one_operator = TenantMembership(
             DEMO_TENANT_ONE, "demo-one", "Demo Tenant One", "platform_operator"
         )
@@ -119,6 +125,12 @@ class DevelopmentAuthenticationProvider:
             ),
             os.environ.get("DEMO_OPERATOR_TOKEN", "demo-operator-one"): Principal(
                 "principal-demo-operator", (tenant_one_operator,), DEMO_TENANT_ONE
+            ),
+            os.environ.get("DEMO_ADMIN_TWO_TOKEN", "demo-admin-two"): Principal(
+                "principal-demo-admin-two", (tenant_two_admin,), DEMO_TENANT_TWO
+            ),
+            os.environ.get("DEMO_REVIEWER_TWO_TOKEN", "demo-reviewer-two"): Principal(
+                "principal-demo-reviewer-two", (tenant_two_reviewer,), DEMO_TENANT_TWO
             ),
         }
         self._active = {

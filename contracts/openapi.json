@@ -460,6 +460,48 @@
         "summary": "Candidates"
       }
     },
+    "/v1/candidate-detections/{detection_id}/evidence": {
+      "get": {
+        "operationId": "candidate_evidence_v1_candidate_detections__detection_id__evidence_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "detection_id",
+            "required": true,
+            "schema": {
+              "title": "Detection Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Candidate Evidence"
+      }
+    },
     "/v1/candidate-detections/{detection_id}/review": {
       "post": {
         "operationId": "review_candidate_v1_candidate_detections__detection_id__review_post",
@@ -557,6 +599,84 @@
         "summary": "Coverage"
       }
     },
+    "/v1/demo/forecasts/refresh": {
+      "post": {
+        "operationId": "refresh_demo_forecasts_v1_demo_forecasts_refresh_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Refresh Demo Forecasts V1 Demo Forecasts Refresh Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Refresh Demo Forecasts"
+      }
+    },
+    "/v1/demo/live-cctv": {
+      "get": {
+        "operationId": "live_cctv_v1_demo_live_cctv_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Live Cctv V1 Demo Live Cctv Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Live Cctv"
+      }
+    },
     "/v1/demo/near-live-cctv/captures": {
       "post": {
         "operationId": "start_near_live_capture_v1_demo_near_live_cctv_captures_post",
@@ -618,6 +738,59 @@
           }
         ],
         "summary": "Start Near Live Capture"
+      }
+    },
+    "/v1/demo/session/start": {
+      "post": {
+        "operationId": "start_demo_session_v1_demo_session_start_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Start Demo Session V1 Demo Session Start Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Start Demo Session"
       }
     },
     "/v1/forecasts": {
@@ -761,6 +934,55 @@
         "summary": "Forecast Detail"
       }
     },
+    "/v1/ingestion/runs": {
+      "get": {
+        "operationId": "ingestion_runs_v1_ingestion_runs_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 25,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Ingestion Runs V1 Ingestion Runs Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Ingestion Runs"
+      }
+    },
     "/v1/ingestion/runs/{run_id}": {
       "get": {
         "operationId": "ingestion_run_v1_ingestion_runs__run_id__get",
@@ -806,6 +1028,69 @@
           }
         ],
         "summary": "Ingestion Run"
+      }
+    },
+    "/v1/ingestion/runs/{run_id}/reanalyze": {
+      "post": {
+        "operationId": "reanalyze_ingestion_run_v1_ingestion_runs__run_id__reanalyze_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Reanalyze Ingestion Run V1 Ingestion Runs  Run Id  Reanalyze Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Reanalyze Ingestion Run"
       }
     },
     "/v1/me/active-tenant/{tenant_id}": {

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 import json
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -11,6 +12,16 @@ from fastapi.testclient import TestClient
 from src.api import reka
 from src.api.app import create_app
 from src.api.settings import Settings
+from src.api.tenancy import DEMO_TENANT_ONE
+from src.data.store import IngestionStore
+from src.data.video import (
+    DatabaseJobBroker,
+    DictLocationResolver,
+    FakeRekaVisionProvider,
+    VideoPipelineService,
+    VideoStore,
+)
+from src.data.video.errors import VideoPipelineError
 from src.models.contracts import validate_contract
 
 ONE = {"Authorization": "Bearer demo-token-one"}
@@ -63,6 +74,30 @@ def test_active_tenant_switch_requires_membership_and_is_idempotent(client):
     )
     assert denied.status_code == 403
     assert denied.json()["code"] == "tenant_forbidden"
+
+
+def test_demo_session_start_clears_only_pending_queue_and_is_idempotent(client):
+    before = client.get("/v1/candidate-detections", headers=REVIEWER)
+    assert before.status_code == 200
+    assert len(before.json()["items"]) == 1
+    denied = client.post(
+        "/v1/demo/session/start",
+        json={},
+        headers={**REVIEWER, "Idempotency-Key": "demo-session-reviewer"},
+    )
+    assert denied.status_code == 403
+
+    headers = {**ONE, "Idempotency-Key": "demo-session-admin-0001"}
+    first = client.post("/v1/demo/session/start", json={}, headers=headers)
+    replay = client.post("/v1/demo/session/start", json={}, headers=headers)
+    assert first.status_code == replay.status_code == 200
+    assert first.json() == replay.json() == {
+        "status": "started",
+        "deleted_pending_candidates": 1,
+    }
+    after = client.get("/v1/candidate-detections", headers=REVIEWER)
+    assert after.status_code == 200
+    assert after.json()["items"] == []
 
 
 def test_source_mutations_require_idempotency_and_reject_client_tenant(client):
@@ -181,6 +216,7 @@ def test_secret_configuration_never_appears_in_repr_or_openapi():
     serialized = json.dumps(app.openapi())
     assert "/v1/video-assets/uploads" in app.openapi()["paths"]
     assert "/v1/ingestion/runs/{run_id}" in app.openapi()["paths"]
+    assert "/v1/ingestion/runs/{run_id}/reanalyze" in app.openapi()["paths"]
     assert secret not in serialized
     assert "REKA_API_KEY" not in serialized
     assert "secret_ref" not in serialized
@@ -192,3 +228,178 @@ def test_production_rejects_the_development_authentication_provider():
             provider=reka.FakeRekaProvider(),
             settings=Settings(app_environment="production"),
         )
+
+
+def test_integrated_demo_refresh_is_tenant_derived_and_admin_only():
+    calls: list[str] = []
+
+    def refresh(tenant_id: str, now: datetime) -> dict:
+        calls.append(tenant_id)
+        return {
+            "tenant_id": tenant_id,
+            "window_start": "2099-01-01T00:00:00Z",
+            "forecast_count": 4,
+            "feature_snapshot_version": "future-demo",
+            "coverage_ratio": 1.0,
+        }
+
+    client = TestClient(
+        create_app(
+            provider=reka.FakeRekaProvider(),
+            settings=Settings(),
+            forecast_refresher=refresh,
+        )
+    )
+    response = client.post(
+        "/v1/demo/forecasts/refresh",
+        json={},
+        headers={**ONE, "Idempotency-Key": "demo-refresh-0001"},
+    )
+    assert response.status_code == 201
+    assert response.json()["tenant_id"].endswith("0001")
+    assert calls == [response.json()["tenant_id"]]
+
+    denied = client.post(
+        "/v1/demo/forecasts/refresh",
+        json={},
+        headers={**VIEWER, "Idempotency-Key": "demo-refresh-0002"},
+    )
+    assert denied.status_code == 403
+
+
+def test_ingestion_run_collection_is_tenant_scoped_and_bounded(client):
+    response = client.get("/v1/ingestion/runs?limit=5", headers=ONE)
+    assert response.status_code == 200
+    assert response.json() == {"items": []}
+    assert client.get("/v1/ingestion/runs?limit=101", headers=ONE).status_code == 422
+
+
+def test_controlled_reanalysis_is_admin_tenant_scoped_and_idempotent(
+    tmp_path: Path,
+) -> None:
+    source_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    ingestion = IngestionStore(tmp_path / "state.sqlite3")
+    store = VideoStore(ingestion)
+    vision = FakeRekaVisionProvider(
+        proposals=[{"offset_seconds": 1, "category": "property"}]
+    )
+
+    class Inspector:
+        def duration_seconds(self, path: Path) -> float:
+            return 10.0
+
+    service = VideoPipelineService(
+        store,
+        vision,
+        DictLocationResolver(
+            {
+                (DEMO_TENANT_ONE, f"secret://locations/{source_id}"): {
+                    "latitude": 12.9,
+                    "longitude": 77.5,
+                }
+            }
+        ),
+        media_root=tmp_path / "media",
+        media_inspector=Inspector(),
+    )
+    service.register_recorded_source(
+        {
+            "schema_version": "1.0.0",
+            "tenant_id": DEMO_TENANT_ONE,
+            "source_id": source_id,
+            "name": "Re-analysis fixture",
+            "mode": "recorded_video",
+            "status": "active",
+            "timezone": "UTC",
+            "location_ref": f"secret://locations/{source_id}",
+            "connection": {"transport": "uploaded_asset"},
+            "retention_policy_days": 7,
+            "created_at": "2026-08-30T00:00:00Z",
+        },
+        authenticated_tenant_id=DEMO_TENANT_ONE,
+    )
+    clip = tmp_path / "media" / "clip.mp4"
+    clip.parent.mkdir(parents=True, exist_ok=True)
+    clip.write_bytes(b"\x00\x00\x00\x18ftypmp42" + b"safe-media" * 8)
+    asset = service.accept_upload(
+        authenticated_tenant_id=DEMO_TENANT_ONE,
+        source_id=source_id,
+        path=clip,
+        content_type="video/mp4",
+        captured_start="2026-08-30T00:00:00Z",
+        captured_end="2026-08-30T00:00:10Z",
+        duration_seconds=10,
+        consent_confirmed=True,
+    )
+    with pytest.raises(VideoPipelineError) as caught:
+        service.process_asset(DEMO_TENANT_ONE, asset["asset_id"])
+    assert caught.value.code == "reka_output_missing_fields"
+    failed_job = next(
+        job
+        for job in store.list_jobs(DEMO_TENANT_ONE)
+        if job["operation"] == "analyze"
+    )
+    broker = DatabaseJobBroker(store)
+    api_client = TestClient(
+        create_app(
+            provider=reka.FakeRekaProvider(),
+            settings=Settings(),
+            video_service=service,
+            video_broker=broker,
+        )
+    )
+    path = f"/v1/ingestion/runs/{failed_job['job_id']}/reanalyze"
+    headers = {**ONE, "Idempotency-Key": "reanalyze-api-0001"}
+    missing_key = api_client.post(path, headers=ONE)
+    assert missing_key.status_code == 400
+    assert missing_key.json()["code"] == "idempotency_key_required"
+    first = api_client.post(path, headers=headers)
+    replay = api_client.post(path, headers=headers)
+    assert first.status_code == replay.status_code == 202
+    assert first.json() == replay.json()
+    assert first.json()["run_id"] != failed_job["job_id"]
+    assert store.get_job(DEMO_TENANT_ONE, failed_job["job_id"])["state"] == "failed"
+    original = api_client.get(
+        f"/v1/ingestion/runs/{failed_job['job_id']}", headers=ONE
+    )
+    listing = api_client.get("/v1/ingestion/runs?limit=50", headers=ONE)
+    assert original.status_code == listing.status_code == 200
+    assert "safe_diagnostics" not in original.text
+    assert "safe_diagnostics" not in listing.text
+
+    viewer = api_client.post(
+        path,
+        headers={**VIEWER, "Idempotency-Key": "reanalyze-api-viewer"},
+    )
+    assert viewer.status_code == 403
+    other_tenant = api_client.post(
+        path,
+        headers={
+            "Authorization": "Bearer demo-admin-two",
+            "Idempotency-Key": "reanalyze-api-other",
+        },
+    )
+    assert other_tenant.status_code == 404
+    assert "safe_diagnostics" not in first.text
+
+
+def test_live_cctv_metadata_is_authenticated_fixed_and_secret_free(client):
+    denied = client.get("/v1/demo/live-cctv")
+    assert denied.status_code == 401
+
+    response = client.get("/v1/demo/live-cctv", headers=ONE)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["source_key"] == "louisiana-dot-i20"
+    assert body["playback_url"].startswith("https://ITSStreamingBR2.dotd.la.gov/")
+    assert "secret" not in response.text.lower()
+    assert "reka" not in body.get("playback_url", "").lower()
+
+
+def test_candidate_evidence_requires_reviewer_before_lookup(client):
+    response = client.get(
+        "/v1/candidate-detections/00000000-0000-4000-8000-000000000000/evidence",
+        headers=VIEWER,
+    )
+    assert response.status_code == 403
+    assert response.json()["code"] == "role_forbidden"

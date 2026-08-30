@@ -109,6 +109,10 @@ def test_separate_workers_resume_persisted_chain_after_restart(tmp_path: Path) -
     )
     assert upload_worker.poll_once()[0].state == "completed"
     assert len([call for call in provider.calls if call[0] == "upload"]) == 1
+    index_job = next(
+        job for job in store.list_jobs(TENANT) if job["operation"] == "index"
+    )
+    assert index_job["max_attempts"] == 20
 
     # Re-open both stores to prove queued state is not tied to worker memory.
     restarted_store = VideoStore(IngestionStore(tmp_path / "state.sqlite3"))
@@ -159,6 +163,184 @@ def test_retry_uses_persisted_exponential_backoff(tmp_path: Path) -> None:
     assert persisted["state"] == "retry"
     assert persisted["last_error_code"] == "reka_unavailable"
     assert worker.poll_once() == []
+
+
+def test_only_one_analysis_job_can_be_active_per_asset(tmp_path: Path) -> None:
+    store, _, _, asset = _setup(tmp_path)
+    first = store.enqueue(
+        TENANT, asset["asset_id"], "analyze", idempotency_key="analysis-attempt-one"
+    )
+    assert first["state"] == "queued"
+    with pytest.raises(VideoPipelineError) as caught:
+        store.enqueue(
+            TENANT,
+            asset["asset_id"],
+            "analyze",
+            idempotency_key="analysis-attempt-two",
+        )
+    assert caught.value.code == "job_active_conflict"
+
+
+def test_exhausted_pending_index_fails_instead_of_sticking_in_retry(
+    tmp_path: Path,
+) -> None:
+    store, provider, service, asset = _setup(tmp_path)
+    provider.status = "indexing"
+    store.put_mapping(TENANT, SOURCE, asset["asset_id"], "fake-indexing", "pending")
+    job = store.enqueue(
+        TENANT,
+        asset["asset_id"],
+        "index",
+        max_attempts=1,
+        idempotency_key="bounded-index-timeout",
+    )
+    telemetry = InMemoryCoverageTelemetry()
+    worker = VideoJobWorker(
+        store=store,
+        broker=DatabaseJobBroker(store),
+        service=service,
+        operations=("index",),
+        telemetry=telemetry,
+        index_max_attempts=1,
+        index_poll_seconds=0,
+    )
+    result = worker.poll_once()[0]
+    assert result.state == "failed"
+    assert result.error_code == "reka_index_timeout"
+    persisted = store.get_job(TENANT, job["job_id"])
+    assert persisted["state"] == "failed"
+    assert persisted["last_error_code"] == "reka_index_timeout"
+    assert store.get_asset(TENANT, asset["asset_id"])["status"] == "failed"
+    assert store.list_coverage(TENANT)[0]["degraded_reason_codes"] == [
+        "reka_index_timeout"
+    ]
+
+
+def test_exhausted_legacy_index_adopts_the_configured_bound(tmp_path: Path) -> None:
+    store, provider, service, asset = _setup(tmp_path)
+    store.put_mapping(TENANT, SOURCE, asset["asset_id"], "fake-indexed", "pending")
+    job = store.enqueue(
+        TENANT,
+        asset["asset_id"],
+        "index",
+        max_attempts=1,
+        idempotency_key="legacy-index-bound",
+    )
+    store.transition_job(TENANT, job["job_id"], "running")
+    store.transition_job(
+        TENANT, job["job_id"], "retry", "reka_index_pending"
+    )
+    provider.status = "indexed"
+    worker = VideoJobWorker(
+        store=store,
+        broker=DatabaseJobBroker(store),
+        service=service,
+        operations=("index",),
+        index_max_attempts=3,
+        index_poll_seconds=0,
+    )
+    result = worker.poll_once()[0]
+    assert result.state == "completed"
+    persisted = store.get_job(TENANT, job["job_id"])
+    assert persisted["attempts"] == 2
+    assert persisted["max_attempts"] == 3
+
+
+def test_empty_reka_result_completes_with_zero_candidates(tmp_path: Path) -> None:
+    store, provider, service, asset = _setup(tmp_path)
+    provider.proposals = []
+    broker = DatabaseJobBroker(store)
+    upload = store.enqueue(TENANT, asset["asset_id"], "upload")
+    broker.publish(JobMessage(TENANT, upload["job_id"], "upload"))
+    upload_worker = VideoJobWorker(
+        store=store, broker=broker, service=service, operations=("upload",)
+    )
+    index_worker = VideoJobWorker(
+        store=store, broker=broker, service=service, operations=("index",)
+    )
+    analyze_worker = VideoJobWorker(
+        store=store, broker=broker, service=service, operations=("analyze",)
+    )
+    assert upload_worker.poll_once()[0].state == "completed"
+    assert index_worker.poll_once()[0].state == "completed"
+    result = analyze_worker.poll_once()[0]
+    assert result.state == "completed"
+    assert store.list_candidates(TENANT) == []
+    assert store.get_asset(TENANT, asset["asset_id"])["status"] == "processed"
+
+
+def test_invalid_analysis_is_fail_closed_and_reanalysis_is_fresh(
+    tmp_path: Path,
+) -> None:
+    store, provider, service, asset = _setup(tmp_path)
+    provider.proposals = [{"offset_seconds": 1, "category": "property"}]
+    broker = DatabaseJobBroker(store)
+    upload = store.enqueue(TENANT, asset["asset_id"], "upload")
+    broker.publish(JobMessage(TENANT, upload["job_id"], "upload"))
+    upload_worker = VideoJobWorker(
+        store=store, broker=broker, service=service, operations=("upload",)
+    )
+    index_worker = VideoJobWorker(
+        store=store, broker=broker, service=service, operations=("index",)
+    )
+    telemetry = InMemoryCoverageTelemetry()
+    analyze_worker = VideoJobWorker(
+        store=store,
+        broker=broker,
+        service=service,
+        operations=("analyze",),
+        telemetry=telemetry,
+    )
+    assert upload_worker.poll_once()[0].state == "completed"
+    assert index_worker.poll_once()[0].state == "completed"
+    failed_result = analyze_worker.poll_once()[0]
+    failed_job = store.get_job(TENANT, failed_result.job_id)
+    assert failed_result.state == "failed"
+    assert failed_job["last_error_code"] == "reka_output_missing_fields"
+    assert failed_job["safe_diagnostics"] == {
+        "proposal_index": 0,
+        "missing_fields": ["confidence"],
+    }
+    failed_asset = store.get_asset(TENANT, asset["asset_id"])
+    assert failed_asset["status"] == "failed"
+    assert failed_asset["failure_code"] == "reka_output_missing_fields"
+    assert store.list_candidates(TENANT) == []
+    snapshot = store.list_coverage(TENANT)[0]
+    assert snapshot["coverage_ratio"] == 0
+    assert snapshot["degraded_reason_codes"] == ["detector_output_invalid"]
+    assert telemetry.observations[-1].reka_available is True
+    with store.ingestion_store.connect() as connection:
+        audit = connection.execute(
+            """SELECT action,outcome,error_code FROM video_audit_log
+               WHERE tenant_id=? AND resource_id=? AND outcome='failure'""",
+            (TENANT, asset["asset_id"]),
+        ).fetchone()
+    assert dict(audit) == {
+        "action": "reka.analyze",
+        "outcome": "failure",
+        "error_code": "reka_output_missing_fields",
+    }
+
+    provider.proposals = [
+        {"offset_seconds": 1, "category": "property", "confidence": 0.8}
+    ]
+    fresh_job = service.request_reanalysis(
+        TENANT, failed_job["job_id"], idempotency_key="controlled-reanalysis-1"
+    )
+    assert fresh_job["job_id"] != failed_job["job_id"]
+    assert store.get_job(TENANT, failed_job["job_id"])["state"] == "failed"
+    assert store.get_asset(TENANT, asset["asset_id"])["status"] == "processing"
+    broker.publish(JobMessage(TENANT, fresh_job["job_id"], "analyze"))
+    completed = analyze_worker.poll_once()[0]
+    assert completed.job_id == fresh_job["job_id"]
+    assert completed.state == "completed"
+    assert store.get_asset(TENANT, asset["asset_id"])["status"] == "processed"
+    assert len(store.list_candidates(TENANT)) == 1
+    with pytest.raises(VideoPipelineError) as caught:
+        service.request_reanalysis(
+            TENANT, failed_job["job_id"], idempotency_key="controlled-reanalysis-2"
+        )
+    assert caught.value.code == "reanalysis_already_completed"
 
 
 class FakeS3:

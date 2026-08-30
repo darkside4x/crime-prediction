@@ -36,14 +36,16 @@ export default function SourcesView() {
         },
         registerKey.current,
       ),
-    onSuccess: () => {
+    onSuccess: (source) => {
       registerKey.current = newIdempotencyKey();
+      setUploadSourceId(source.source_id);
       setName("");
       void queryClient.invalidateQueries({ queryKey: ["sources", tenantId] });
     },
   });
 
   const [file, setFile] = useState<File | null>(null);
+  const [durationSeconds, setDurationSeconds] = useState<number | null>(null);
   const [uploadSourceId, setUploadSourceId] = useState("");
   const [consentConfirmed, setConsentConfirmed] = useState(false);
   const [fileError, setFileError] = useState<string | null>(null);
@@ -54,9 +56,8 @@ export default function SourcesView() {
         throw new Error("Upload prerequisites are incomplete");
       }
       const now = Date.now();
-      const capturedStart = new Date(
-        Math.min(file.lastModified || now - 60_000, now - 1_000),
-      ).toISOString();
+      if (!durationSeconds) throw new Error("Video duration is unavailable");
+      const capturedStart = new Date(now - durationSeconds * 1000).toISOString();
       return api.uploadVideo(
         token,
         {
@@ -74,23 +75,49 @@ export default function SourcesView() {
     },
   });
 
-  const onFileChange = (selected: File | null) => {
+  const onFileChange = async (selected: File | null) => {
     setFileError(null);
     if (!selected) {
       setFile(null);
+      setDurationSeconds(null);
       return;
     }
     if (!selected.type.startsWith("video/mp4") && !selected.name.endsWith(".mp4")) {
       setFileError("Only MP4 recordings are accepted.");
       setFile(null);
+      setDurationSeconds(null);
       return;
     }
     if (selected.size > MAX_UPLOAD_BYTES) {
       setFileError("File exceeds the 512 MB upload bound.");
       setFile(null);
+      setDurationSeconds(null);
       return;
     }
-    setFile(selected);
+    const url = URL.createObjectURL(selected);
+    try {
+      const duration = await new Promise<number>((resolve, reject) => {
+        const video = document.createElement("video");
+        video.preload = "metadata";
+        video.onloadedmetadata = () => resolve(video.duration);
+        video.onerror = () => reject(new Error("metadata"));
+        video.src = url;
+      });
+      if (!Number.isFinite(duration) || duration <= 0 || duration > 600) {
+        setFileError("Demo recordings must be between 1 second and 10 minutes.");
+        setFile(null);
+        setDurationSeconds(null);
+        return;
+      }
+      setFile(selected);
+      setDurationSeconds(duration);
+    } catch {
+      setFileError("The browser could not read this MP4's duration.");
+      setFile(null);
+      setDurationSeconds(null);
+    } finally {
+      URL.revokeObjectURL(url);
+    }
   };
 
   const submitRegister = (event: FormEvent) => {
@@ -179,9 +206,9 @@ export default function SourcesView() {
             <input
               type="file"
               accept="video/mp4,.mp4"
-              onChange={(event) => onFileChange(event.target.files?.[0] ?? null)}
+              onChange={(event) => void onFileChange(event.target.files?.[0] ?? null)}
             />
-            {file ? `${file.name} (${(file.size / 1_048_576).toFixed(1)} MB)` : "Choose an MP4 recording"}
+            {file ? `${file.name} · ${durationSeconds?.toFixed(1)}s · ${(file.size / 1_048_576).toFixed(1)} MB` : "Choose an MP4 recording"}
           </label>
           <label>
             Recorded source
@@ -215,7 +242,7 @@ export default function SourcesView() {
           <div className="row">
             <button
               type="button"
-              disabled={!file || !uploadSourceId || !consentConfirmed || upload.isPending}
+              disabled={!file || !durationSeconds || !uploadSourceId || !consentConfirmed || upload.isPending}
               onClick={() => upload.mutate()}
             >
               {upload.isPending ? "Requesting upload…" : "Start upload"}

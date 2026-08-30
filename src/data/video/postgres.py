@@ -163,7 +163,7 @@ class PostgresVideoStore:
                    (tenant_id, job_id, asset_id, operation, idempotency_key, state,
                     attempts, max_attempts, available_at, created_at, updated_at)
                    VALUES (%s, %s, %s, %s, %s, 'queued', 0, %s, %s, %s, %s)
-                   ON CONFLICT (tenant_id, idempotency_key) DO NOTHING""",
+                   ON CONFLICT DO NOTHING""",
                 (tenant_id, job_id, asset_id, operation, key, max_attempts, now, now, now),
             )
             cursor.execute(
@@ -172,6 +172,10 @@ class PostgresVideoStore:
                 (tenant_id, key),
             )
             row = cursor.fetchone()
+            if row is None:
+                raise VideoPipelineError(
+                    "job_active_conflict", "Equivalent processing work is already active"
+                )
         return self._job(row)
 
     def get_job(self, tenant_id: str, job_id: str) -> dict[str, Any]:
@@ -184,6 +188,15 @@ class PostgresVideoStore:
         if row is None:
             raise VideoPipelineError("job_not_found", "Processing job was not found")
         return self._job(row)
+
+    def list_jobs(self, tenant_id: str, *, limit: int = 50) -> list[dict[str, Any]]:
+        with self.database.transaction(tenant_id) as cursor:
+            cursor.execute(
+                """SELECT * FROM video_processing_jobs WHERE tenant_id=%s
+                   ORDER BY created_at DESC LIMIT %s""",
+                (tenant_id, min(max(limit, 1), 100)),
+            )
+            return [self._job(row) for row in cursor.fetchall()]
 
     def claim_job(
         self, tenant_id: str, job_id: str, *, worker_id: str, lease_seconds: int
@@ -225,6 +238,27 @@ class PostgresVideoStore:
             if cursor.rowcount != 1:
                 raise VideoPipelineError("job_lease_lost", "Worker no longer owns the processing lease")
 
+    def extend_index_attempt_limit(
+        self, tenant_id: str, job_id: str, *, max_attempts: int
+    ) -> dict[str, Any]:
+        now = datetime.now(UTC)
+        with self.database.transaction(tenant_id) as cursor:
+            cursor.execute(
+                """UPDATE video_processing_jobs SET max_attempts=%s, updated_at=%s
+                   WHERE tenant_id=%s AND job_id=%s AND operation='index'
+                     AND state='retry' AND last_error_code='reka_index_pending'
+                     AND attempts >= max_attempts AND max_attempts < %s
+                   RETURNING *""",
+                (max_attempts, now, tenant_id, job_id, max_attempts),
+            )
+            row = cursor.fetchone()
+        if row is None:
+            raise VideoPipelineError(
+                "job_attempt_limit_not_extendable",
+                "Only an exhausted pending index job can receive the configured bound",
+            )
+        return self._job(row)
+
     def mark_dead_lettered(self, tenant_id: str, job_id: str) -> None:
         now = datetime.now(UTC)
         with self.database.transaction(tenant_id) as cursor:
@@ -246,6 +280,7 @@ class PostgresVideoStore:
         error_code: str | None = None,
         *,
         retry_delay_seconds: float = 0,
+        safe_diagnostics: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         if state not in {"queued", "running", "completed", "failed", "cancelled", "retry"}:
             raise ValueError("Invalid job state")
@@ -255,10 +290,20 @@ class PostgresVideoStore:
         with self.database.transaction(tenant_id) as cursor:
             cursor.execute(
                 """UPDATE video_processing_jobs SET state=%s, last_error_code=%s,
+                   safe_diagnostics=%s::jsonb,
                    available_at=%s, finished_at=%s, lease_expires_at=NULL,
                    heartbeat_at=NULL, worker_id=NULL, updated_at=%s
                    WHERE tenant_id=%s AND job_id=%s RETURNING *""",
-                (state, error_code, available, finished, now, tenant_id, job_id),
+                (
+                    state,
+                    error_code,
+                    json.dumps(safe_diagnostics or {}),
+                    available,
+                    finished,
+                    now,
+                    tenant_id,
+                    job_id,
+                ),
             )
             row = cursor.fetchone()
         if row is None:
@@ -311,6 +356,22 @@ class PostgresVideoStore:
                 (tenant_id,),
             )
             return [dict(row["candidate"]) for row in cursor.fetchall()]
+
+    def delete_pending_candidates(self, tenant_id: str) -> int:
+        """Delete unreviewed demo-session candidates while preserving final reviews."""
+        with self.database.transaction(tenant_id) as cursor:
+            cursor.execute(
+                """DELETE FROM candidate_detections_restricted AS candidate_row
+                   WHERE candidate_row.tenant_id=%s
+                     AND candidate_row.candidate->>'review_status'='awaiting_review'
+                     AND NOT EXISTS (
+                       SELECT 1 FROM candidate_reviews_restricted AS review_row
+                       WHERE review_row.tenant_id=candidate_row.tenant_id
+                         AND review_row.detection_id=candidate_row.detection_id
+                     )""",
+                (tenant_id,),
+            )
+            return cursor.rowcount
 
     def update_candidate(self, payload: dict[str, Any]) -> None:
         with self.database.transaction(payload["tenant_id"]) as cursor:

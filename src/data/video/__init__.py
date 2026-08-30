@@ -1,6 +1,6 @@
 """Restricted recorded-video ingestion and human-review workflow."""
 
-from .broker import DatabaseJobBroker, JobMessage, SqsJobBroker
+from .broker import DatabaseJobBroker, JobMessage, PostgresJobBroker, SqsJobBroker
 from .coverage import (
     CoverageObservation,
     InMemoryCoverageTelemetry,
@@ -23,6 +23,7 @@ __all__ = [
     "FakeRekaVisionProvider",
     "InMemoryCoverageTelemetry",
     "JobMessage",
+    "PostgresJobBroker",
     "LocalMediaStorage",
     "PostgresCoverageTelemetry",
     "PostgresVideoStore",

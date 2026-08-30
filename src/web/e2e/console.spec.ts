@@ -15,10 +15,10 @@ async function signInAsAdmin(page: Page) {
 test("viewer inspects the forecast map with suppression and limitations", async ({ page }) => {
   await page.goto("/#/console");
   await page.getByRole("button", { name: /Viewer · Demo One/ }).click();
-  await expect(page.getByText(/Aggregate area-level forecasts/)).toBeVisible();
+  await expect(page.getByRole("link", { name: "Prediction" })).toHaveAttribute("aria-current", "page");
   // Viewer must not see admin or reviewer navigation.
   await expect(page.getByRole("link", { name: "Sources & upload" })).toHaveCount(0);
-  await expect(page.getByRole("link", { name: "Review queue" })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "Review" })).toHaveCount(0);
   // Map legend renders, including the suppressed state wording.
   await expect(page.getByText(/suppressed \(no estimate — not zero\)/)).toBeVisible();
 });
@@ -26,62 +26,32 @@ test("viewer inspects the forecast map with suppression and limitations", async 
 test("reviewer sees candidates labeled as unconfirmed", async ({ page }) => {
   await page.goto("/#/console");
   await page.getByRole("button", { name: /Reviewer · Demo One/ }).click();
-  await page.getByRole("link", { name: "Review queue" }).click();
+  await page.getByRole("link", { name: "Review" }).click();
   await expect(page.getByText("UNCONFIRMED CANDIDATE").first()).toBeVisible();
   await expect(page.getByText(/Decisions are final and immutable/)).toBeVisible();
 });
 
-test("admin upload flow surfaces the degraded media-intake state honestly", async ({ page }) => {
-  await signInAsAdmin(page);
-  await page.getByRole("link", { name: "Sources & upload" }).click();
-  await expect(page.getByText("Register recorded-video source")).toBeVisible();
+test("landing page demonstrates the complete product before sign-in", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.getByRole("heading", { name: /Hotspot risk, forecast ahead/i })).toBeVisible();
+  await expect(page.getByText("H3 CELLS").first()).toBeVisible();
+  await expect(page.getByRole("heading", { name: /From events to evidence/i })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Open the console" })).toBeVisible();
 });
 
-test("admin sends an authorized recording as bounded multipart data", async ({ page }) => {
-  await page.route("**/v1/video-assets/uploads", async (route) => {
-    const request = route.request();
-    expect(request.headers()["authorization"]).toBe("Bearer demo-token-one");
-    expect(request.headers()["content-type"]).toContain("multipart/form-data; boundary=");
-    const body = request.postDataBuffer()?.toString("utf8") ?? "";
-    expect(body).toContain('name="source_id"');
-    expect(body).toContain('name="consent_confirmed"');
-    expect(body).toContain("true");
-    expect(body).toContain('filename="review-two.mp4"');
-    await route.fulfill({
-      status: 202,
-      contentType: "application/json",
-      body: JSON.stringify({
-        run_id: "70000000-0000-4000-8000-000000000001",
-        state: "queued",
-        stage: "accepted",
-        label: "recorded video upload",
-        candidate_count: 0,
-        analysis_mode: "deterministic_fake",
-        created_at: "2026-08-30T00:00:00Z",
-        updated_at: "2026-08-30T00:00:00Z",
-      }),
-    });
-  });
-
+test("admin enters the live-only workflow with no upload navigation", async ({ page }) => {
   await signInAsAdmin(page);
-  await page.getByRole("link", { name: "Sources & upload" }).click();
-  await page.locator('input[type="file"]').setInputFiles({
-    name: "review-two.mp4",
-    mimeType: "video/mp4",
-    buffer: Buffer.from("bounded synthetic browser fixture"),
-  });
-  await page.getByLabel("Recorded source").selectOption({ index: 1 });
-  await page.getByLabel(/I confirm this tenant is authorized/).check();
-  await page.getByRole("button", { name: "Start upload" }).click();
-  await expect(page.getByText(/Upload accepted\. Processing run 70000000 is queued/)).toBeVisible();
+  await expect(page.getByRole("link", { name: "Live" })).toHaveAttribute("aria-current", "page");
+  await expect(page.getByRole("button", { name: "Analyze next 12 seconds" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Sources & upload" })).toHaveCount(0);
 });
 
 test("tenant switch clears tenant-scoped state", async ({ page }) => {
   await signInAsAdmin(page);
   await page.getByLabel("Active tenant").selectOption({ label: "Demo Tenant Two" });
   // Role downgrades to viewer in tenant two; admin nav must disappear.
-  await expect(page.getByText("viewer")).toBeVisible();
-  await expect(page.getByRole("link", { name: "Sources & upload" })).toHaveCount(0);
+  await expect(page.getByTitle("Active role in this tenant")).toHaveText("viewer");
+  await expect(page.getByRole("link", { name: "Live" })).toHaveCount(0);
 });
 
 test("keyboard navigation reaches the primary flow", async ({ page }) => {
@@ -91,5 +61,5 @@ test("keyboard navigation reaches the primary flow", async ({ page }) => {
   await page.keyboard.press("Tab");
   await expect(firstPersona).toBeFocused();
   await page.keyboard.press("Enter");
-  await expect(page.getByText(/Aggregate area-level forecasts/)).toBeVisible();
+  await expect(page.getByText(/Area-level estimates with uncertainty/)).toBeVisible();
 });

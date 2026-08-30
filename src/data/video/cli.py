@@ -102,3 +102,34 @@ def capture_worker() -> None:
                 break
     finally:
         runtime.close()
+
+
+def demo_worker() -> None:
+    """Run one worker stage against the self-contained Postgres demo broker."""
+    parser = argparse.ArgumentParser(description="Run one integrated-demo worker stage")
+    parser.add_argument(
+        "--operation", choices=("upload", "index", "analyze", "delete"), required=True
+    )
+    parser.add_argument("--poll-seconds", type=float, default=0.5)
+    args = parser.parse_args()
+    from .demo_runtime import create_demo_runtime
+    from src.api.settings import Settings
+
+    runtime = create_demo_runtime()
+    api_settings = Settings.from_environment()
+    processor = VideoJobWorker(
+        store=runtime.video_store,
+        broker=runtime.broker,
+        service=runtime.service,
+        operations=(args.operation,),
+        lease_seconds=120,
+        telemetry=PostgresCoverageTelemetry(runtime.database),
+        index_max_attempts=api_settings.reka_index_max_polls,
+        index_poll_seconds=max(0, round(api_settings.reka_index_poll_seconds)),
+    )
+    try:
+        while True:
+            if not processor.poll_once():
+                time.sleep(max(args.poll_seconds, 0.1))
+    finally:
+        runtime.close()

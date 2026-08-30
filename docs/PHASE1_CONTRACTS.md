@@ -146,6 +146,7 @@ POST   /v1/sources/recorded-video
 POST   /v1/sources/live-camera
 POST   /v1/video-assets/uploads
 GET    /v1/ingestion/runs/{run_id}
+POST   /v1/ingestion/runs/{run_id}/reanalyze
 GET    /v1/candidate-detections
 POST   /v1/candidate-detections/{detection_id}/review
 GET    /v1/coverage
@@ -170,6 +171,16 @@ Services and tests must enforce:
 - evidence and media have not expired before access.
 - every Reka `video_id` resolves through a tenant-scoped local mapping;
 - Reka output validates before candidate persistence, and remote deletion is monitored before retention deletion is complete.
+- A validated empty Reka candidate array completes analysis with zero candidates;
+  exhausted indexing fails with `reka_index_timeout` and is never treated as a
+  no-candidate result.
+- Re-analysis never reopens a terminal job. An authorized tenant administrator
+  may create one fresh, idempotent analysis job for retained, indexed media;
+  newer active or completed analysis work blocks duplicate re-analysis.
+- Starting a non-production demo session may delete only tenant-scoped,
+  unreviewed `awaiting_review` candidates from earlier demo sessions. Immutable
+  confirmed/rejected reviews and promoted incident events are never deleted by
+  session cleanup. The active Review Queue displays only `awaiting_review` rows.
 
 ## Change procedure
 

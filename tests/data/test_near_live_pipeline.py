@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import threading
 import time
 
 from fastapi.testclient import TestClient
@@ -39,6 +40,18 @@ class FakeCapture:
         return CapturedSegment(destination, "2026-08-30T00:00:00Z")
 
 
+class BlockingCapture(FakeCapture):
+    def __init__(self) -> None:
+        self.entered = threading.Event()
+        self.release = threading.Event()
+
+    def capture(self, key: str, destination: Path, *, duration_seconds: int) -> CapturedSegment:
+        self.entered.set()
+        if not self.release.wait(timeout=2):
+            raise AssertionError("test did not release the bounded capture")
+        return super().capture(key, destination, duration_seconds=duration_seconds)
+
+
 def test_default_live_feed_uses_the_official_catalog_video_url() -> None:
     source = DEFAULT_HLS_SOURCES["louisiana-dot-i20"]
     assert source.url == (
@@ -48,6 +61,64 @@ def test_default_live_feed_uses_the_official_catalog_video_url() -> None:
     assert source.catalog_api_url == "https://511la.org/api/v2/get/cameras"
     assert source.catalog_source_id == "101"
     assert source.catalog_view_id == "2206"
+
+
+def test_near_live_capture_returns_before_bounded_recording_finishes(
+    tmp_path: Path,
+) -> None:
+    ingestion = IngestionStore(tmp_path / "restricted.sqlite3")
+    video_store = VideoStore(ingestion)
+    video_service = VideoPipelineService(
+        video_store,
+        FakeRekaVisionProvider(),
+        DictLocationResolver(
+            {
+                (DEMO_TENANT_ONE, DEMO_HLS_LOCATION_REF): {
+                    "latitude": 32.46,
+                    "longitude": -93.83,
+                }
+            }
+        ),
+        media_root=tmp_path / "media",
+        media_inspector=Inspector(),
+    )
+    capture = BlockingCapture()
+    client = TestClient(
+        create_app(
+            provider=reka.FakeRekaProvider(),
+            settings=Settings(
+                app_environment="test",
+                runtime_dir=tmp_path / "runtime",
+                near_live_capture_seconds=10,
+                reka_index_poll_seconds=0,
+                reka_index_max_polls=2,
+            ),
+            video_service=video_service,
+            hls_capture=capture,  # type: ignore[arg-type]
+        )
+    )
+    started = client.post(
+        "/v1/demo/near-live-cctv/captures",
+        json={"source_key": "louisiana-dot-i20", "duration_seconds": 10},
+        headers={
+            "Authorization": "Bearer demo-token-one",
+            "Idempotency-Key": "nonblocking-capture-0001",
+        },
+    )
+    try:
+        assert started.status_code == 202
+        assert started.json()["state"] == "queued"
+        assert started.json()["stage"] == "capturing_hls"
+        assert "asset_id" not in started.json()
+        assert capture.entered.wait(timeout=1)
+        polled = client.get(
+            f"/v1/ingestion/runs/{started.json()['run_id']}",
+            headers={"Authorization": "Bearer demo-token-one"},
+        )
+        assert polled.status_code == 200
+        assert polled.json()["stage"] == "capturing_hls"
+    finally:
+        capture.release.set()
 
 
 def test_allowlisted_hls_capture_reaches_validated_human_review(tmp_path: Path) -> None:

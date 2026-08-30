@@ -14,6 +14,7 @@ import time
 import uuid
 
 from fastapi import Depends, FastAPI, File, Form, Header, Query, Request, UploadFile
+from fastapi.responses import Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -229,7 +230,7 @@ def _new_source(
         "source_id": str(uuid.uuid4()),
         "name": body.name,
         "mode": mode,
-        "status": "draft",
+        "status": "active",
         "timezone": body.timezone,
         "location_ref": f"secret://tenant/{tenant_id}/locations/{body.registered_location_id}",
         "connection": connection,
@@ -256,9 +257,13 @@ def create_app(
     audit_log: Any | None = None,
     idempotency_store: Any | None = None,
     video_broker: JobBroker | None = None,
+    forecast_refresher: Callable[[str, datetime], dict[str, Any]] | None = None,
+    seed_demo_fixtures: bool = True,
+    deployment_mode: str = "development",
 ) -> FastAPI:
     active_settings = settings or Settings.from_environment()
     production = active_settings.app_environment == "production"
+    durable_mode = production or deployment_mode in {"integrated_demo", "live_demo"}
     if auth_provider is None and production:
         if not all(
             (
@@ -347,11 +352,11 @@ def create_app(
         raise ValueError("A durable production idempotency store must be injected")
     app.state.audit = audit_log
     app.state.idempotency = idempotency_store
-    first_source = None if production else _load_fixture("camera-source")
+    first_source = None if production or not seed_demo_fixtures else _load_fixture("camera-source")
     app.state.sources = (
         {} if first_source is None else {first_source["tenant_id"]: [first_source]}
     )
-    candidate = None if production else _load_fixture("candidate-detection")
+    candidate = None if production or not seed_demo_fixtures else _load_fixture("candidate-detection")
     app.state.candidates = (
         {} if candidate is None else {candidate["tenant_id"]: {candidate["detection_id"]: candidate}}
     )
@@ -409,11 +414,29 @@ def create_app(
     def ready() -> dict[str, Any]:
         return {
             "status": "ready" if active_settings.reka_configured else "degraded",
+            "deployment_mode": deployment_mode,
             "reka_chat": "configured" if active_settings.reka_configured else "deterministic_fallback",
-            "reka_vision": "configured" if active_settings.reka_configured else "deterministic_fake",
-            "video_service": "connected",
-            "near_live_capture": "allowlisted_hls",
-            "forecast_models": "historical_fallback_only",
+            "reka_vision": "configured" if active_settings.reka_configured else "deterministic_demo_provider",
+            "video_service": "durable_connected" if video_broker is not None else "connected",
+            "queue": "durable_connected" if video_broker is not None else "development_thread",
+            "near_live_capture": "allowlisted_hls" if not production else "external_worker",
+            "forecast_models": "approved_or_historical_fallback",
+        }
+
+    @app.get("/v1/demo/live-cctv")
+    def live_cctv(ctx: TenantContext = Depends(require_tenant)) -> dict[str, Any]:
+        definition = app.state.hls_capture.source("louisiana-dot-i20")
+        return {
+            "source_key": definition.key,
+            "name": definition.name,
+            "playback_url": definition.url,
+            "attribution": definition.attribution,
+            "status": "live",
+            "analysis_mode": app.state.vision_mode,
+            "limitations": [
+                "The public feed may be delayed or unavailable at the source.",
+                "Playback is context only; Reka analyzes bounded captured segments.",
+            ],
         }
 
     @app.get("/v1/me/tenants")
@@ -423,6 +446,52 @@ def create_app(
             "active_tenant_id": ctx.tenant_id,
             "tenants": [item.__dict__ for item in principal.memberships],
         }
+
+    @app.post("/v1/demo/session/start")
+    def start_demo_session(
+        idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+        ctx: TenantContext = Depends(require_owner),
+    ) -> dict[str, Any]:
+        if production:
+            raise problem(
+                404,
+                "demo_session_cleanup_disabled",
+                "Demo session cleanup is unavailable in production",
+            )
+
+        def action() -> dict[str, Any]:
+            deleted = app.state.video_service.store.delete_pending_candidates(
+                ctx.tenant_id
+            )
+            fixture_bucket = app.state.candidates.get(ctx.tenant_id, {})
+            fixture_ids = [
+                detection_id
+                for detection_id, candidate_record in fixture_bucket.items()
+                if candidate_record.get("review_status") == "awaiting_review"
+            ]
+            for detection_id in fixture_ids:
+                del fixture_bucket[detection_id]
+            total = deleted + len(fixture_ids)
+            app.state.audit.record(
+                tenant_id=ctx.tenant_id,
+                principal_id=ctx.principal_id,
+                request_id=ctx.request_id,
+                action="demo_session_started",
+                resource_type="candidate_review_queue",
+                resource_id=ctx.tenant_id,
+            )
+            return {
+                "status": "started",
+                "deleted_pending_candidates": total,
+            }
+
+        return app.state.idempotency.execute(
+            tenant_id=ctx.tenant_id,
+            operation="start_demo_session",
+            key=idempotency_key,
+            payload={"tenant_id": ctx.tenant_id},
+            action=action,
+        )
 
     @app.put("/v1/me/active-tenant/{tenant_id}")
     def switch_tenant(
@@ -738,8 +807,18 @@ def create_app(
                 kind="live_segment",
             )
             run["asset_id"] = asset["asset_id"]
-            run["stage"] = "segment_validated"
-            process_asset_run(run_id, tenant_id, asset["asset_id"])
+            if app.state.video_broker is not None:
+                durable_run = enqueue_asset_run(
+                    tenant_id, asset["asset_id"], "near-live CCTV segment"
+                )
+                run.update(
+                    state=durable_run["state"],
+                    stage=durable_run["stage"],
+                    updated_at=durable_run["updated_at"],
+                )
+            else:
+                run["stage"] = "segment_validated"
+                process_asset_run(run_id, tenant_id, asset["asset_id"])
         except VideoPipelineError as error:
             run.update(
                 state="failed",
@@ -754,7 +833,7 @@ def create_app(
         idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
         ctx: TenantContext = Depends(require_owner),
     ) -> dict[str, Any]:
-        if production:
+        if production and deployment_mode != "live_demo":
             raise problem(
                 404,
                 "demo_capture_disabled",
@@ -764,13 +843,13 @@ def create_app(
 
         def start() -> dict[str, Any]:
             definition = app.state.hls_capture.source(body.source_key)
-            run_id = str(uuid.uuid4())
             now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            run_id = str(uuid.uuid4())
             run = {
                 "run_id": run_id,
                 "tenant_id": ctx.tenant_id,
                 "state": "queued",
-                "stage": "capture_queued",
+                "stage": "capturing_hls",
                 "label": "near-live CCTV segment",
                 "source_name": definition.name,
                 "source_attribution": definition.attribution,
@@ -781,10 +860,11 @@ def create_app(
                 "updated_at": now,
             }
             app.state.video_runs[run_id] = run
+            response = _public_run(run)
             threading.Thread(
                 target=capture_near_live_run,
                 args=(run_id, ctx.tenant_id, body.source_key),
-                name=f"video-worker-{run_id[:8]}",
+                name=f"hls-capture-{run_id[:8]}",
                 daemon=True,
             ).start()
             app.state.audit.record(
@@ -795,7 +875,7 @@ def create_app(
                 resource_type="ingestion_run",
                 resource_id=run_id,
             )
-            return _public_run(run)
+            return response
 
         return app.state.idempotency.execute(
             tenant_id=ctx.tenant_id,
@@ -804,6 +884,36 @@ def create_app(
             payload=body.model_dump() | {"resolved_duration_seconds": duration},
             action=start,
         )
+
+    @app.get("/v1/ingestion/runs")
+    def ingestion_runs(
+        limit: int = Query(default=25, ge=1, le=100),
+        ctx: TenantContext = Depends(require_tenant),
+    ) -> dict[str, Any]:
+        jobs = app.state.video_service.store.list_jobs(ctx.tenant_id, limit=limit)
+        candidate_counts: dict[str, int] = {}
+        for candidate_record in app.state.video_service.store.list_candidates(ctx.tenant_id):
+            asset_id = candidate_record["asset_id"]
+            candidate_counts[asset_id] = candidate_counts.get(asset_id, 0) + 1
+        return {
+            "items": [
+                _public_run(
+                    {
+                        "run_id": job["job_id"],
+                        "state": job["state"],
+                        "stage": job["operation"],
+                        "label": "recorded video processing",
+                        "asset_id": job["asset_id"],
+                        "candidate_count": candidate_counts.get(job["asset_id"], 0),
+                        "analysis_mode": app.state.vision_mode,
+                        "error_code": job.get("last_error_code"),
+                        "created_at": job["created_at"],
+                        "updated_at": job["updated_at"],
+                    }
+                )
+                for job in jobs
+            ]
+        }
 
     @app.get("/v1/ingestion/runs/{run_id}")
     def ingestion_run(
@@ -830,6 +940,59 @@ def create_app(
                 "updated_at": job["updated_at"],
             }
         raise problem(404, "ingestion_run_not_found", "Ingestion run was not found")
+
+    @app.post("/v1/ingestion/runs/{run_id}/reanalyze", status_code=202)
+    def reanalyze_ingestion_run(
+        run_id: uuid.UUID,
+        idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+        ctx: TenantContext = Depends(require_owner),
+    ) -> dict[str, Any]:
+        def action() -> dict[str, Any]:
+            assert idempotency_key is not None
+            if app.state.video_broker is None:
+                raise problem(
+                    503,
+                    "reanalysis_unavailable",
+                    "Durable video re-analysis is unavailable",
+                    retryable=True,
+                )
+            job = app.state.video_service.request_reanalysis(
+                ctx.tenant_id,
+                str(run_id),
+                idempotency_key=idempotency_key,
+            )
+            app.state.video_broker.publish(
+                JobMessage(ctx.tenant_id, job["job_id"], "analyze")
+            )
+            app.state.audit.record(
+                tenant_id=ctx.tenant_id,
+                principal_id=ctx.principal_id,
+                request_id=ctx.request_id,
+                action="video_reanalysis_requested",
+                resource_type="ingestion_run",
+                resource_id=str(run_id),
+            )
+            return _public_run(
+                {
+                    "run_id": job["job_id"],
+                    "state": job["state"],
+                    "stage": "analyze",
+                    "label": "controlled video re-analysis",
+                    "asset_id": job["asset_id"],
+                    "candidate_count": 0,
+                    "analysis_mode": app.state.vision_mode,
+                    "created_at": job["created_at"],
+                    "updated_at": job["updated_at"],
+                }
+            )
+
+        return app.state.idempotency.execute(
+            tenant_id=ctx.tenant_id,
+            operation=f"reanalyze_ingestion_run:{run_id}",
+            key=idempotency_key,
+            payload={"run_id": str(run_id)},
+            action=action,
+        )
 
     @app.get("/v1/candidate-detections")
     def candidates(
@@ -860,6 +1023,44 @@ def create_app(
                 "Human review is required before any candidate can enter aggregate incident history.",
             ],
         }
+
+    @app.get("/v1/candidate-detections/{detection_id}/evidence")
+    def candidate_evidence(
+        detection_id: str,
+        ctx: TenantContext = Depends(require_reviewer),
+    ) -> Response:
+        try:
+            candidate = app.state.video_service.store.get_candidate(
+                ctx.tenant_id, detection_id
+            )
+        except VideoPipelineError:
+            raise problem(404, "candidate_not_found", "Candidate detection was not found")
+        if parse_utc(candidate["expires_at"]) <= datetime.now(timezone.utc):
+            raise problem(410, "evidence_expired", "Candidate evidence has expired")
+        asset_id = candidate["asset_id"]
+        storage_ref = app.state.video_service.store.asset_storage_ref(
+            ctx.tenant_id, asset_id
+        )
+        with app.state.video_service.media_storage.materialize(
+            storage_ref, tenant_id=ctx.tenant_id, asset_id=asset_id
+        ) as media_path:
+            media = media_path.read_bytes()
+        app.state.audit.record(
+            tenant_id=ctx.tenant_id,
+            principal_id=ctx.principal_id,
+            request_id=ctx.request_id,
+            action="candidate_evidence_viewed",
+            resource_type="candidate_detection",
+            resource_id=detection_id,
+        )
+        return Response(
+            media,
+            media_type="video/mp4",
+            headers={
+                "Cache-Control": "private, no-store, max-age=0",
+                "Content-Disposition": "inline",
+            },
+        )
 
     @app.post("/v1/candidate-detections/{detection_id}/review", status_code=201)
     def review_candidate(
@@ -947,11 +1148,39 @@ def create_app(
 
     @app.get("/v1/coverage")
     def coverage(ctx: TenantContext = Depends(require_tenant)) -> dict[str, Any]:
-        if production:
+        if durable_mode:
             return {"items": app.state.video_service.store.list_coverage(ctx.tenant_id, limit=100)}
         fixture = _load_fixture("coverage-snapshot")
         fixture["tenant_id"] = ctx.tenant_id
         return {"items": [fixture]}
+
+    @app.post("/v1/demo/forecasts/refresh", status_code=201)
+    def refresh_demo_forecasts(
+        idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+        ctx: TenantContext = Depends(require_owner),
+    ) -> dict[str, Any]:
+        if forecast_refresher is None:
+            raise problem(404, "demo_refresh_unavailable", "Integrated demo refresh is unavailable")
+
+        def action() -> dict[str, Any]:
+            result = forecast_refresher(ctx.tenant_id, datetime.now(timezone.utc))
+            app.state.audit.record(
+                tenant_id=ctx.tenant_id,
+                principal_id=ctx.principal_id,
+                request_id=ctx.request_id,
+                action="demo_forecast_refreshed",
+                resource_type="forecast_window",
+                resource_id=result["window_start"],
+            )
+            return result
+
+        return app.state.idempotency.execute(
+            tenant_id=ctx.tenant_id,
+            operation="demo_forecast_refresh",
+            key=idempotency_key,
+            payload={"tenant_id": ctx.tenant_id},
+            action=action,
+        )
 
     @app.get("/v1/forecasts")
     def forecasts(
@@ -975,7 +1204,7 @@ def create_app(
         items = app.state.forecast_orchestrator.repository.list_window(
             ctx.tenant_id, start_text, category
         )
-        if not items and not production:
+        if not items and not durable_mode:
             measured_coverage = (
                 coverage_provider(ctx.tenant_id, start_text)
                 if coverage_provider is not None

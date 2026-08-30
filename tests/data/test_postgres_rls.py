@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import uuid
 
 import pytest
 
@@ -69,7 +70,7 @@ def test_database_rate_limit_is_atomic_and_stores_no_raw_key() -> None:
     database = TenantPostgres(DSN)
     try:
         limiter = PostgresRateLimiter(database, requests=2, window_seconds=60)
-        raw_key = "token:raw-credential-must-not-be-stored"
+        raw_key = f"token:raw-credential-must-not-be-stored-{uuid.uuid4()}"
         assert limiter.allow(raw_key, now=120.0) == (True, 0)
         assert limiter.allow(raw_key, now=121.0) == (True, 0)
         assert limiter.allow(raw_key, now=122.0) == (False, 58)
@@ -111,5 +112,77 @@ def test_active_tenant_state_is_shared_without_principal_pii() -> None:
             row = cursor.fetchone()
         assert row["principal_hash"] != principal
         assert len(row["principal_hash"]) == 64
+    finally:
+        database.close()
+
+
+def test_video_job_safe_diagnostics_are_json_and_tenant_scoped() -> None:
+    psycopg = pytest.importorskip("psycopg")
+    from src.data.postgres import PostgresIngestionStore, TenantPostgres
+    from src.data.video.errors import VideoPipelineError
+    from src.data.video.postgres import PostgresVideoStore
+
+    root = Path(__file__).resolve().parents[2]
+    with psycopg.connect(DSN, autocommit=True) as connection:
+        for migration in sorted((root / "migrations" / "postgres").glob("*.sql")):
+            connection.execute(migration.read_text(encoding="utf-8"))
+
+    tenant_a = "11111111-1111-4111-8111-111111111111"
+    tenant_b = "22222222-2222-4222-8222-222222222222"
+    source_id = str(uuid.uuid4())
+    asset_id = str(uuid.uuid4())
+    database = TenantPostgres(DSN)
+    store = PostgresVideoStore(database, PostgresIngestionStore(database))
+    try:
+        store.put_source(
+            {
+                "tenant_id": tenant_a,
+                "source_id": source_id,
+                "status": "active",
+                "created_at": "2026-08-30T00:00:00Z",
+            }
+        )
+        store.put_asset(
+            {
+                "tenant_id": tenant_a,
+                "source_id": source_id,
+                "asset_id": asset_id,
+                "status": "processing",
+            },
+            f"file:///tmp/{asset_id}.mp4",
+        )
+        job = store.enqueue(tenant_a, asset_id, "analyze")
+        failed = store.transition_job(
+            tenant_a,
+            job["job_id"],
+            "failed",
+            "reka_output_missing_fields",
+            safe_diagnostics={
+                "proposal_index": 0,
+                "missing_fields": ["confidence"],
+            },
+        )
+        assert failed["safe_diagnostics"] == {
+            "proposal_index": 0,
+            "missing_fields": ["confidence"],
+        }
+        fresh = store.enqueue(
+            tenant_a,
+            asset_id,
+            "analyze",
+            idempotency_key=f"reanalysis:{job['job_id']}:one",
+        )
+        assert fresh["state"] == "queued"
+        with pytest.raises(VideoPipelineError) as active:
+            store.enqueue(
+                tenant_a,
+                asset_id,
+                "analyze",
+                idempotency_key=f"reanalysis:{job['job_id']}:two",
+            )
+        assert active.value.code == "job_active_conflict"
+        with pytest.raises(VideoPipelineError) as caught:
+            store.get_job(tenant_b, job["job_id"])
+        assert caught.value.code == "job_not_found"
     finally:
         database.close()

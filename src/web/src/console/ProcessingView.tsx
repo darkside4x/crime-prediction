@@ -1,5 +1,5 @@
-import { useQuery } from "@tanstack/react-query";
-import { api } from "../api/client";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { api, ApiError } from "../api/client";
 import { useAuth } from "./AuthContext";
 
 function seconds(value: number): string {
@@ -10,12 +10,26 @@ export default function ProcessingView() {
   const { session } = useAuth();
   const token = session!.token;
   const tenantId = session!.activeTenantId;
+  const queryClient = useQueryClient();
 
   const readiness = useQuery({ queryKey: ["ready"], queryFn: api.ready, refetchInterval: 60_000 });
   const coverage = useQuery({
     queryKey: ["coverage", tenantId],
     queryFn: () => api.coverage(token),
   });
+  const runs = useQuery({
+    queryKey: ["ingestion-runs", tenantId],
+    queryFn: () => api.ingestionRuns(token),
+    refetchInterval: 1500,
+  });
+  const refresh = useMutation({
+    mutationFn: () => api.refreshDemoForecasts(token),
+    onSuccess: (result) => {
+      localStorage.setItem(`demo-forecast-window:${tenantId}`, result.window_start);
+      void queryClient.invalidateQueries({ queryKey: ["forecasts", tenantId] });
+    },
+  });
+  const refreshError = refresh.error instanceof ApiError ? refresh.error : null;
 
   return (
     <section className="processing-view">
@@ -29,7 +43,9 @@ export default function ProcessingView() {
           <ul className="health-list">
             <li>
               <span>Overall</span>
-              <span className={`chip ${readiness.data.status !== "ok" ? "chip-warn" : ""}`}>
+              <span
+                className={`chip ${!["ok", "ready"].includes(readiness.data.status) ? "chip-warn" : ""}`}
+              >
                 {readiness.data.status}
               </span>
             </li>
@@ -41,6 +57,8 @@ export default function ProcessingView() {
                 {readiness.data.video_service.replace(/_/g, " ")}
               </span>
             </li>
+            <li><span>Durable queue</span><span className="chip">{readiness.data.queue.replace(/_/g, " ")}</span></li>
+            <li><span>Deployment</span><span className="chip chip-accent">{readiness.data.deployment_mode.replace(/_/g, " ")}</span></li>
             <li>
               <span>Forecast models</span>
               <span
@@ -63,6 +81,26 @@ export default function ProcessingView() {
           Health states are reported honestly: a degraded stage is shown as degraded rather
           than assumed to be fine.
         </p>
+      </div>
+
+      <div className="panel">
+        <div className="row spread">
+          <div>
+            <h3>Durable processing runs</h3>
+            <p className="muted small">These rows live in Postgres and survive API or worker restarts.</p>
+          </div>
+          <span className="chip">polling 1.5s</span>
+        </div>
+        {runs.data?.items.length === 0 && <p className="muted">Upload a recording to start the worker chain.</p>}
+        <ul className="run-list">
+          {runs.data?.items.map((run) => (
+            <li key={run.run_id}>
+              <code>{run.run_id.slice(0, 8)}</code>
+              <span>{run.stage}</span>
+              <span className={`chip ${run.state === "failed" || run.state === "retry" ? "chip-warn" : run.state === "completed" ? "chip-ok" : "chip-accent"}`}>{run.state}</span>
+            </li>
+          ))}
+        </ul>
       </div>
 
       <div className="panel">
@@ -123,6 +161,23 @@ export default function ProcessingView() {
           low-coverage intervals are suppressed or flagged.
         </p>
       </div>
+
+      {session!.role === "tenant_admin" && (
+        <div className="panel publish-panel">
+          <div>
+            <span className="eyebrow">Stage 04 · deterministic scheduler trigger</span>
+            <h3>Publish the next forecast window</h3>
+            <p className="muted">Builds unlabelled future features from confirmed events and measured coverage, then atomically publishes tenant forecasts.</p>
+          </div>
+          <button type="button" disabled={refresh.isPending} onClick={() => refresh.mutate()}>
+            {refresh.isPending ? "Publishing…" : "Publish next window"}
+          </button>
+          {refresh.isSuccess && (
+            <p className="ok-banner">Published {refresh.data.forecast_count} forecasts for {new Date(refresh.data.window_start).toUTCString()} at {Math.round(refresh.data.coverage_ratio * 100)}% measured coverage. Open the forecast map.</p>
+          )}
+          {refreshError && <p className="error-banner" role="alert">{refreshError.message}</p>}
+        </div>
+      )}
     </section>
   );
 }

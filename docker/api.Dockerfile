@@ -2,7 +2,7 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg clamav && rm -rf /var/lib/apt/lists/*
 
 RUN groupadd --gid 10001 crime && \
@@ -12,7 +12,7 @@ RUN groupadd --gid 10001 crime && \
 
 RUN pip install --no-cache-dir \
     "fastapi==0.141.1" "uvicorn==0.35.0" "h3==4.3.1" \
-    "jsonschema[format]==4.25.1" "numpy==2.2.3" "openai==3.6.0" \
+    "jsonschema[format]==4.25.1" "numpy==2.2.3" "polars==1.32.3" "openai==3.6.0" \
     "python-dotenv==1.2.3" "boto3==1.40.31" \
     "psycopg[binary,pool]==3.2.10" "python-multipart==0.0.31" \
     "PyJWT[crypto]==2.13.0"

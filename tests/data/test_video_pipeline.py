@@ -10,6 +10,7 @@ from src.data.store import IngestionStore
 from src.data.video import DictLocationResolver, FakeRekaVisionProvider, VideoPipelineService, VideoStore
 from src.data.video.errors import VideoPipelineError
 from src.data.video.reka import RekaVisionProvider
+from src.data.video.reka import _allowlisted_candidate_output
 
 
 TENANT_A = "11111111-1111-4111-8111-111111111111"
@@ -129,6 +130,40 @@ def test_recorded_video_to_confirmed_event_is_idempotent(tmp_path: Path) -> None
         )
 
 
+def test_demo_session_cleanup_deletes_only_tenant_pending_candidates(
+    tmp_path: Path,
+) -> None:
+    restricted, _, store, _, service = setup(
+        tmp_path,
+        proposals=[
+            {"offset_seconds": 10, "category": "property", "confidence": 0.8},
+            {"offset_seconds": 20, "category": "public_order", "confidence": 0.6},
+        ],
+    )
+    asset = accept(service, mp4(restricted / "cleanup.mp4"))
+    candidates = service.process_asset(TENANT_A, asset["asset_id"])
+    service.review_candidate(
+        authenticated_tenant_id=TENANT_A,
+        detection_id=candidates[0]["detection_id"],
+        decision="rejected",
+        rejection_reason="false_positive",
+        reviewed_by="reviewer-1",
+        role="reviewer",
+    )
+    other_tenant_candidate = {
+        **candidates[1],
+        "tenant_id": TENANT_B,
+        "detection_id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        "review_status": "awaiting_review",
+    }
+    assert store.put_candidate(other_tenant_candidate, "tenant-b-pending")
+
+    assert store.delete_pending_candidates(TENANT_A) == 1
+    remaining_a = store.list_candidates(TENANT_A)
+    assert [item["review_status"] for item in remaining_a] == ["rejected"]
+    assert store.list_candidates(TENANT_B) == [other_tenant_candidate]
+
+
 @pytest.mark.parametrize(
     ("mutation", "code"),
     [
@@ -203,7 +238,44 @@ def test_prohibited_reka_output_cannot_persist(tmp_path: Path) -> None:
     with pytest.raises(VideoPipelineError) as caught:
         service.process_asset(TENANT_A, asset["asset_id"])
     assert caught.value.code == "reka_output_prohibited"
+    assert caught.value.safe_diagnostics == {
+        "proposal_index": 0,
+        "unexpected_field_count": 1,
+    }
     assert store.list_candidates(TENANT_A) == []
+
+
+def test_missing_reka_fields_have_value_free_diagnostics(tmp_path: Path) -> None:
+    restricted, _, store, _, service = setup(
+        tmp_path,
+        proposals=[{"offset_seconds": 1, "category": "property"}],
+    )
+    asset = accept(service, mp4(restricted / "clip.mp4"))
+    with pytest.raises(VideoPipelineError) as caught:
+        service.process_asset(TENANT_A, asset["asset_id"])
+    assert caught.value.code == "reka_output_missing_fields"
+    assert caught.value.safe_diagnostics == {
+        "proposal_index": 0,
+        "missing_fields": ["confidence"],
+    }
+    failed = next(
+        job
+        for job in store.list_jobs(TENANT_A)
+        if job["operation"] == "analyze"
+    )
+    assert failed["state"] == "failed"
+    assert failed["safe_diagnostics"] == caught.value.safe_diagnostics
+    assert store.get_asset(TENANT_A, asset["asset_id"])["status"] == "failed"
+    assert store.list_candidates(TENANT_A) == []
+
+
+def test_video_errors_reject_unbounded_or_value_bearing_diagnostics() -> None:
+    with pytest.raises(ValueError, match="Unsupported safe diagnostic"):
+        VideoPipelineError(
+            "reka_output_invalid",
+            "invalid",
+            safe_diagnostics={"raw_output": "must never be retained"},
+        )
 
 
 def test_expired_candidate_creates_no_event(tmp_path: Path) -> None:
@@ -244,6 +316,67 @@ def test_retry_state_and_key_errors_are_safe(tmp_path: Path) -> None:
     with pytest.raises(VideoPipelineError) as missing:
         RekaVisionProvider("")
     assert missing.value.code == "reka_key_missing"
+
+
+def test_reka_candidate_boundary_discards_provider_extras() -> None:
+    projected = _allowlisted_candidate_output(
+        [
+            {
+                "offset_seconds": 2,
+                "category": "property",
+                "confidence": 0.7,
+                "description": "must not cross the provider boundary",
+                "identity": "must not cross the provider boundary",
+            }
+        ]
+    )
+    assert projected == [
+        {"offset_seconds": 2, "category": "property", "confidence": 0.7}
+    ]
+
+
+def test_reka_repairs_explanatory_no_incident_shape_to_empty_result() -> None:
+    client = RekaVisionProvider("rk-test-only")
+    responses = iter(
+        [
+            {"chat_response": '[{"status":"no qualifying incident"}]'},
+            {"chat_response": "[]"},
+        ]
+    )
+    requests: list[dict] = []
+
+    def fake_request(method: str, path: str, payload: dict | None = None) -> dict:
+        assert method == "POST"
+        assert path == "/v1/qa/chat"
+        requests.append(payload or {})
+        return next(responses)
+
+    client._json_request = fake_request  # type: ignore[method-assign]
+    assert client.propose_candidates("video-test", prompt_version="candidate-v2") == []
+    assert len(requests) == 2
+    assert "prior answer did not match" in requests[1]["messages"][0]["content"]
+
+
+def test_reka_schema_repair_remains_fail_closed() -> None:
+    client = RekaVisionProvider("rk-test-only")
+    responses = iter(
+        [
+            {"chat_response": '[{"status":"clear"}]'},
+            {"chat_response": '[{"summary":"still malformed"}]'},
+        ]
+    )
+
+    def fake_request(method: str, path: str, payload: dict | None = None) -> dict:
+        return next(responses)
+
+    client._json_request = fake_request  # type: ignore[method-assign]
+    with pytest.raises(VideoPipelineError) as caught:
+        client.propose_candidates("video-test", prompt_version="candidate-v2")
+    assert caught.value.code == "reka_output_missing_fields"
+    assert caught.value.safe_diagnostics == {
+        "proposal_index": 0,
+        "missing_fields": ["category", "confidence", "offset_seconds"],
+    }
 
 
 @pytest.mark.parametrize(

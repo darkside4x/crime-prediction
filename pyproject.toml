@@ -40,6 +40,7 @@ crime-api-openapi = "src.api.openapi:main"
 crime-platform-migrate = "src.data.video.cli:migrate"
 crime-video-worker = "src.data.video.cli:worker"
 crime-video-capture-worker = "src.data.video.cli:capture_worker"
+crime-demo-worker = "src.data.video.cli:demo_worker"
 
 [build-system]
 requires = ["hatchling==1.27.0"]

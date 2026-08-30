@@ -15,6 +15,7 @@ It does not identify people, decide guilt, predict individual behaviour, expose 
 7. [Reka platform research](docs/REKA_PLATFORM_RESEARCH.md) — current APIs, limits, AWS architecture, and product decisions
 8. [Historical benchmark and real results](docs/EVALUATION.md) — lawful dataset decision, reproducible chronological evaluation, and limitations
 9. [AWS VM deployment](deploy/aws-vm/README.md) — hardened production composition and scale controls
+10. [Integrated deployment demo](docs/DEMO.md) — Postgres, durable workers, multi-tenant UI, and presentation flow
 
 Repository instructions are in [AGENTS.md](AGENTS.md).
 
@@ -42,13 +43,17 @@ Implemented today:
 - bounded allowlisted public-HLS capture into restricted `live_segment` MP4 assets;
 - backend-proxied Reka Vision upload/index/candidate analysis with strict output validation;
 - tenant-scoped candidate listing and immutable human confirmation/rejection;
-- a fixture-backed React/MapLibre dashboard and Docker demo setup.
+- a React/MapLibre dashboard wired to recorded-source onboarding, durable jobs,
+  measured coverage, human review, atomic forecast publishing, and persona/tenant switching;
+- a self-contained Postgres-backed deployment demo with separate upload, index,
+  and analysis workers plus restart recovery.
 
 Contracted but not yet implemented:
 
 - Reka Vision video search, tagging and highlight generation;
-- future feature snapshot generation and an approved calibrated-model registry;
-- recorded-video onboarding/review screens connected to the real APIs;
+- a fully scheduled production inference service (the integrated demo exposes an
+  idempotent admin trigger for the same future-feature/publish path);
+- approval operations and a management UI for the model registry;
 - provisioned AWS resources, real-camera certification, alerting, backup-restore drills and drift checks.
 
 Synthetic fixtures are interface examples, not real crime patterns or measured model performance.

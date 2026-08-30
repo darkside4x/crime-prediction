@@ -7,7 +7,6 @@ COPY src/web/ .
 RUN pnpm build
 
 FROM nginx:1.31.4-alpine3.24
-RUN apk upgrade --no-cache
 COPY --from=build /web/dist /usr/share/nginx/html
 COPY docker/nginx.conf /etc/nginx/nginx.conf
 USER 101:101

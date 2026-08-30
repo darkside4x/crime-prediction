@@ -44,6 +44,9 @@ export default function ReviewView() {
 
   const listError = candidates.error instanceof ApiError ? candidates.error : null;
   const reviewError = review.error instanceof ApiError ? review.error : null;
+  const pendingCandidates =
+    candidates.data?.items.filter((candidate) => candidate.review_status === "awaiting_review")
+    ?? [];
 
   if (listError?.status === 403) {
     return (
@@ -78,12 +81,12 @@ export default function ReviewView() {
           Could not load candidates ({listError.code}).
         </p>
       )}
-      {candidates.data?.items.length === 0 && (
+      {!candidates.isLoading && pendingCandidates.length === 0 && (
         <p className="muted">No candidates awaiting review.</p>
       )}
 
       <ul className="candidate-list">
-        {candidates.data?.items.map((candidate) => {
+        {pendingCandidates.map((candidate) => {
           const open = decisionFor === candidate.detection_id;
           const decided = candidate.review_status !== "awaiting_review";
           return (

@@ -10,8 +10,8 @@ const MAX_PAGES = 3; // bounded viewport requests: never fetch unbounded cell li
 
 function nextWindows(count: number, stepMinutes: number): string[] {
   const windows: string[] = [];
-  const start = new Date();
-  start.setUTCMinutes(0, 0, 0);
+  const stepMs = stepMinutes * 60_000;
+  const start = new Date(Math.floor(Date.now() / stepMs) * stepMs);
   for (let index = 1; index <= count; index += 1) {
     const at = new Date(start.getTime() + index * stepMinutes * 60_000);
     windows.push(at.toISOString().replace(".000Z", "Z"));
@@ -38,9 +38,15 @@ export default function ForecastView() {
   const stepMinutes = metadata.data?.forecast_window_minutes ?? 360;
   const windows = useMemo(() => nextWindows(4, stepMinutes), [stepMinutes]);
   const [windowStart, setWindowStart] = useState<string | null>(null);
-  const [category, setCategory] = useState("property");
+  const [category, setCategory] = useState(
+    () => localStorage.getItem(`demo-forecast-category:${tenantId}`) ?? "property",
+  );
   const [selected, setSelected] = useState<string | null>(null);
-  const activeWindow = windowStart ?? windows[0];
+  const publishedWindow = localStorage.getItem(`demo-forecast-window:${tenantId}`);
+  const activeWindow = windowStart ?? publishedWindow ?? windows[0];
+  const selectableWindows = publishedWindow && !windows.includes(publishedWindow)
+    ? [publishedWindow, ...windows]
+    : windows;
 
   const forecasts = useQuery({
     queryKey: ["forecasts", tenantId, activeWindow, category],
@@ -97,7 +103,7 @@ export default function ForecastView() {
             value={activeWindow}
             onChange={(event) => { setWindowStart(event.target.value); setSelected(null); }}
           >
-            {windows.map((item) => (
+            {selectableWindows.map((item) => (
               <option key={item} value={item}>
                 {formatWindow(item)}
               </option>

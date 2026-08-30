@@ -35,10 +35,13 @@ services:
       context: .
       dockerfile: docker/api.Dockerfile
     environment:
+      APP_ENVIRONMENT: development
       CORS_ORIGINS: http://localhost:5173,http://localhost:8080
       DATABASE_URL: postgresql://crime_app:local-development-only@postgres:5432/crime_prediction
       REKA_API_KEY: ${REKA_API_KEY:-}
       RUNTIME_DIR: /app/data/runtime
+      TRUSTED_HOSTS: localhost,127.0.0.1,api
+    command: ["uvicorn", "src.data.video.demo_runtime:build_demo_app", "--factory", "--host", "0.0.0.0", "--port", "8000", "--no-server-header"]
     ports:
       - "127.0.0.1:${API_PORT:-8000}:8000"
     healthcheck:
@@ -58,6 +61,46 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
+    restart: unless-stopped
+
+  worker-upload:
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    command: ["python", "-c", "from src.data.video.cli import demo_worker; demo_worker()", "--operation", "upload"]
+    environment: &demo-worker-environment
+      DATABASE_URL: postgresql://crime_app:local-development-only@postgres:5432/crime_prediction
+      REKA_API_KEY: ${REKA_API_KEY:-}
+      RUNTIME_DIR: /app/data/runtime
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    volumes: &demo-worker-volumes
+      - api-runtime:/app/data/runtime
+    restart: unless-stopped
+
+  worker-index:
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    command: ["python", "-c", "from src.data.video.cli import demo_worker; demo_worker()", "--operation", "index"]
+    environment: *demo-worker-environment
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    volumes: *demo-worker-volumes
+    restart: unless-stopped
+
+  worker-analyze:
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    command: ["python", "-c", "from src.data.video.cli import demo_worker; demo_worker()", "--operation", "analyze"]
+    environment: *demo-worker-environment
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    volumes: *demo-worker-volumes
     restart: unless-stopped
 
   web:

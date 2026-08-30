@@ -51,9 +51,20 @@ export interface ForecastPage {
 
 export interface Readiness {
   status: string;
+  deployment_mode: string;
   reka_chat: string;
+  reka_vision: string;
   video_service: string;
+  queue: string;
   forecast_models: string;
+}
+
+export interface DemoForecastRefresh {
+  tenant_id: string;
+  window_start: string;
+  forecast_count: number;
+  feature_snapshot_version: string;
+  coverage_ratio: number;
 }
 
 export interface CopilotInsight {
@@ -70,9 +81,13 @@ export interface CopilotInsight {
 
 export interface NearLiveRun {
   run_id: string;
-  state: "queued" | "running" | "completed" | "failed";
+  state: "queued" | "running" | "completed" | "failed" | "retry" | "cancelled";
   stage: string;
-  label: "near-live CCTV segment" | "recorded video upload";
+  label:
+    | "near-live CCTV segment"
+    | "recorded video upload"
+    | "recorded video processing"
+    | "controlled video re-analysis";
   source_name?: string;
   source_attribution?: string;
   capture_seconds?: number;
@@ -82,6 +97,16 @@ export interface NearLiveRun {
   analysis_mode: "reka_vision" | "deterministic_fake";
   created_at: string;
   updated_at: string;
+}
+
+export interface LiveCctvSource {
+  source_key: string;
+  name: string;
+  playback_url: string;
+  attribution: string;
+  status: "live" | "unavailable";
+  analysis_mode: "reka_vision" | "deterministic_fake";
+  limitations: string[];
 }
 
 export type PublicCandidate = Omit<RestrictedCandidateDetection, "evidence_ref"> & {
@@ -155,6 +180,12 @@ async function request<T>(
 export const api = {
   ready: () => fetch(`${BASE}/ready`).then((r) => r.json() as Promise<Readiness>),
   meTenants: (token: string) => request<MeTenants>("/v1/me/tenants", token),
+  startDemoSession: (token: string, idempotencyKey: string) =>
+    request<{ status: "started"; deleted_pending_candidates: number }>(
+      "/v1/demo/session/start",
+      token,
+      { method: "POST", body: JSON.stringify({}), idempotencyKey },
+    ),
   switchTenant: (token: string, tenantId: string) =>
     request<{ active_tenant_id: string; role: Role }>(
       `/v1/me/active-tenant/${encodeURIComponent(tenantId)}`,
@@ -162,6 +193,7 @@ export const api = {
       { method: "PUT", idempotencyKey: newIdempotencyKey() },
     ),
   metadata: (token: string) => request<Metadata>("/v1/metadata", token),
+  liveCctv: (token: string) => request<LiveCctvSource>("/v1/demo/live-cctv", token),
   sources: (token: string) => request<{ items: PublicSource[] }>("/v1/sources", token),
   createRecordedSource: (token: string, body: RecordedSourceCreate, idempotencyKey: string) =>
     request<PublicSource>("/v1/sources/recorded-video", token, {
@@ -194,7 +226,15 @@ export const api = {
   },
   ingestionRun: (token: string, runId: string) =>
     request<NearLiveRun>(`/v1/ingestion/runs/${encodeURIComponent(runId)}`, token),
-  startNearLiveCapture: (token: string, durationSeconds = 20) =>
+  ingestionRuns: (token: string, limit = 25) =>
+    request<{ items: NearLiveRun[] }>(`/v1/ingestion/runs?limit=${limit}`, token),
+  reanalyzeRun: (token: string, runId: string, idempotencyKey: string) =>
+    request<NearLiveRun>(
+      `/v1/ingestion/runs/${encodeURIComponent(runId)}/reanalyze`,
+      token,
+      { method: "POST", idempotencyKey },
+    ),
+  startNearLiveCapture: (token: string, durationSeconds = 12) =>
     request<NearLiveRun>("/v1/demo/near-live-cctv/captures", token, {
       method: "POST",
       body: JSON.stringify({
@@ -207,6 +247,22 @@ export const api = {
     request<{ items: SourceCoverageSnapshot[] }>("/v1/coverage", token),
   candidates: (token: string, limit = 50) =>
     request<{ items: PublicCandidate[] }>(`/v1/candidate-detections?limit=${limit}`, token),
+  candidateEvidence: async (token: string, detectionId: string): Promise<Blob> => {
+    const response = await fetch(
+      `${BASE}/v1/candidate-detections/${encodeURIComponent(detectionId)}/evidence`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    if (!response.ok) {
+      let body: Partial<TypedApiError> | undefined;
+      try {
+        body = (await response.json()) as Partial<TypedApiError>;
+      } catch {
+        body = undefined;
+      }
+      throw new ApiError(response.status, body, "Evidence could not be loaded");
+    }
+    return response.blob();
+  },
   reviewCandidate: (
     token: string,
     detectionId: string,
@@ -218,6 +274,12 @@ export const api = {
       token,
       { method: "POST", body: JSON.stringify(body), idempotencyKey },
     ),
+  refreshDemoForecasts: (token: string) =>
+    request<DemoForecastRefresh>("/v1/demo/forecasts/refresh", token, {
+      method: "POST",
+      body: JSON.stringify({}),
+      idempotencyKey: newIdempotencyKey(),
+    }),
   forecasts: (
     token: string,
     params: { windowStart: string; category: string; page?: number; pageSize?: number; bbox?: string },
