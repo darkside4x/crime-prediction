@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { DEV_PERSONAS, useAuth } from "./AuthContext";
+import ReflectiveCard from "../components/bits/ReflectiveCard";
 import {
   beginCognitoSignIn,
   cognitoConfig,
@@ -41,7 +42,17 @@ export default function SignIn() {
   };
 
   return (
-    <div className="console-signin">
+    <div className="signin-layout">
+      <div className="signin-badge" aria-hidden="true">
+        <ReflectiveCard
+          badgeLabel="Secure access"
+          name="Xecrex console"
+          role="Tenant scoped · Human in the loop"
+          idLabel="Build"
+          idValue="Console v2.4"
+        />
+      </div>
+      <div className="console-signin">
       <p className="eyebrow">Xecrex secure console</p>
       <h1 className="section-title">
         Sign <span className="accent">in</span>
@@ -126,6 +137,7 @@ export default function SignIn() {
           </form>
         </>
       )}
+      </div>
     </div>
   );
 }

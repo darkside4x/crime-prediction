@@ -2,6 +2,7 @@ import { lazy, Suspense, useState } from "react";
 import { DEV_PERSONAS, useAuth } from "./AuthContext";
 import { consoleRoute, navigate, useHashRoute, type ConsoleRoute } from "./router";
 import SignIn from "./SignIn";
+import Dock from "../components/bits/Dock";
 
 const ForecastView = lazy(() => import("./ForecastView"));
 const LiveOperations = lazy(() => import("../components/NearLiveReview"));
@@ -98,50 +99,19 @@ export default function ConsoleShell() {
   const currentAllowed = allowed.some((item) => item.route === route);
 
   const routeContext = ROUTE_CONTEXT[route];
-  const tenantName = activeMembership?.display_name ?? "Active tenant";
-  const initials = session.principalLabel
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((part) => part[0]?.toUpperCase())
-    .join("");
+  const dockItems = allowed.map((item) => ({
+    icon: <RouteGlyph route={item.route} />,
+    label: item.label,
+    href: `#/console/${item.route}`,
+    ariaCurrent: route === item.route ? ("page" as const) : undefined,
+    className: route === item.route ? "dock-active" : "",
+  }));
 
   return (
     <div className={`console console-${route}`}>
-      <aside className="console-sidebar">
-        <div className="console-brand">
-          <a href="#/">Xecrex</a>
-          <span>Console v2.4</span>
-          <small>High integrity mode</small>
-        </div>
-
-        <div className="console-operator">
-          <span className="operator-mark" aria-hidden="true">{initials || "OP"}</span>
-          <span><strong>{tenantName}</strong><small>{session.principalLabel}</small></span>
-        </div>
-        <nav aria-label="Console">
-          {allowed.map((item) => (
-            <a
-              key={item.route}
-              href={`#/console/${item.route}`}
-              aria-current={route === item.route ? "page" : undefined}
-              className={route === item.route ? "active" : ""}
-            >
-              <span className="console-nav-icon"><RouteGlyph route={item.route} /></span>
-              <span>{item.label}</span>
-            </a>
-          ))}
-        </nav>
-
-        <div className="console-sidebar-foot">
-          <button type="button" onClick={signOut}>Sign out</button>
-          <p><i /> API connected</p>
-          <p><b /> Worker active</p>
-        </div>
-      </aside>
-
       <section className="console-canvas">
         <header className="console-bar">
+          <a className="bar-brand" href="#/" aria-label="Xecrex home">Xecrex</a>
           <div className="console-route-title">
             <h1>{routeContext.title}</h1>
             <span>{routeContext.code}</span>
@@ -180,6 +150,7 @@ export default function ConsoleShell() {
           <span className="role-badge" title="Active role in this tenant">
             {activeMembership?.role ?? session.role}
           </span>
+          <button type="button" className="ghost" onClick={signOut}>Sign out</button>
         </div>
         </header>
 
@@ -220,6 +191,10 @@ export default function ConsoleShell() {
           Area-level estimates with uncertainty · human review required · no identity assessment or automated enforcement
         </p>
       </section>
+
+      <div className="console-dock">
+        <Dock items={dockItems} panelHeight={62} baseItemSize={44} magnification={64} distance={130} />
+      </div>
     </div>
   );
 }
