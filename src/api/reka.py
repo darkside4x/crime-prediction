@@ -154,7 +154,7 @@ class RekaAPIProvider:
         *,
         api_key: str,
         base_url: str = "https://api.reka.ai/v1",
-        model: str = "reka-flash",
+        model: str = "reka-flash-3",
         prompt_version: str = PROMPT_VERSION,
         timeout_seconds: float = 20.0,
         client: Any | None = None,

@@ -5,7 +5,7 @@ x-platform-environment: &platform-environment
   REKA_API_KEY_FILE: /run/secrets/reka_api_key
   REKA_CHAT_BASE_URL: https://api.reka.ai/v1
   REKA_VISION_BASE_URL: https://vision-agent.api.reka.ai
-  REKA_MODEL: ${REKA_MODEL:-reka-flash}
+  REKA_MODEL: ${REKA_MODEL:-reka-flash-3}
   REKA_PROMPT_VERSION: ${REKA_PROMPT_VERSION:-1.0.0}
   REKA_TIMEOUT_SECONDS: ${REKA_TIMEOUT_SECONDS:-20}
   REKA_PROVIDER_VERIFIED: ${REKA_PROVIDER_VERIFIED:-false}
