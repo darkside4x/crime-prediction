@@ -924,6 +924,79 @@ def test_short_video_prefill_accepts_a_complete_candidate_array(
     ]
 
 
+def test_short_video_prefill_accepts_exact_reka_assistant_role_marker(
+    tmp_path: Path,
+) -> None:
+    client = RekaVisionProvider("rk-test-only")
+    video = tmp_path / "short.mp4"
+    video.write_bytes(b"bounded-test-video")
+
+    def fake_chat_request(payload: dict) -> dict:
+        return {
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "message": {
+                        "role": "assistant",
+                        "content": (
+                            'assistant: {"offset_seconds":0,"category":"other",'
+                            '"confidence":0.94}]'
+                        ),
+                    },
+                }
+            ]
+        }
+
+    client._chat_json_request = fake_chat_request  # type: ignore[method-assign]
+    assert client.propose_candidates(
+        "unused-indexed-id",
+        prompt_version="candidate-v2",
+        media_path=video,
+    ) == [{"offset_seconds": 0, "category": "other", "confidence": 0.94}]
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        'analysis: {"offset_seconds":0,"category":"other","confidence":0.9}]',
+        (
+            'assistant: explanation: {"offset_seconds":0,"category":"other",'
+            '"confidence":0.9}]'
+        ),
+    ],
+)
+def test_short_video_prefill_rejects_unallowlisted_role_or_prose_wrappers(
+    tmp_path: Path,
+    content: str,
+) -> None:
+    client = RekaVisionProvider("rk-test-only")
+    video = tmp_path / "short.mp4"
+    video.write_bytes(b"bounded-test-video")
+
+    def fake_chat_request(payload: dict) -> dict:
+        return {
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "message": {"role": "assistant", "content": content},
+                }
+            ]
+        }
+
+    client._chat_json_request = fake_chat_request  # type: ignore[method-assign]
+    with pytest.raises(VideoPipelineError) as caught:
+        client.propose_candidates(
+            "unused-indexed-id",
+            prompt_version="candidate-v2",
+            media_path=video,
+        )
+    assert caught.value.code == "reka_output_invalid"
+    assert caught.value.safe_diagnostics == {
+        "format_stage": "short_video_candidate",
+        "format_reason": "json_format_invalid",
+    }
+
+
 def test_short_video_prefill_accepts_a_complete_wrapped_candidate_array(
     tmp_path: Path,
 ) -> None:

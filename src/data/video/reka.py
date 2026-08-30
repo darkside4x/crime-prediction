@@ -54,6 +54,7 @@ _MAX_CHAT_TEXT_BLOCKS = 16
 _MAX_CHAT_TEXT_CHARS = 16_384
 _MAX_HTTP_RESPONSE_BYTES = 1024 * 1024
 _MAX_PROVIDER_CANDIDATES = 25
+_ASSISTANT_CONTINUATION_PREFIX = "assistant:"
 _JSON_FENCE_PATTERN = re.compile(
     r"```(?:json)?\s*(?P<payload>.*?)\s*```",
     flags=re.DOTALL | re.IGNORECASE,
@@ -615,9 +616,18 @@ class RekaVisionProvider:
             )
         except (json.JSONDecodeError, RecursionError):
             if assistant_prefilled:
+                continuation = candidate
+                if continuation.startswith(_ASSISTANT_CONTINUATION_PREFIX):
+                    # Reka Chat can echo this exact role marker before
+                    # continuing an assistant-prefilled JSON array. Remove at
+                    # most one anchored, case-sensitive marker; arbitrary
+                    # prose and embedded JSON remain rejected.
+                    continuation = continuation[
+                        len(_ASSISTANT_CONTINUATION_PREFIX) :
+                    ].lstrip()
                 try:
                     return json.loads(
-                        "[" + candidate,
+                        "[" + continuation,
                         parse_constant=_reject_nonfinite_json_number,
                     )
                 except (json.JSONDecodeError, RecursionError, ValueError):
