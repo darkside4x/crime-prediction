@@ -342,39 +342,11 @@ class DispatchCoordinator:
             )
             return None
 
-        updated_attempt = replace(
-            attempt,
-            provider_call_reference=result.provider_call_reference,
-            status=CallAttemptStatus.INITIATED,
-            initiated_at=attempt.initiated_at or now,
-            safe_error_code=None,
-            updated_at=now,
-            version=attempt.version + 1,
+        _, bound_attempt = self._resolve_callback(
+            attempt.callback_token,
+            result.provider_call_reference,
         )
-        updated_case = replace(
-            case,
-            status=DispatchStatus.DIALING,
-            next_attempt_at=None,
-            updated_at=now,
-            version=case.version + 1,
-        )
-        event = self._event(
-            case,
-            kind=DispatchEventKind.CALL_INITIATED,
-            at=now,
-            attempt_id=attempt.attempt_id,
-            dedupe_parts=("call-initiated", attempt.attempt_id),
-        )
-        self.repository.finish_provider_submission(
-            case=updated_case,
-            attempt=updated_attempt,
-            event=event,
-            claim_token=claim_token,
-            outcome="submitted",
-            expected_case_version=case.version,
-            expected_attempt_version=attempt.version,
-        )
-        return updated_attempt
+        return bound_attempt
 
     def handle_status(
         self,
@@ -670,6 +642,15 @@ class DispatchCoordinator:
         )
         if active:
             attempt = active[-1]
+            if attempt.provider_call_reference:
+                if attempt.provider_call_reference.startswith("sha256:"):
+                    raise DispatchStateConflict(
+                        "dispatch_active_call_cancellation_unavailable"
+                    )
+                # Cancel the addressable provider call before reporting the
+                # case terminal. If provider cancellation fails, the case
+                # remains open and visible for an operator to retry or inspect.
+                self.voice_provider.cancel_call(attempt.provider_call_reference)
             updated_attempt = replace(
                 attempt,
                 status=CallAttemptStatus.CANCELED,
@@ -686,14 +667,6 @@ class DispatchCoordinator:
                 expected_case_version=case.version,
                 expected_attempt_version=attempt.version,
             )
-            # Production persistence deliberately retains only a hash of the
-            # provider Call SID. That is sufficient to authenticate callbacks
-            # but cannot address an already-active provider call. Cancellation
-            # still closes the case and prevents every later attempt.
-            if attempt.provider_call_reference and not attempt.provider_call_reference.startswith(
-                "sha256:"
-            ):
-                self.voice_provider.cancel_call(attempt.provider_call_reference)
         else:
             self.repository.apply_case_transition(
                 case=updated_case,
@@ -775,8 +748,10 @@ class DispatchCoordinator:
             return self.repository.get_case(tenant_id, case_id)
         raise DispatchStateConflict("dispatch_repository_conflict")  # pragma: no cover
 
-    def voice_script(self, callback_token: str) -> CallScript:
-        case, _ = self.repository.resolve_callback(callback_token)
+    def voice_script(
+        self, callback_token: str, *, provider_call_reference: str
+    ) -> CallScript:
+        case, _ = self._resolve_callback(callback_token, provider_call_reference)
         if case.status in TERMINAL_DISPATCH_STATUSES:
             raise DispatchStateConflict("dispatch_case_terminal")
         return self._script(case)
@@ -955,7 +930,6 @@ class DispatchCoordinator:
     ) -> tuple[DispatchCase, CallAttempt]:
         case, attempt = self.repository.resolve_callback(callback_token)
         stored_reference = attempt.provider_call_reference
-        matches = False
         if stored_reference and provider_call_reference:
             if stored_reference.startswith("sha256:"):
                 expected_hash = stored_reference.removeprefix("sha256:")
@@ -968,9 +942,25 @@ class DispatchCoordinator:
                 )
             else:
                 matches = compare_digest(stored_reference, provider_call_reference)
-        if not matches:
+            if not matches:
+                raise WebhookCallMismatch()
+            return case, attempt
+        if not provider_call_reference:
             raise WebhookCallMismatch()
-        return case, attempt
+        now = require_utc(self._clock(), "provider callback binding time")
+        event = self._event(
+            case,
+            kind=DispatchEventKind.CALL_INITIATED,
+            at=now,
+            attempt_id=attempt.attempt_id,
+            dedupe_parts=("call-initiated", attempt.attempt_id),
+        )
+        return self.repository.bind_provider_callback(
+            callback_token,
+            provider_call_reference,
+            at=now,
+            event=event,
+        )
 
     def _callback_time(self, occurred_at: datetime | None) -> datetime:
         return require_utc(

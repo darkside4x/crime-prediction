@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import hashlib
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from hmac import compare_digest
 from typing import Any, Literal
 
 from src.data.postgres import TenantPostgres
@@ -15,6 +17,7 @@ from .errors import (
     DispatchResourceNotFound,
     DispatchRetryNotDue,
     DispatchStateConflict,
+    WebhookCallMismatch,
 )
 from .models import (
     TERMINAL_ATTEMPT_STATUSES,
@@ -671,6 +674,120 @@ class PostgresDispatchRepository(DispatchRepository):
                 raise DispatchStateConflict("dispatch_repository_conflict")
         return True
 
+    def bind_provider_callback(
+        self,
+        callback_token: str,
+        provider_call_reference: str,
+        *,
+        at: datetime,
+        event: DispatchEvent,
+    ) -> tuple[DispatchCase, CallAttempt]:
+        """Atomically bind the first signed provider callback to its claim."""
+
+        now = _utc(at)
+        if not provider_call_reference:
+            raise WebhookCallMismatch()
+        incoming_hash = _digest(provider_call_reference)
+        with self.database.system_transaction() as cursor:
+            cursor.execute(
+                """SELECT tenant_id,attempt_id FROM dispatch_callback_routes
+                   WHERE callback_token_hash=%s AND expires_at>now()""",
+                (_digest(callback_token),),
+            )
+            route = cursor.fetchone()
+        if route is None:
+            raise DispatchResourceNotFound()
+
+        tenant_id = str(route["tenant_id"])
+        attempt_id = str(route["attempt_id"])
+        with self.database.transaction(tenant_id) as cursor:
+            cursor.execute(
+                """SELECT dispatch_case_id FROM dispatch_call_attempts
+                   WHERE tenant_id=%s AND attempt_id=%s""",
+                (tenant_id, attempt_id),
+            )
+            attempt_route = cursor.fetchone()
+            if attempt_route is None:
+                raise DispatchResourceNotFound()
+            cursor.execute(
+                """SELECT * FROM dispatch_cases
+                   WHERE tenant_id=%s AND dispatch_case_id=%s FOR UPDATE""",
+                (tenant_id, str(attempt_route["dispatch_case_id"])),
+            )
+            case_row = cursor.fetchone()
+            if case_row is None:
+                raise DispatchResourceNotFound()
+            cursor.execute(
+                """SELECT * FROM dispatch_call_attempts
+                   WHERE tenant_id=%s AND attempt_id=%s FOR UPDATE""",
+                (tenant_id, attempt_id),
+            )
+            attempt_row = cursor.fetchone()
+            if attempt_row is None:
+                raise DispatchResourceNotFound()
+
+            stored_hash = attempt_row["provider_call_id_hash"]
+            if stored_hash is not None:
+                if not compare_digest(str(stored_hash), incoming_hash):
+                    raise WebhookCallMismatch()
+                return self._case(case_row), self._attempt(attempt_row)
+            if (
+                DispatchStatus(case_row["state"]) in TERMINAL_DISPATCH_STATUSES
+                or attempt_row["provider_submission_state"] != "claimed"
+            ):
+                raise DispatchStateConflict("dispatch_callback_binding_unavailable")
+            if (
+                event.tenant_id != tenant_id
+                or event.case_id != str(case_row["dispatch_case_id"])
+                or event.attempt_id != attempt_id
+            ):
+                raise DispatchStateConflict("dispatch_repository_conflict")
+            cursor.execute(
+                """SELECT 1 FROM dispatch_events
+                   WHERE tenant_id=%s AND dedupe_key_hash=%s""",
+                (tenant_id, event.deduplication_key),
+            )
+            if cursor.fetchone() is not None:
+                raise DispatchStateConflict("dispatch_repository_conflict")
+
+            current_case = self._case(case_row)
+            current_attempt = self._attempt(attempt_row)
+            claimed_at = _utc(attempt_row["provider_submission_claimed_at"])
+            completed_at = max(now, claimed_at)
+            updated_attempt = replace(
+                current_attempt,
+                provider_call_reference=provider_call_reference,
+                status=CallAttemptStatus.INITIATED,
+                initiated_at=current_attempt.initiated_at or completed_at,
+                safe_error_code=None,
+                updated_at=completed_at,
+                version=current_attempt.version + 1,
+            )
+            updated_case = replace(
+                current_case,
+                status=DispatchStatus.DIALING,
+                next_attempt_at=None,
+                updated_at=completed_at,
+                version=current_case.version + 1,
+            )
+            if not self._update_case(cursor, updated_case, current_case.version):
+                raise DispatchStateConflict("dispatch_repository_conflict")
+            if not self._update_claimed_attempt(
+                cursor,
+                attempt=updated_attempt,
+                expected_version=current_attempt.version,
+                outcome="submitted",
+                claim_hash=None,
+            ):
+                raise DispatchStateConflict("dispatch_repository_conflict")
+            if not self._insert_event(cursor, event, attempt=updated_attempt):
+                raise DispatchStateConflict("dispatch_repository_conflict")
+
+        return updated_case, replace(
+            updated_attempt,
+            provider_call_reference=f"sha256:{incoming_hash}",
+        )
+
     def expire_provider_submission(
         self,
         *,
@@ -756,6 +873,29 @@ class PostgresDispatchRepository(DispatchRepository):
             )
             if cursor.fetchone() is not None:
                 return False
+            if event.kind is DispatchEventKind.CANCELED:
+                cursor.execute(
+                    """SELECT 1 FROM dispatch_cases
+                       WHERE tenant_id=%s AND dispatch_case_id=%s FOR UPDATE""",
+                    (case.tenant_id, case.case_id),
+                )
+                if cursor.fetchone() is None:
+                    raise DispatchResourceNotFound()
+                cursor.execute(
+                    """SELECT provider_submission_state,provider_call_id_hash
+                       FROM dispatch_call_attempts
+                       WHERE tenant_id=%s AND attempt_id=%s FOR UPDATE""",
+                    (attempt.tenant_id, attempt.attempt_id),
+                )
+                submission = cursor.fetchone()
+                if submission is None:
+                    raise DispatchResourceNotFound()
+                if submission["provider_submission_state"] == "claimed":
+                    raise DispatchStateConflict("dispatch_submission_in_flight")
+                if submission["provider_call_id_hash"] is not None:
+                    raise DispatchStateConflict(
+                        "dispatch_active_call_cancellation_unavailable"
+                    )
             if not self._update_case(cursor, case, expected_case_version):
                 raise DispatchStateConflict("dispatch_repository_conflict")
             cursor.execute(

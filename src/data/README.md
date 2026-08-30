@@ -48,7 +48,11 @@ Every other attribute is dropped before the canonical event is persisted.
   composition; local storage and the no-op scanner are development-only.
 - `SqsJobBroker` and isolated upload/index/analyze/delete workers use persisted
   leases, heartbeats, bounded exponential backoff, explicit DLQ transfer and
-  restart recovery. The database-backed broker is the local durable adapter.
+  restart recovery. The database-backed broker is the local durable adapter;
+  its queue rows also force tenant RLS. Only queue claim and aggregate depth
+  cross tenant boundaries, through fixed-search-path `SECURITY DEFINER`
+  functions that expose opaque routing fields, deny `PUBLIC` execution and
+  explicitly grant execution to the runtime role.
 - `LiveCaptureWorker` resolves RTSP/ONVIF endpoints through Secrets Manager,
   creates bounded FFmpeg segments, retries reconnects and applies queue-depth
   backpressure rather than continuously uploading a feed.
@@ -61,9 +65,13 @@ Every other attribute is dropped before the canonical event is persisted.
   file, while retaining non-sensitive job/audit records.
 
 Production DDL and row-level-security policies are in `migrations/postgres/`.
-Run `crime-platform-migrate`, then start one process per operation, for example
-`crime-video-worker --operation upload`. Set `TEST_POSTGRES_DSN` to run the
-database-level cross-tenant denial test.
+Run `crime-platform-migrate` with `DATABASE_MIGRATOR_URL` supplied through its
+protected file variant, then start one process per operation with the separate
+runtime `DATABASE_URL`, for example `crime-video-worker --operation upload`.
+The migration command verifies it is connected as the non-superuser
+`crime_migrator` schema owner and never falls back to runtime credentials. Set
+`TEST_POSTGRES_MIGRATOR_DSN` and `TEST_POSTGRES_RUNTIME_DSN` to run the direct
+cross-tenant and least-privilege database tests.
 
 `src.data.video.production_app:app` is the production ASGI entrypoint. It
 injects Postgres/RLS repositories, a cross-replica Postgres rate limiter,

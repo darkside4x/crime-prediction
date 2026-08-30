@@ -22,6 +22,7 @@ from src.models.registry import FilesystemApprovedModelRegistry
 from .capture import AwsSecretsManagerLocationResolver
 from .coverage import StoreCoverageProvider
 from .runtime import PlatformSettings, create_platform_runtime
+from .transcode import FfmpegWebmTranscoder
 
 
 def build_production_app():
@@ -89,6 +90,12 @@ def build_production_app():
         audit_log=audit_log,
         idempotency_store=idempotency_store,
         video_broker=runtime.broker,
+        media_transcoder=FfmpegWebmTranscoder(
+            timeout_seconds=20,
+            max_duration_seconds=20,
+            max_input_bytes=platform_settings.max_upload_bytes,
+            max_output_bytes=platform_settings.max_upload_bytes,
+        ),
         dispatch_dependencies=dispatch_runtime.api_dependencies,
     )
     app.state.platform_runtime = runtime

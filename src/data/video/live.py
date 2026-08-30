@@ -2,24 +2,23 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime, timezone
-from pathlib import Path
 import shutil
 import subprocess
-from urllib.parse import urlparse
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from pathlib import Path
+from urllib.parse import urlsplit
 
 from .errors import VideoPipelineError
-
+from .network import AddressResolver, validate_public_media_url
 
 LOUISIANA_DOT_HLS = (
-    "https://ITSStreamingBR2.dotd.la.gov/public/"
-    "shr-cam-002.streams/playlist.m3u8"
+    "https://ITSStreamingBR2.dotd.la.gov/public/shr-cam-002.streams/playlist.m3u8"
 )
 
 
 def _utc(value: datetime) -> str:
-    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+    return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
 
 
 @dataclass(frozen=True)
@@ -60,30 +59,64 @@ class FfmpegHlsCapture:
         *,
         sources: dict[str, HlsSourceDefinition] | None = None,
         timeout_margin_seconds: int = 30,
+        max_output_bytes: int = 8 * 1024 * 1024,
+        address_resolver: AddressResolver | None = None,
     ) -> None:
+        if max_output_bytes < 1024 * 1024:
+            raise ValueError("HLS segment limit must be at least 1 MiB")
         self.sources = dict(sources or DEFAULT_HLS_SOURCES)
         self.timeout_margin_seconds = timeout_margin_seconds
+        self.max_output_bytes = max_output_bytes
+        self.address_resolver = address_resolver
 
     def source(self, key: str) -> HlsSourceDefinition:
         try:
             source = self.sources[key]
         except KeyError as error:
             raise VideoPipelineError(
-                "live_source_not_allowlisted", "The requested demo source is not allowlisted"
+                "live_source_not_allowlisted",
+                "The requested demo source is not allowlisted",
             ) from error
-        parsed = urlparse(source.url)
-        if parsed.scheme != "https" or not parsed.hostname or not parsed.path.endswith(".m3u8"):
+        try:
+            parsed = urlsplit(source.url)
+            valid = (
+                parsed.scheme == "https"
+                and parsed.hostname is not None
+                and parsed.username is None
+                and parsed.password is None
+                and not parsed.fragment
+                and (parsed.port is None or parsed.port == 443)
+                and parsed.path.endswith(".m3u8")
+            )
+        except ValueError:
+            valid = False
+        if not valid:
             raise VideoPipelineError(
-                "live_source_configuration_invalid", "The allowlisted HLS source is invalid"
+                "live_source_configuration_invalid",
+                "The allowlisted HLS source is invalid",
             )
         return source
 
-    def capture(self, key: str, destination: Path, *, duration_seconds: int) -> CapturedSegment:
+    def capture(
+        self, key: str, destination: Path, *, duration_seconds: int
+    ) -> CapturedSegment:
         if not 5 <= duration_seconds <= 60:
             raise VideoPipelineError(
-                "live_capture_duration_invalid", "Capture duration must be between 5 and 60 seconds"
+                "live_capture_duration_invalid",
+                "Capture duration must be between 5 and 60 seconds",
             )
         source = self.source(key)
+        try:
+            validate_public_media_url(
+                source.url,
+                allowed_schemes={"https"},
+                resolver=self.address_resolver,
+            )
+        except VideoPipelineError as error:
+            raise VideoPipelineError(
+                "live_source_configuration_invalid",
+                "The allowlisted HLS source is invalid",
+            ) from error
         ffmpeg = shutil.which("ffmpeg")
         if ffmpeg is None:
             raise VideoPipelineError(
@@ -91,7 +124,7 @@ class FfmpegHlsCapture:
             )
         destination = destination.resolve()
         destination.parent.mkdir(parents=True, exist_ok=True)
-        started = datetime.now(timezone.utc)
+        started = datetime.now(UTC)
         try:
             subprocess.run(
                 [
@@ -101,6 +134,8 @@ class FfmpegHlsCapture:
                     "-loglevel",
                     "error",
                     "-y",
+                    "-protocol_whitelist",
+                    "https,tls,tcp",
                     "-i",
                     source.url,
                     "-t",
@@ -116,6 +151,8 @@ class FfmpegHlsCapture:
                     "yuv420p",
                     "-movflags",
                     "+faststart",
+                    "-fs",
+                    str(self.max_output_bytes),
                     str(destination),
                 ],
                 check=True,
@@ -125,15 +162,25 @@ class FfmpegHlsCapture:
         except subprocess.TimeoutExpired as error:
             destination.unlink(missing_ok=True)
             raise VideoPipelineError(
-                "live_capture_timeout", "The public camera did not produce a segment in time", retryable=True
+                "live_capture_timeout",
+                "The public camera did not produce a segment in time",
+                retryable=True,
             ) from error
         except subprocess.CalledProcessError as error:
             destination.unlink(missing_ok=True)
             raise VideoPipelineError(
-                "live_capture_failed", "The public camera stream is currently unavailable", retryable=True
+                "live_capture_failed",
+                "The public camera stream is currently unavailable",
+                retryable=True,
             ) from error
-        if not destination.is_file():
-            raise VideoPipelineError("live_capture_failed", "No media segment was produced", retryable=True)
+        if (
+            not destination.is_file()
+            or destination.stat().st_size <= 0
+            or destination.stat().st_size > self.max_output_bytes
+        ):
+            raise VideoPipelineError(
+                "live_capture_failed", "No media segment was produced", retryable=True
+            )
         return CapturedSegment(path=destination, captured_start=_utc(started))
 
 

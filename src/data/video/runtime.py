@@ -50,6 +50,7 @@ class PlatformSettings:
     reka_model: str
     reka_video_model: str
     worker_lease_seconds: int
+    max_upload_bytes: int
     restricted_spool_root: Path
 
     @classmethod
@@ -88,6 +89,9 @@ class PlatformSettings:
             reka_model=os.getenv("REKA_MODEL", "reka-flash-3"),
             reka_video_model=os.getenv("REKA_VIDEO_MODEL", "reka-edge-2603"),
             worker_lease_seconds=int(os.getenv("VIDEO_WORKER_LEASE_SECONDS", "120")),
+            max_upload_bytes=int(
+                os.getenv("VIDEO_MAX_UPLOAD_BYTES", str(8 * 1024 * 1024))
+            ),
             restricted_spool_root=Path(
                 os.getenv("VIDEO_SPOOL_ROOT", "/var/lib/crime-video-spool")
             ),
@@ -116,6 +120,11 @@ class PlatformSettings:
             raise ValueError("REKA_CHAT_BASE_URL must use HTTPS")
         if not 30 <= settings.worker_lease_seconds <= 43200:
             raise ValueError("VIDEO_WORKER_LEASE_SECONDS must be between 30 and 43200")
+        if not 1024 * 1024 <= settings.max_upload_bytes <= 8 * 1024 * 1024:
+            raise ValueError(
+                "VIDEO_MAX_UPLOAD_BYTES must be between 1 MiB and the "
+                "8 MiB gateway-safe limit"
+            )
         if settings.media_bucket_owner is not None and (
             len(settings.media_bucket_owner) != 12
             or not settings.media_bucket_owner.isdecimal()
@@ -192,6 +201,7 @@ def create_platform_runtime(
         media_root=settings.restricted_spool_root,
         media_storage=media_storage,
         media_scanner=ClamAVCommandScanner(),
+        max_upload_bytes=settings.max_upload_bytes,
     )
     return PlatformRuntime(
         database, ingestion_store, video_store, media_storage, broker, service

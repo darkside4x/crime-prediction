@@ -15,11 +15,28 @@ those definitions read-only and fail closed while scanning uploads.
 ## Required AWS controls
 
 - EC2 has no inbound database, API or Docker daemon ports. Put an ALB or an
-  HTTPS reverse proxy in front of port 8080; keep `WEB_BIND_ADDRESS=127.0.0.1`
-  when the proxy runs on the same host.
-- RDS is private, encrypted, backed up, and connects with a non-superuser
-  `crime_app` role. Run migrations as that role so `FORCE ROW LEVEL SECURITY`
-  remains effective.
+  HTTPS reverse proxy in front of port 8080. The managed ALB requires
+  `WEB_BIND_ADDRESS=0.0.0.0` because it targets the instance ENI; its ingress
+  rule accepts only the load-balancer security group. Use `127.0.0.1` for an
+  SSM-only deployment or when the reverse proxy runs on the same host.
+- The application security group has no all-protocol egress. It permits only
+  required HTTPS/build traffic and security-group-scoped PostgreSQL/EFS
+  traffic. Prebuilt-image deployments should also remove port 80.
+- The AWS composition does not run the CLI live-camera worker and does not
+  permit direct RTSP/RTSPS egress. Tenant HLS/RTSP/ONVIF connectors remain
+  disabled in production until they are routed through a pinned outbound media
+  proxy or egress firewall that revalidates DNS, redirects, and every HLS child
+  URI. Review 3 uses authenticated, bounded browser/mobile uploads instead.
+- RDS is private, encrypted and backed up. The one-shot migration container uses
+  the non-superuser schema owner `crime_migrator`; APIs and workers use the
+  separate `crime_app` runtime role. `crime_app` owns no tables or functions,
+  has no database/schema `CREATE`, role inheritance, `BYPASSRLS`, or policy
+  replacement path, and receives only schema usage, application DML, sequence
+  usage and execution of the `app` helper functions. All tenant tables continue
+  to use `FORCE ROW LEVEL SECURITY`. The Postgres demo queue follows the same
+  rule; its runtime mutations are tenant-scoped and its only cross-tenant
+  operations are narrow claim/depth functions. Production worker delivery
+  remains on SQS.
 - The S3 bucket has Block Public Access and Bucket Owner Enforced enabled, uses
   the configured customer KMS key, denies non-TLS access, and expires current
   and noncurrent media versions according to the retention policy.
@@ -33,7 +50,8 @@ those definitions read-only and fail closed while scanning uploads.
 - The instance role—not static AWS keys—has only `s3:GetObject/PutObject/DeleteObject`
   on `tenants/*`, required KMS operations, SQS operations on these two queues,
   and `secretsmanager:GetSecretValue` under `LOCATION_SECRET_PREFIX`.
-- The Reka key and PostgreSQL DSN are root-owned `0400` files under
+- The Reka key and separate runtime/migrator PostgreSQL DSNs are root-owned
+  `0400` files under
   `/opt/crime-platform/secrets`; they are mounted as Compose secrets and never
   stored in the image or ordinary container environment.
 - Voice dispatch has a separate encrypted SQS queue/DLQ and Twilio secret. It
@@ -64,19 +82,51 @@ aws cloudformation deploy \
 ```
 
 Run `bootstrap-database.sh` once on the SSM-managed host using the stack's
-database address and secret ARN outputs. Then immediately redeploy the
-foundation with `AllowDatabaseBootstrap=false`. That removes the host's
-temporary master-secret read and app-secret write permissions; normal runtime
-can read only the sealed application DSN.
+database address plus `DatabaseMasterSecretArn`, `RuntimeDatabaseSecretArn` and
+`MigratorDatabaseSecretArn` outputs. The script safely upgrades a legacy
+single-role database by transferring objects from `crime_app` to
+`crime_migrator`, installs future-object default privileges, verifies the
+runtime role has no ownership or DDL capability, and seals separate DSNs.
+Materialize both DSNs as protected files, then immediately redeploy the
+foundation with `AllowDatabaseBootstrap=false`. That removes master/migrator
+secret bootstrap access; normal host operation can retrieve only the sealed
+runtime DSN. Retain the already materialized migrator file only on the protected
+deployment host for the one-shot migration container.
 
-The host template defaults to a private SSM-managed EC2 host with no inbound
-rule. Set `ReviewEndpointMode=cloudfront` after the AWS account is permitted to
+The bootstrap inputs are identifiers, not credential values. Resolve them from
+the stack outputs and run the script without shell tracing:
+
+```bash
+AWS_REGION=ap-south-1 \
+DATABASE_HOST=db-private.example.internal \
+DATABASE_NAME=crime_prediction \
+DATABASE_MASTER_SECRET_ARN=arn:aws:secretsmanager:region:account:secret:master \
+DATABASE_RUNTIME_SECRET_ARN=arn:aws:secretsmanager:region:account:secret:runtime \
+DATABASE_MIGRATOR_SECRET_ARN=arn:aws:secretsmanager:region:account:secret:migrator \
+  bash deploy/aws-vm/bootstrap-database.sh
+```
+
+The script retrieves values directly from Secrets Manager, passes passwords to
+`psql` through process-scoped environment variables, and streams sealed DSNs
+back to Secrets Manager through stdin. It never prints a credential or places a
+password in a command-line argument.
+
+The host template defaults to an SSM-managed public-subnet EC2 host with a
+public IP but no inbound security-group rule. Set
+`ReviewEndpointMode=cloudfront` after the AWS account is permitted to
 create CloudFront distributions. CloudFront uses its default TLS certificate
 and an origin-verification header; the internet-facing ALB rejects direct
 requests. If CloudFront account verification is unavailable, set
 `ReviewEndpointMode=apigateway`. That mode uses the API Gateway default HTTPS
 endpoint, a VPC link, and an internal ALB. The VM remains unreachable directly
 in both modes. For a custom domain, use an ACM certificate and HTTPS listener.
+
+API Gateway mode sets `VIDEO_MAX_UPLOAD_BYTES=8388608`. This leaves headroom
+under the HTTP API 10 MB request ceiling for multipart fields. The browser uses
+a bounded bitrate for 10–20 second mobile clips and rejects larger files before
+upload; the backend enforces the same limit and bounds WebM conversion to 20
+seconds. Larger-file production intake must use a separate presigned-S3 and
+asynchronous scanning workflow instead of raising this value behind API Gateway.
 
 The generated Reka secret is deliberately a placeholder. Replace it with a
 newly rotated key before writing the container secret file. Never reuse a key
@@ -110,8 +160,10 @@ file or shell history:
 
 ```bash
 install -d -o root -g root -m 0700 /opt/crime-platform/secrets
-install -o 10001 -g 10001 -m 0400 /secure/input/database-url \
-  /opt/crime-platform/secrets/database-url
+install -o 10001 -g 10001 -m 0400 /secure/input/database-runtime-url \
+  /opt/crime-platform/secrets/database-runtime-url
+install -o 10001 -g 10001 -m 0400 /secure/input/database-migrator-url \
+  /opt/crime-platform/secrets/database-migrator-url
 install -o 10001 -g 10001 -m 0400 /secure/input/reka-api-key \
   /opt/crime-platform/secrets/reka-api-key
 install -o 10001 -g 10001 -m 0400 /secure/input/twilio-voice.json \
@@ -135,6 +187,14 @@ the kill switch to `false` afterward. Contact destinations remain separate
 In AWS, retrieve each value from Secrets Manager directly into a protected
 temporary file, install it as above, and securely remove the temporary file.
 The numeric owner is the fixed `crime` runtime identity in the API image.
+Compose mounts `database-migrator-url` only into the one-shot `migrate`
+service. API and worker containers receive only `database-runtime-url`; setting
+`DATABASE_URL` cannot make the migration CLI fall back to runtime credentials.
+The same-host proxy normalizes its upstream Host to `localhost`, which Compose
+always adds to the API allowlist, and caps total requests at 9 MiB.
+`MAX_REQUEST_BYTES` uses the same bounded multipart envelope while the media
+payload itself remains limited to 8 MiB. Camera permission is restricted to
+the same HTTPS origin.
 
 ```bash
 cp deploy/aws-vm/.env.production.example deploy/aws-vm/.env.production
@@ -169,5 +229,6 @@ docker compose --env-file deploy/aws-vm/.env.production \
 ```
 
 `/ready` must not be treated as a load-balancer success if it reports a
-degraded Reka state. Run the two-tenant database RLS test and a synthetic MP4
-flow before opening the demo endpoint.
+degraded Reka state. Run the two-tenant database RLS test, the optional direct
+role-separation test with protected test-only migrator/runtime DSNs, and a
+synthetic MP4 flow before opening the demo endpoint.

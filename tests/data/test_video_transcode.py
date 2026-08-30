@@ -64,6 +64,8 @@ def test_transcoder_uses_bounded_argv_without_shell_interpretation(
 
     def fake_run(command: list[str], **kwargs: object) -> SimpleNamespace:
         if command[0] == "ffprobe":
+            marker = command.index("-protocol_whitelist")
+            assert command[marker + 1] == "file,pipe"
             return _probe_result()
         observed["command"] = command
         observed["kwargs"] = kwargs
@@ -81,6 +83,8 @@ def test_transcoder_uses_bounded_argv_without_shell_interpretation(
     assert command[command.index("-i") + 1] == str(source.resolve())
     assert command[-1] == str(destination.resolve())
     assert "-nostdin" in command
+    marker = command.index("-protocol_whitelist")
+    assert command[marker + 1] == "file,pipe"
     assert kwargs == {"check": False, "capture_output": True, "timeout": 17}
     assert "-t" in command
     assert "-fs" in command

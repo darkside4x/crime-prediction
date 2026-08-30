@@ -177,11 +177,18 @@ class MockTwilioVoiceProvider:
                 self.failures_remaining -= 1
                 raise VoiceProviderUnavailable("voice_provider_mock_failure")
             result = OutboundCallResult(
-                provider_call_reference=f"mock-call-{len(self._results) + 1:04d}"
+                provider_call_reference=self.reference_for_request(request.request_id)
             )
             self._results[request.request_id] = result
             self._requests.append(request)
             return result
+
+    @staticmethod
+    def reference_for_request(request_id: str) -> str:
+        """Return a restart-stable mock ID without persisting a provider SID."""
+
+        require_identifier(request_id, "request_id")
+        return f"mock-call-{request_id}"
 
     def cancel_call(self, provider_call_reference: str) -> None:
         if provider_call_reference:

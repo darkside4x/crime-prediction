@@ -5,10 +5,14 @@ from pathlib import Path
 
 import pytest
 
-DSN = os.getenv("TEST_POSTGRES_DSN")
+MIGRATOR_DSN = os.getenv("TEST_POSTGRES_MIGRATOR_DSN")
+RUNTIME_DSN = os.getenv("TEST_POSTGRES_RUNTIME_DSN")
 pytestmark = pytest.mark.skipif(
-    not DSN,
-    reason="Set TEST_POSTGRES_DSN to run direct PostgreSQL dispatch/RLS tests",
+    not MIGRATOR_DSN or not RUNTIME_DSN,
+    reason=(
+        "Set TEST_POSTGRES_MIGRATOR_DSN and TEST_POSTGRES_RUNTIME_DSN to run "
+        "direct PostgreSQL dispatch/RLS tests"
+    ),
 )
 
 
@@ -17,7 +21,7 @@ def test_dispatch_tables_enforce_confirmation_attempt_cap_and_tenant_rls() -> No
     from src.data.postgres import TenantPostgres
 
     root = Path(__file__).resolve().parents[2]
-    with psycopg.connect(DSN, autocommit=True) as connection:
+    with psycopg.connect(MIGRATOR_DSN, autocommit=True) as connection:
         for migration in sorted((root / "migrations" / "postgres").glob("*.sql")):
             connection.execute(migration.read_text(encoding="utf-8"))
 
@@ -32,7 +36,7 @@ def test_dispatch_tables_enforce_confirmation_attempt_cap_and_tenant_rls() -> No
     supervisor_id = "71000000-0000-4000-8000-000000000002"
     dispatch_case_id = "72000000-0000-4000-8000-000000000001"
     promoted_event_id = "dispatch-test-promoted-event"
-    database = TenantPostgres(DSN)
+    database = TenantPostgres(RUNTIME_DSN)
     try:
         with database.transaction(tenant_a) as cursor:
             cursor.execute(

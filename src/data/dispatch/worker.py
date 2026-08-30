@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from .broker import DispatchBroker, DispatchJob
 from .errors import DispatchError, DispatchRetryNotDue, DispatchValidationError
 from .service import DispatchCoordinator
-from .twilio import TwilioMode
+from .twilio import MockTwilioVoiceProvider, TwilioMode
 
 
 class DispatchWorker:
@@ -76,6 +76,13 @@ class DispatchWorker:
         reference = attempt.provider_call_reference
         if not reference:
             return
+        if reference.startswith("sha256:"):
+            provider = self.coordinator.voice_provider
+            if not isinstance(provider, MockTwilioVoiceProvider):
+                # Only the deterministic mock provider may reconstruct an
+                # addressable reference. A durable live SID remains one-way.
+                return
+            reference = provider.reference_for_request(attempt.attempt_id)
         if attempt.sequence < 3:
             case = self.coordinator.handle_status(
                 attempt.callback_token,

@@ -19,8 +19,10 @@ Parameters:
     Type: String
   ModelRegistryFileSystemId:
     Type: String
+    AllowedPattern: 'fs-[0-9a-f]+'
   ModelRegistryAccessPointId:
     Type: String
+    AllowedPattern: 'fsap-[0-9a-f]+'
   AlarmTopicArn:
     Type: String
     Default: ""
@@ -42,12 +44,15 @@ Parameters:
   RepositoryUrl:
     Type: String
     Default: https://github.com/minnhaaaaa/crime-prediction.git
+    AllowedPattern: 'https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:\.git)?'
   RepositoryBranch:
     Type: String
     Default: main
+    AllowedPattern: '[A-Za-z0-9][A-Za-z0-9._/-]{0,127}'
   DockerComposeVersion:
     Type: String
     Default: v5.5.0
+    AllowedPattern: 'v[0-9]+\.[0-9]+\.[0-9]+'
   DockerComposeSha256:
     Type: String
     Default: c57ab918abd5b05ca7e7d0f275875dd1330a695074f309dc9eab1b49efafcd4b
@@ -55,6 +60,7 @@ Parameters:
   DockerBuildxVersion:
     Type: String
     Default: v0.36.1
+    AllowedPattern: 'v[0-9]+\.[0-9]+\.[0-9]+'
   DockerBuildxSha256:
     Type: String
     Default: 48af8a397ebd60178778bf63611dbcebe5f5e7a9be90eb9147b24b9587455778
@@ -140,6 +146,11 @@ Resources:
       IamInstanceProfile: !Ref InstanceProfileName
       ImageId: !Ref LatestAmiId
       InstanceType: !Ref InstanceType
+      MetadataOptions:
+        HttpEndpoint: enabled
+        HttpPutResponseHopLimit: 1
+        HttpTokens: required
+        InstanceMetadataTags: disabled
       Monitoring: true
       NetworkInterfaces:
         - AssociatePublicIpAddress: true

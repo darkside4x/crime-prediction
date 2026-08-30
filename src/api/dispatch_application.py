@@ -731,21 +731,10 @@ class PostgresDispatchApplicationService:
     ) -> VoicePrompt:
         call_sid = self._callback(opaque_call_token, form)
         try:
-            _, attempt = self.repository.resolve_callback(opaque_call_token)
-            expected = attempt.provider_call_reference or ""
-            valid = (
-                hmac.compare_digest(
-                    hashlib.sha256(call_sid.encode()).hexdigest(),
-                    expected.removeprefix("sha256:"),
-                )
-                if expected.startswith("sha256:")
-                else hmac.compare_digest(call_sid, expected)
+            script = self.coordinator.voice_script(
+                opaque_call_token,
+                provider_call_reference=call_sid,
             )
-            if not valid:
-                raise DispatchApiError(
-                    403, "call_mapping_mismatch", "Call mapping did not match"
-                )
-            script = self.coordinator.voice_script(opaque_call_token)
         except DispatchApiError:
             raise
         except DispatchError as error:

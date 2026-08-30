@@ -158,12 +158,30 @@ Resources:
     Properties:
       GroupDescription: Review application hosts; no public ingress
       VpcId: !Ref VpcId
-      SecurityGroupEgress:
-        - IpProtocol: -1
-          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress: []
       Tags:
         - Key: Name
           Value: !Sub "crime-prediction-${EnvironmentName}-app"
+
+  AppHttpsEgress:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      Description: TLS for AWS APIs, Reka, source control, and package registries
+      GroupId: !Ref AppSecurityGroup
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      CidrIp: 0.0.0.0/0
+
+  AppHttpEgress:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      Description: Package repositories and ClamAV signature mirrors
+      GroupId: !Ref AppSecurityGroup
+      IpProtocol: tcp
+      FromPort: 80
+      ToPort: 80
+      CidrIp: 0.0.0.0/0
 
   DatabaseSecurityGroup:
     Type: AWS::EC2::SecurityGroup
@@ -180,6 +198,16 @@ Resources:
         - Key: Name
           Value: !Sub "crime-prediction-${EnvironmentName}-database"
 
+  AppDatabaseEgress:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      Description: PostgreSQL runtime and migration traffic
+      GroupId: !Ref AppSecurityGroup
+      IpProtocol: tcp
+      FromPort: 5432
+      ToPort: 5432
+      DestinationSecurityGroupId: !Ref DatabaseSecurityGroup
+
   ModelRegistrySecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -194,6 +222,16 @@ Resources:
       Tags:
         - Key: Name
           Value: !Sub "crime-prediction-${EnvironmentName}-model-registry"
+
+  AppModelRegistryEgress:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      Description: Encrypted EFS model-registry mounts
+      GroupId: !Ref AppSecurityGroup
+      IpProtocol: tcp
+      FromPort: 2049
+      ToPort: 2049
+      DestinationSecurityGroupId: !Ref ModelRegistrySecurityGroup
 
   ModelRegistryFileSystem:
     Type: AWS::EFS::FileSystem
@@ -301,11 +339,23 @@ Resources:
   AppDatabaseSecret:
     Type: AWS::SecretsManager::Secret
     Properties:
-      Description: Generated non-superuser application database credentials
+      Description: Generated RLS-constrained runtime database credentials
       KmsKeyId: !GetAtt PlatformKey.Arn
       Name: !Sub "crime-prediction/${EnvironmentName}/database-app"
       GenerateSecretString:
         SecretStringTemplate: '{"username":"crime_app"}'
+        GenerateStringKey: password
+        ExcludeCharacters: '"@/\\''`$&;|<> (){}[]'
+        PasswordLength: 40
+
+  MigratorDatabaseSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: Generated schema-owner credentials used only by the migration job
+      KmsKeyId: !GetAtt PlatformKey.Arn
+      Name: !Sub "crime-prediction/${EnvironmentName}/database-migrator"
+      GenerateSecretString:
+        SecretStringTemplate: '{"username":"crime_migrator"}'
         GenerateStringKey: password
         ExcludeCharacters: '"@/\\''`$&;|<> (){}[]'
         PasswordLength: 40
@@ -489,20 +539,24 @@ Resources:
                   - secretsmanager:GetSecretValue
                   - secretsmanager:PutSecretValue
                   - secretsmanager:TagResource
-                Resource: !Sub "arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:crime-prediction/${EnvironmentName}/tenants/*"
+                Resource: !Sub "arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:crime-prediction/${EnvironmentName}/tenants/*/dispatch-contacts/*"
               - !If
                 - AllowDatabaseBootstrapCondition
                 - Sid: OneTimeDatabaseBootstrap
                   Effect: Allow
                   Action: secretsmanager:GetSecretValue
-                  Resource: !GetAtt Database.MasterUserSecret.SecretArn
+                  Resource:
+                    - !GetAtt Database.MasterUserSecret.SecretArn
+                    - !Ref MigratorDatabaseSecret
                 - !Ref AWS::NoValue
               - !If
                 - AllowDatabaseBootstrapCondition
                 - Sid: OneTimeDatabaseDsnSeal
                   Effect: Allow
                   Action: secretsmanager:PutSecretValue
-                  Resource: !Ref AppDatabaseSecret
+                  Resource:
+                    - !Ref AppDatabaseSecret
+                    - !Ref MigratorDatabaseSecret
                 - !Ref AWS::NoValue
               - Sid: RuntimeKey
                 Effect: Allow
@@ -690,6 +744,10 @@ Resources:
 Outputs:
   AppDatabaseSecretArn:
     Value: !Ref AppDatabaseSecret
+  RuntimeDatabaseSecretArn:
+    Value: !Ref AppDatabaseSecret
+  MigratorDatabaseSecretArn:
+    Value: !Ref MigratorDatabaseSecret
   AppSecurityGroupId:
     Value: !Ref AppSecurityGroup
   AlarmTopicArn:

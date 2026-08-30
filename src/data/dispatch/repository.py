@@ -13,6 +13,7 @@ from .errors import (
     DispatchResourceNotFound,
     DispatchRetryNotDue,
     DispatchStateConflict,
+    WebhookCallMismatch,
 )
 from .models import (
     TERMINAL_ATTEMPT_STATUSES,
@@ -22,6 +23,7 @@ from .models import (
     ContactRole,
     DispatchCase,
     DispatchEvent,
+    DispatchEventKind,
     DispatchStatus,
     require_utc,
 )
@@ -112,6 +114,15 @@ class DispatchRepository(Protocol):
         expected_case_version: int,
         expected_attempt_version: int,
     ) -> bool: ...
+
+    def bind_provider_callback(
+        self,
+        callback_token: str,
+        provider_call_reference: str,
+        *,
+        at: datetime,
+        event: DispatchEvent,
+    ) -> tuple[DispatchCase, CallAttempt]: ...
 
     def expire_provider_submission(
         self,
@@ -415,6 +426,82 @@ class InMemoryDispatchRepository:
             self._append_event_locked(event)
             return True
 
+    def bind_provider_callback(
+        self,
+        callback_token: str,
+        provider_call_reference: str,
+        *,
+        at: datetime,
+        event: DispatchEvent,
+    ) -> tuple[DispatchCase, CallAttempt]:
+        """Bind the first provider-authenticated callback to a claimed call.
+
+        Twilio can request the voice URL before ``calls.create`` returns to the
+        submitting worker.  The callback is therefore allowed to complete the
+        durable provider-submission claim.  A different reference can never
+        replace the first one.
+        """
+
+        now = require_utc(at, "provider callback binding time")
+        if not provider_call_reference:
+            raise WebhookCallMismatch()
+        with self._lock:
+            mapping = self._callback_index.get(callback_token)
+            if mapping is None:
+                raise DispatchResourceNotFound()
+            tenant_id, attempt_id = mapping
+            attempt_key = (tenant_id, attempt_id)
+            current_attempt = self._attempts[attempt_key]
+            case_key = (tenant_id, current_attempt.case_id)
+            current_case = self._cases[case_key]
+            submission = self._provider_submissions[attempt_key]
+
+            stored_reference = current_attempt.provider_call_reference
+            if stored_reference is not None:
+                if not self._provider_reference_matches(
+                    stored_reference, provider_call_reference
+                ):
+                    raise WebhookCallMismatch()
+                return current_case, current_attempt
+            if (
+                current_case.status in TERMINAL_DISPATCH_STATUSES
+                or submission.state != "claimed"
+            ):
+                raise DispatchStateConflict("dispatch_callback_binding_unavailable")
+            if (tenant_id, event.deduplication_key) in self._event_dedupe:
+                raise DispatchStateConflict("dispatch_repository_conflict")
+            completed_at = max(now, submission.claimed_at or now)
+
+            updated_attempt = replace(
+                current_attempt,
+                provider_call_reference=provider_call_reference,
+                status=CallAttemptStatus.INITIATED,
+                initiated_at=current_attempt.initiated_at or completed_at,
+                safe_error_code=None,
+                updated_at=completed_at,
+                version=current_attempt.version + 1,
+            )
+            updated_case = replace(
+                current_case,
+                status=DispatchStatus.DIALING,
+                next_attempt_at=None,
+                updated_at=completed_at,
+                version=current_case.version + 1,
+            )
+            self._validate_submission_outcome(
+                "submitted", updated_case, updated_attempt
+            )
+            self._validate_event(
+                event, case=updated_case, attempt=updated_attempt
+            )
+            self._cases[case_key] = updated_case
+            self._attempts[attempt_key] = updated_attempt
+            self._provider_submissions[attempt_key] = replace(
+                submission, state="submitted", completed_at=completed_at
+            )
+            self._append_event_locked(event)
+            return updated_case, updated_attempt
+
     def expire_provider_submission(
         self,
         *,
@@ -481,6 +568,22 @@ class InMemoryDispatchRepository:
                 or attempt.version != expected_attempt_version + 1
             ):
                 raise DispatchStateConflict("dispatch_repository_conflict")
+            submission = self._provider_submissions.get(
+                (attempt.tenant_id, attempt.attempt_id)
+            )
+            if (
+                event.kind is DispatchEventKind.CANCELED
+                and submission is not None
+                and (
+                    submission.state == "claimed"
+                    or (
+                        submission.state == "submitted"
+                        and current_attempt.provider_call_reference
+                        != attempt.provider_call_reference
+                    )
+                )
+            ):
+                raise DispatchStateConflict("dispatch_submission_in_flight")
             if (
                 attempt.tenant_id != case.tenant_id
                 or attempt.case_id != case.case_id
@@ -554,6 +657,14 @@ class InMemoryDispatchRepository:
     def _append_event_locked(self, event: DispatchEvent) -> None:
         self._events[(event.tenant_id, event.case_id)].append(event)
         self._event_dedupe.add((event.tenant_id, event.deduplication_key))
+
+    @staticmethod
+    def _provider_reference_matches(stored: str, incoming: str) -> bool:
+        if stored.startswith("sha256:"):
+            expected = stored.removeprefix("sha256:")
+            actual = hashlib.sha256(incoming.encode("utf-8")).hexdigest()
+            return len(expected) == 64 and hmac.compare_digest(expected, actual)
+        return hmac.compare_digest(stored, incoming)
 
     @staticmethod
     def _validate_submission_outcome(

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from src.data.dispatch import (
     DispatchValidationError,
+    MockTwilioVoiceProvider,
     TwilioMode,
     VoiceProviderUnavailable,
 )
@@ -146,3 +147,55 @@ def test_fifth_failed_delivery_terminalizes_case_and_is_not_released() -> None:
     assert coordinator.exhausted == [(tenant_id, case_id)]
     assert broker.acknowledged == []
     assert broker.released == []
+
+
+def test_mock_worker_reconstructs_only_deterministic_hashed_call_reference() -> None:
+    tenant_id = "00000000-0000-4000-8000-000000000001"
+    case_id = "00000000-0000-4000-8000-000000000002"
+    attempt_identifier = "00000000-0000-4000-8000-000000000003"
+
+    class Broker:
+        def __init__(self) -> None:
+            self.job = DispatchJob(tenant_id=tenant_id, case_id=case_id)
+            self.acknowledged = []
+
+        def receive(self, *, wait_seconds: int = 20):
+            del wait_seconds
+            return self.job
+
+        def acknowledge(self, job) -> None:
+            self.acknowledged.append(job)
+
+        def release(self, job, *, delay_seconds: int) -> None:
+            raise AssertionError((job, delay_seconds))
+
+    class Attempt:
+        attempt_id = attempt_identifier
+        provider_call_reference = "sha256:" + "0" * 64
+        callback_token = "opaque-mock-callback-token"
+        sequence = 3
+
+    class Coordinator:
+        def __init__(self) -> None:
+            self.voice_provider = MockTwilioVoiceProvider()
+            self.references = []
+
+        def dispatch_next(self, received_tenant_id: str, received_case_id: str):
+            assert (received_tenant_id, received_case_id) == (tenant_id, case_id)
+            return Attempt()
+
+        def handle_gather(self, callback_token: str, **kwargs) -> None:
+            assert callback_token == Attempt.callback_token
+            self.references.append(kwargs["provider_call_reference"])
+
+    broker = Broker()
+    coordinator = Coordinator()
+    worker = DispatchWorker(
+        broker=broker,
+        coordinator=coordinator,
+        mode=TwilioMode.MOCK,
+    )
+
+    assert worker.poll_once(wait_seconds=0) is True
+    assert coordinator.references == [f"mock-call-{attempt_identifier}"]
+    assert broker.acknowledged == [broker.job]

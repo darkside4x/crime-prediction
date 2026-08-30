@@ -1,7 +1,7 @@
 x-platform-environment: &platform-environment
   APP_ENVIRONMENT: production
   AWS_REGION: ${AWS_REGION:-ap-south-1}
-  DATABASE_URL_FILE: /run/secrets/database_url
+  DATABASE_URL_FILE: /run/secrets/database_runtime_url
   REKA_API_KEY_FILE: /run/secrets/reka_api_key
   REKA_CHAT_BASE_URL: https://api.reka.ai/v1
   REKA_VISION_BASE_URL: https://vision-agent.api.reka.ai
@@ -24,6 +24,7 @@ x-platform-environment: &platform-environment
   VIDEO_MEDIA_BUCKET: ${VIDEO_MEDIA_BUCKET:?Set VIDEO_MEDIA_BUCKET}
   VIDEO_MEDIA_KMS_KEY_ID: ${VIDEO_MEDIA_KMS_KEY_ID:?Set VIDEO_MEDIA_KMS_KEY_ID}
   VIDEO_MEDIA_BUCKET_OWNER: ${VIDEO_MEDIA_BUCKET_OWNER:?Set VIDEO_MEDIA_BUCKET_OWNER}
+  VIDEO_MAX_UPLOAD_BYTES: ${VIDEO_MAX_UPLOAD_BYTES:-8388608}
   LOCATION_SECRET_PREFIX: ${LOCATION_SECRET_PREFIX:?Set LOCATION_SECRET_PREFIX}
   VIDEO_WORKER_LEASE_SECONDS: ${VIDEO_WORKER_LEASE_SECONDS:-180}
   VIDEO_SPOOL_ROOT: /var/lib/crime-video-spool
@@ -32,7 +33,7 @@ x-platform-environment: &platform-environment
 x-dispatch-environment: &dispatch-environment
   APP_ENVIRONMENT: production
   AWS_REGION: ${AWS_REGION:-ap-south-1}
-  DATABASE_URL_FILE: /run/secrets/database_url
+  DATABASE_URL_FILE: /run/secrets/database_runtime_url
   DISPATCH_MODE: ${DISPATCH_MODE:-mock}
   DISPATCH_QUEUE_URL: ${DISPATCH_QUEUE_URL:?Set DISPATCH_QUEUE_URL}
   DISPATCH_QUEUE_DLQ_URL: ${DISPATCH_QUEUE_DLQ_URL:?Set DISPATCH_QUEUE_DLQ_URL}
@@ -52,7 +53,7 @@ x-platform-service: &platform-service
     dockerfile: docker/api.Dockerfile
   environment: *platform-environment
   secrets:
-    - database_url
+    - database_runtime_url
     - reka_api_key
   read_only: true
   tmpfs:
@@ -65,8 +66,23 @@ x-platform-service: &platform-service
 
 services:
   migrate:
-    <<: *platform-service
+    build:
+      context: ../..
+      dockerfile: docker/api.Dockerfile
     command: ["crime-platform-migrate"]
+    environment:
+      APP_ENVIRONMENT: production
+      DATABASE_MIGRATOR_URL_FILE: /run/secrets/database_migrator_url
+      DATABASE_MIGRATOR_ROLE: crime_migrator
+    secrets:
+      - database_migrator_url
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     restart: "no"
 
   api:
@@ -94,15 +110,16 @@ services:
       DISPATCH_EXTERNAL_CALLS_ENABLED: ${DISPATCH_EXTERNAL_CALLS_ENABLED:-false}
       DISPATCH_APPROVED_DESTINATION_SHA256: ${DISPATCH_APPROVED_DESTINATION_SHA256:-}
       CORS_ORIGINS: ${CORS_ORIGINS:?Set CORS_ORIGINS to HTTPS origins}
-      TRUSTED_HOSTS: ${TRUSTED_HOSTS:?Set TRUSTED_HOSTS}
+      TRUSTED_HOSTS: localhost,127.0.0.1,${TRUSTED_HOSTS:?Set TRUSTED_HOSTS}
       OIDC_ISSUER: ${OIDC_ISSUER:?Set OIDC_ISSUER}
       OIDC_AUDIENCE: ${OIDC_AUDIENCE:?Set OIDC_AUDIENCE}
       OIDC_JWKS_URL: ${OIDC_JWKS_URL:?Set OIDC_JWKS_URL}
       OIDC_ALGORITHMS: ${OIDC_ALGORITHMS:-RS256}
       OIDC_MEMBERSHIPS_CLAIM: ${OIDC_MEMBERSHIPS_CLAIM:-tenant_memberships}
+      MAX_REQUEST_BYTES: ${MAX_REQUEST_BYTES:-9437184}
       API_WORKERS: ${API_WORKERS:-2}
     secrets:
-      - database_url
+      - database_runtime_url
       - reka_api_key
       - twilio_voice
     volumes:
@@ -218,7 +235,7 @@ services:
     command: ["crime-dispatch-worker"]
     environment: *dispatch-environment
     secrets:
-      - database_url
+      - database_runtime_url
       - twilio_voice
     read_only: true
     tmpfs:
@@ -233,8 +250,10 @@ services:
         condition: service_completed_successfully
 
 secrets:
-  database_url:
-    file: ${DATABASE_URL_SECRET_FILE:?Set DATABASE_URL_SECRET_FILE}
+  database_runtime_url:
+    file: ${DATABASE_RUNTIME_URL_SECRET_FILE:?Set DATABASE_RUNTIME_URL_SECRET_FILE}
+  database_migrator_url:
+    file: ${DATABASE_MIGRATOR_URL_SECRET_FILE:?Set DATABASE_MIGRATOR_URL_SECRET_FILE}
   reka_api_key:
     file: ${REKA_API_KEY_SECRET_FILE:?Set REKA_API_KEY_SECRET_FILE}
   twilio_voice:

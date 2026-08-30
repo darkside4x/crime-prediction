@@ -330,6 +330,140 @@ def test_two_workers_cannot_submit_the_same_provider_call_concurrently() -> None
     assert len(repository.list_attempts(TENANT_A, case.case_id)) == 1
 
 
+def test_signed_callback_can_bind_call_before_provider_submission_returns() -> None:
+    class CallbackFirstProvider:
+        call_sid = "CA-callback-before-return"
+
+        def __init__(self) -> None:
+            self.started = Event()
+            self.release = Event()
+            self.invocations = 0
+
+        def place_call(self, request):
+            del request
+            self.invocations += 1
+            self.started.set()
+            assert self.release.wait(timeout=5)
+            return OutboundCallResult(self.call_sid)
+
+        def cancel_call(self, provider_call_reference: str) -> None:
+            del provider_call_reference
+
+    clock = Clock()
+    repository = InMemoryDispatchRepository()
+    provider = CallbackFirstProvider()
+    coordinator = DispatchCoordinator(
+        repository,
+        InMemoryContactDirectory(
+            [
+                _contact("primary-a", ContactRole.PRIMARY),
+                _contact("supervisor-a", ContactRole.SUPERVISOR),
+            ]
+        ),
+        provider,
+        clock=clock,
+    )
+    case = _authorize(coordinator)
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        submitted = executor.submit(
+            coordinator.dispatch_next, TENANT_A, case.case_id
+        )
+        assert provider.started.wait(timeout=5)
+        reserved = repository.list_attempts(TENANT_A, case.case_id)[0]
+
+        script = coordinator.voice_script(
+            reserved.callback_token,
+            provider_call_reference=provider.call_sid,
+        )
+        assert script.case_reference == case.case_reference
+        bound = repository.list_attempts(TENANT_A, case.case_id)[0]
+        assert bound.status is CallAttemptStatus.INITIATED
+        assert bound.provider_call_reference == provider.call_sid
+
+        with pytest.raises(WebhookCallMismatch):
+            coordinator.voice_script(
+                reserved.callback_token,
+                provider_call_reference="CA-different-provider-call",
+            )
+
+        provider.release.set()
+        completed = submitted.result(timeout=5)
+
+    assert completed == bound
+    assert provider.invocations == 1
+    assert [
+        event.kind
+        for event in repository.list_events(TENANT_A, case.case_id)
+    ].count(DispatchEventKind.CALL_INITIATED) == 1
+
+
+def test_cancel_during_unknown_provider_submission_fails_closed() -> None:
+    class CallbackFirstProvider:
+        call_sid = "CA-cancel-race"
+
+        def __init__(self) -> None:
+            self.started = Event()
+            self.release = Event()
+            self.canceled: list[str] = []
+
+        def place_call(self, request):
+            del request
+            self.started.set()
+            assert self.release.wait(timeout=5)
+            return OutboundCallResult(self.call_sid)
+
+        def cancel_call(self, provider_call_reference: str) -> None:
+            self.canceled.append(provider_call_reference)
+
+    clock = Clock()
+    repository = InMemoryDispatchRepository()
+    provider = CallbackFirstProvider()
+    coordinator = DispatchCoordinator(
+        repository,
+        InMemoryContactDirectory(
+            [
+                _contact("primary-a", ContactRole.PRIMARY),
+                _contact("supervisor-a", ContactRole.SUPERVISOR),
+            ]
+        ),
+        provider,
+        clock=clock,
+    )
+    case = _authorize(coordinator)
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        submitted = executor.submit(
+            coordinator.dispatch_next, TENANT_A, case.case_id
+        )
+        assert provider.started.wait(timeout=5)
+        with pytest.raises(DispatchStateConflict) as conflict:
+            coordinator.cancel(
+                TENANT_A,
+                case.case_id,
+                canceled_by="reviewer-subject-a",
+                event_key="cancel-while-provider-unknown",
+            )
+        assert conflict.value.code == "dispatch_submission_in_flight"
+        assert (
+            repository.get_case(TENANT_A, case.case_id).status
+            is DispatchStatus.DIALING
+        )
+        assert provider.canceled == []
+
+        provider.release.set()
+        attempt = submitted.result(timeout=5)
+
+    canceled = coordinator.cancel(
+        TENANT_A,
+        case.case_id,
+        canceled_by="reviewer-subject-a",
+        event_key="cancel-after-provider-known",
+    )
+    assert canceled.status is DispatchStatus.CANCELED
+    assert provider.canceled == [attempt.provider_call_reference]
+
+
 def test_stale_provider_submission_claim_closes_for_manual_follow_up() -> None:
     class WorkerCrash(BaseException):
         pass
