@@ -1,8 +1,9 @@
 import { useRef, useState, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, ApiError, newIdempotencyKey } from "../api/client";
+import { api, ApiError, newIdempotencyKey, type SourceMapLocation } from "../api/client";
 import { useAuth } from "./AuthContext";
 import NearLiveReview from "../components/NearLiveReview";
+import SourceLocationMap from "./SourceLocationMap";
 
 const MAX_UPLOAD_BYTES = 512 * 1024 * 1024;
 
@@ -11,6 +12,11 @@ export default function SourcesView() {
   const token = session!.token;
   const tenantId = session!.activeTenantId;
   const queryClient = useQueryClient();
+  const [mappedSource, setMappedSource] = useState<SourceMapLocation | null>(null);
+  const location = useMutation({
+    mutationFn: (sourceId: string) => api.sourceMapLocation(token, sourceId),
+    onSuccess: setMappedSource,
+  });
 
   const sources = useQuery({
     queryKey: ["sources", tenantId],
@@ -126,9 +132,23 @@ export default function SourcesView() {
                 <span className="muted">
                   {source.mode} · {source.status} · retention {source.retention_policy_days}d
                 </span>
+                <button
+                  type="button"
+                  className="ghost source-location-button"
+                  disabled={location.isPending}
+                  onClick={() => location.mutate(source.source_id)}
+                >
+                  Show map location
+                </button>
               </li>
             ))}
           </ul>
+          {location.error instanceof ApiError && (
+            <p role="alert" className="error-banner">
+              {location.error.message}
+            </p>
+          )}
+          {mappedSource && <SourceLocationMap location={mappedSource} />}
         </div>
 
         <div className="panel">

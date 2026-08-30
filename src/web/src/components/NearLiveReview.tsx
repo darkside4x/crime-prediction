@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { motion } from "motion/react";
+import { useQuery } from "@tanstack/react-query";
 import { api, newIdempotencyKey, type NearLiveRun, type PublicCandidate } from "../api/client";
 import { useAuth } from "../console/AuthContext";
 
@@ -26,6 +27,8 @@ export default function NearLiveReview() {
   const [candidates, setCandidates] = useState<CandidateDetection[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busyCandidate, setBusyCandidate] = useState<string | null>(null);
+  const readiness = useQuery({ queryKey: ["ready"], queryFn: api.ready });
+  const captureEnabled = readiness.data?.near_live_capture === "allowlisted_hls";
 
   const activeStage = useMemo(() => stageIndex(run?.stage), [run?.stage]);
 
@@ -49,6 +52,7 @@ export default function NearLiveReview() {
   }, [run?.run_id, run?.state, token]);
 
   async function startCapture() {
+    if (!captureEnabled) return;
     setError(null);
     setCandidates([]);
     try {
@@ -111,10 +115,12 @@ export default function NearLiveReview() {
             type="button"
             className="capture-button"
             onClick={startCapture}
-            disabled={run?.state === "queued" || run?.state === "running"}
+            disabled={!captureEnabled || run?.state === "queued" || run?.state === "running"}
             whileTap={{ scale: 0.97 }}
           >
-            {run?.state === "queued" || run?.state === "running"
+            {!captureEnabled
+              ? "Production camera disabled"
+              : run?.state === "queued" || run?.state === "running"
               ? "Pipeline running…"
               : "Capture 20 seconds"}
           </motion.button>
@@ -150,6 +156,12 @@ export default function NearLiveReview() {
           </div>
         )}
         {error && <div className="pipeline-notice error">{error}</div>}
+        {!captureEnabled && !readiness.isLoading && (
+          <div className="pipeline-notice warning">
+            Public-camera capture is intentionally closed in production. Use the authenticated
+            India MP4 upload above; it follows the same S3 → Reka → human-review pipeline.
+          </div>
+        )}
 
         <div className="candidate-header">
           <div>

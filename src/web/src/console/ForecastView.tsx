@@ -116,6 +116,11 @@ export default function ForecastView() {
               historical baseline in use
             </span>
           )}
+          {metadata.data?.forecast_data === "synthetic_demo" && (
+            <span className="chip chip-warn" title="Synthetic hackathon demonstration data">
+              synthetic demo data
+            </span>
+          )}
           {suppressedCount > 0 && (
             <span className="chip">{suppressedCount} suppressed cells</span>
           )}

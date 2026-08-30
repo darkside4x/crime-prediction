@@ -39,6 +39,7 @@ export interface Metadata {
   categories: string[];
   h3_resolution: number;
   forecast_window_minutes: number;
+  forecast_data: "operational" | "synthetic_demo";
   limitations: string[];
 }
 
@@ -56,6 +57,7 @@ export interface Readiness {
   video_service: string;
   near_live_capture: string;
   forecast_models: string;
+  forecast_data: "operational" | "synthetic_demo";
 }
 
 export interface CopilotInsight {
@@ -89,6 +91,14 @@ export interface NearLiveRun {
 export type PublicCandidate = Omit<RestrictedCandidateDetection, "evidence_ref"> & {
   evidence_available: boolean;
 };
+
+export interface SourceMapLocation {
+  source_id: string;
+  source_name: string;
+  cell_id: string;
+  h3_resolution: number;
+  precision: "h3_area";
+}
 
 export type PublicSource = Pick<
   CameraSource,
@@ -169,6 +179,11 @@ export const api = {
     ),
   metadata: (token: string) => request<Metadata>("/v1/metadata", token),
   sources: (token: string) => request<{ items: PublicSource[] }>("/v1/sources", token),
+  sourceMapLocation: (token: string, sourceId: string) =>
+    request<SourceMapLocation>(
+      `/v1/sources/${encodeURIComponent(sourceId)}/map-location`,
+      token,
+    ),
   createRecordedSource: (token: string, body: RecordedSourceCreate, idempotencyKey: string) =>
     request<PublicSource>("/v1/sources/recorded-video", token, {
       method: "POST",

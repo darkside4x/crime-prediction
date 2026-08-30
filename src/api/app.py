@@ -62,6 +62,7 @@ LIMITATIONS = [
 CATEGORIES = ("property", "violence", "public_order", "traffic_safety")
 DEMO_HLS_SOURCE_ID = "20000000-0000-4000-8000-000000000099"
 DEMO_HLS_LOCATION_REF = "secret://demo-public-hls/louisiana-dot-i20/location"
+DEMO_RECORDED_LOCATION_REF = "secret://tenant/demo-one/cameras/entrance/location"
 
 
 class RecordedSourceCreate(BaseModel):
@@ -120,9 +121,13 @@ class _DemoLocationResolver:
     """Restricted demo coordinates; values never cross the public API boundary."""
 
     def resolve(self, tenant_id: str, location_ref: str) -> dict[str, float]:
-        if location_ref != DEMO_HLS_LOCATION_REF:
-            raise VideoPipelineError("location_unavailable", "Source location could not be resolved")
-        return {"latitude": 32.46091, "longitude": -93.831}
+        if location_ref == DEMO_HLS_LOCATION_REF:
+            return {"latitude": 32.46091, "longitude": -93.831}
+        if location_ref == DEMO_RECORDED_LOCATION_REF:
+            return {"latitude": 12.9716, "longitude": 77.5946}
+        raise VideoPipelineError(
+            "location_unavailable", "Source location could not be resolved"
+        )
 
 
 def _public_run(run: dict[str, Any]) -> dict[str, Any]:
@@ -430,8 +435,15 @@ def create_app(
                 else "deterministic_fake"
             ),
             "video_service": "connected",
-            "near_live_capture": "allowlisted_hls",
+            "near_live_capture": (
+                "disabled" if production else "allowlisted_hls"
+            ),
             "forecast_models": "historical_fallback_only",
+            "forecast_data": (
+                "synthetic_demo"
+                if active_settings.synthetic_demo_forecasts
+                else "operational"
+            ),
         }
 
     @app.get("/v1/me/tenants")
@@ -482,6 +494,11 @@ def create_app(
             "categories": list(CATEGORIES),
             "h3_resolution": demo_data.H3_RESOLUTION,
             "forecast_window_minutes": 360,
+            "forecast_data": (
+                "synthetic_demo"
+                if active_settings.synthetic_demo_forecasts
+                else "operational"
+            ),
             "limitations": LIMITATIONS,
         }
 
@@ -493,6 +510,37 @@ def create_app(
             for source_id in source_ids
         ]
         return {"items": [_public_source(item) for item in records]}
+
+    @app.get("/v1/sources/{source_id}/map-location")
+    def source_map_location(
+        source_id: uuid.UUID,
+        ctx: TenantContext = Depends(require_tenant),
+    ) -> dict[str, Any]:
+        source = app.state.video_service.store.get_source(
+            ctx.tenant_id, str(source_id)
+        )
+        try:
+            location = app.state.video_service.location_resolver.resolve(
+                ctx.tenant_id, source["location_ref"]
+            )
+        except VideoPipelineError as error:
+            raise problem(
+                404,
+                "source_location_unavailable",
+                "A map location has not been configured for this source",
+            ) from error
+        import h3
+
+        cell_id = h3.latlng_to_cell(
+            location["latitude"], location["longitude"], demo_data.H3_RESOLUTION
+        )
+        return {
+            "source_id": str(source_id),
+            "source_name": source["name"],
+            "cell_id": cell_id,
+            "h3_resolution": demo_data.H3_RESOLUTION,
+            "precision": "h3_area",
+        }
 
     def create_source_record(
         body: RecordedSourceCreate,
@@ -993,9 +1041,13 @@ def create_app(
         items = app.state.forecast_orchestrator.repository.list_window(
             ctx.tenant_id, start_text, category
         )
-        if not items and not production:
+        if not items and (
+            not production or active_settings.synthetic_demo_forecasts
+        ):
             measured_coverage = (
-                coverage_provider(ctx.tenant_id, start_text)
+                1.0
+                if active_settings.synthetic_demo_forecasts
+                else coverage_provider(ctx.tenant_id, start_text)
                 if coverage_provider is not None
                 else 0.0
             )

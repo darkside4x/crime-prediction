@@ -92,6 +92,18 @@ def test_source_mutations_require_idempotency_and_reject_client_tenant(client):
     assert smuggled.json()["code"] == "request_validation_failed"
 
 
+def test_source_map_location_returns_h3_area_without_raw_coordinates(client):
+    response = client.get(
+        "/v1/sources/20000000-0000-4000-8000-000000000001/map-location",
+        headers=ONE,
+    )
+    assert response.status_code == 200
+    assert response.json()["cell_id"] == "8860145b49fffff"
+    assert response.json()["precision"] == "h3_area"
+    assert "latitude" not in response.text
+    assert "longitude" not in response.text
+
+
 def test_forecast_endpoint_is_bounded_schema_valid_and_tenant_scoped(client):
     window = _future_window()
     response = client.get(
@@ -197,6 +209,25 @@ def test_readiness_does_not_treat_an_unverified_reka_key_as_ready():
     assert response.json()["status"] == "degraded"
     assert response.json()["reka_chat"] == "configured_unverified"
     assert response.json()["reka_vision"] == "configured_unverified"
+
+
+def test_synthetic_demo_mode_is_explicitly_labelled_and_unsuppressed():
+    client = TestClient(
+        create_app(
+            provider=reka.FakeRekaProvider(),
+            settings=Settings(synthetic_demo_forecasts=True),
+        )
+    )
+    assert client.get("/ready").json()["forecast_data"] == "synthetic_demo"
+    assert client.get("/v1/metadata", headers=ONE).json()["forecast_data"] == "synthetic_demo"
+    window = _future_window()
+    response = client.get(
+        f"/v1/forecasts?window_start={window}&category=property&page_size=5",
+        headers=ONE,
+    )
+    assert response.status_code == 200
+    assert {item["coverage_ratio"] for item in response.json()["items"]} == {1.0}
+    assert any(not item["suppression"]["suppressed"] for item in response.json()["items"])
 
 
 def test_production_rejects_the_development_authentication_provider():

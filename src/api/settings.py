@@ -46,6 +46,7 @@ class Settings:
     cors_origins: tuple[str, ...] = ("http://localhost:5173",)
     runtime_dir: Path = Path("data/runtime")
     near_live_capture_seconds: int = 20
+    synthetic_demo_forecasts: bool = False
     reka_index_poll_seconds: float = 3.0
     reka_index_max_polls: int = 20
     oidc_issuer: str = ""
@@ -106,6 +107,7 @@ class Settings:
             near_live_capture_seconds=int(
                 os.environ.get("NEAR_LIVE_CAPTURE_SECONDS", "20")
             ),
+            synthetic_demo_forecasts=_boolean_value("SYNTHETIC_DEMO_FORECASTS"),
             reka_index_poll_seconds=float(
                 os.environ.get("REKA_INDEX_POLL_SECONDS", "3")
             ),
