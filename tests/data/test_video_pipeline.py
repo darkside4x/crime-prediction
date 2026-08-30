@@ -379,6 +379,96 @@ def test_reka_schema_repair_remains_fail_closed() -> None:
     }
 
 
+def test_reka_repairs_invalid_candidate_values_to_empty_result() -> None:
+    client = RekaVisionProvider("rk-test-only")
+    responses = iter(
+        [
+            {
+                "chat_response":
+                    '[{"offset_seconds":0,"category":"no_incident","confidence":1}]'
+            },
+            {"chat_response": "[]"},
+        ]
+    )
+
+    def fake_request(method: str, path: str, payload: dict | None = None) -> dict:
+        return next(responses)
+
+    client._json_request = fake_request  # type: ignore[method-assign]
+    assert client.propose_candidates("video-test", prompt_version="candidate-v2") == []
+
+
+def test_reka_unwraps_single_list_container_before_strict_validation() -> None:
+    client = RekaVisionProvider("rk-test-only")
+
+    def fake_request(method: str, path: str, payload: dict | None = None) -> dict:
+        return {
+            "chat_response": (
+                '{"result":[{"offset_seconds":2,"category":"traffic_safety",'
+                '"confidence":0.75}]}'
+            )
+        }
+
+    client._json_request = fake_request  # type: ignore[method-assign]
+    assert client.propose_candidates("video-test", prompt_version="candidate-v2") == [
+        {"offset_seconds": 2, "category": "traffic_safety", "confidence": 0.75}
+    ]
+
+
+def test_short_video_uses_multimodal_chat_instead_of_indexed_qa(
+    tmp_path: Path,
+) -> None:
+    client = RekaVisionProvider("rk-test-only")
+    video = tmp_path / "short.mp4"
+    video.write_bytes(b"bounded-test-video")
+    requests: list[dict] = []
+
+    def fake_chat_request(payload: dict) -> dict:
+        requests.append(payload)
+        return {
+            "choices": [
+                {"message": {"content": "CLEAR"}}
+            ]
+        }
+
+    client._chat_json_request = fake_chat_request  # type: ignore[method-assign]
+    assert client.propose_candidates(
+        "unused-indexed-id",
+        prompt_version="candidate-v2",
+        media_path=video,
+    ) == []
+    content = requests[0]["messages"][0]["content"]
+    assert content[0]["type"] == "video_url"
+    assert content[0]["video_url"]["url"].startswith("data:video/mp4;base64,")
+    assert "bounded-test-video" not in content[0]["video_url"]["url"]
+    assert requests[0]["temperature"] == 0
+    assert requests[0]["max_tokens"] == 8
+
+
+def test_short_video_extracts_candidates_only_after_incident_screen(
+    tmp_path: Path,
+) -> None:
+    client = RekaVisionProvider("rk-test-only")
+    video = tmp_path / "short.mp4"
+    video.write_bytes(b"bounded-test-video")
+    responses = iter(["INCIDENT", "]"])
+    requests: list[dict] = []
+
+    def fake_chat_request(payload: dict) -> dict:
+        requests.append(payload)
+        return {"choices": [{"message": {"content": next(responses)}}]}
+
+    client._chat_json_request = fake_chat_request  # type: ignore[method-assign]
+    assert client.propose_candidates(
+        "unused-indexed-id",
+        prompt_version="candidate-v2",
+        media_path=video,
+    ) == []
+    assert len(requests) == 2
+    assert requests[1]["messages"][1] == {"role": "assistant", "content": "["}
+    assert requests[1]["max_tokens"] == 256
+
+
 @pytest.mark.parametrize(
     ("error", "expected_state"),
     [

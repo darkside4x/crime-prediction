@@ -46,6 +46,9 @@ class PlatformSettings:
     aws_region: str
     reka_api_key: str = field(repr=False)
     reka_vision_base_url: str
+    reka_chat_base_url: str
+    reka_model: str
+    reka_video_model: str
     worker_lease_seconds: int
     restricted_spool_root: Path
 
@@ -79,6 +82,11 @@ class PlatformSettings:
             reka_vision_base_url=os.getenv(
                 "REKA_VISION_BASE_URL", "https://vision-agent.api.reka.ai"
             ),
+            reka_chat_base_url=os.getenv(
+                "REKA_CHAT_BASE_URL", "https://api.reka.ai/v1"
+            ),
+            reka_model=os.getenv("REKA_MODEL", "reka-flash-3"),
+            reka_video_model=os.getenv("REKA_VIDEO_MODEL", "reka-edge-2603"),
             worker_lease_seconds=int(os.getenv("VIDEO_WORKER_LEASE_SECONDS", "120")),
             restricted_spool_root=Path(
                 os.getenv("VIDEO_SPOOL_ROOT", "/var/lib/crime-video-spool")
@@ -104,6 +112,8 @@ class PlatformSettings:
         settings = cls(**values)
         if not settings.reka_vision_base_url.startswith("https://"):
             raise ValueError("REKA_VISION_BASE_URL must use HTTPS")
+        if not settings.reka_chat_base_url.startswith("https://"):
+            raise ValueError("REKA_CHAT_BASE_URL must use HTTPS")
         if not 30 <= settings.worker_lease_seconds <= 43200:
             raise ValueError("VIDEO_WORKER_LEASE_SECONDS must be between 30 and 43200")
         if settings.media_bucket_owner is not None and (
@@ -170,7 +180,10 @@ def create_platform_runtime(
         visibility_seconds=settings.worker_lease_seconds,
     )
     provider = RekaVisionProvider(
-        settings.reka_api_key, base_url=settings.reka_vision_base_url
+        settings.reka_api_key,
+        base_url=settings.reka_vision_base_url,
+        chat_base_url=settings.reka_chat_base_url,
+        chat_model=settings.reka_video_model,
     )
     service = VideoPipelineService(
         video_store,

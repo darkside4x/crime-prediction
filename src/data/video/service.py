@@ -451,9 +451,24 @@ class VideoPipelineService:
                     "Video indexing is not complete",
                     retryable=True,
                 )
-            proposals = self.provider.propose_candidates(
-                mapping["reka_video_id"], prompt_version=self.prompt_version
-            )
+            storage_ref = self._asset_storage_ref(tenant_id, asset_id)
+            duration_seconds = (
+                _parse_utc(asset["captured_end"], "captured_end")
+                - _parse_utc(asset["captured_start"], "captured_start")
+            ).total_seconds()
+            if duration_seconds <= 30:
+                with self.media_storage.materialize(
+                    storage_ref, tenant_id=tenant_id, asset_id=asset_id
+                ) as local_path:
+                    proposals = self.provider.propose_candidates(
+                        mapping["reka_video_id"],
+                        prompt_version=self.prompt_version,
+                        media_path=local_path,
+                    )
+            else:
+                proposals = self.provider.propose_candidates(
+                    mapping["reka_video_id"], prompt_version=self.prompt_version
+                )
             if not isinstance(proposals, list) or len(proposals) > 100:
                 raise VideoPipelineError(
                     "reka_output_invalid",
@@ -695,11 +710,21 @@ class VideoPipelineService:
             or offset < 0
         ):
             raise VideoPipelineError(
-                "reka_output_invalid", "Candidate timestamp offset is invalid"
+                "reka_output_invalid",
+                "Candidate timestamp offset is invalid",
+                safe_diagnostics={
+                    "proposal_index": proposal_index,
+                    "invalid_fields": ["offset_seconds"],
+                },
             )
         if category not in ALLOWED_CATEGORIES:
             raise VideoPipelineError(
-                "reka_output_invalid", "Candidate category is invalid"
+                "reka_output_invalid",
+                "Candidate category is invalid",
+                safe_diagnostics={
+                    "proposal_index": proposal_index,
+                    "invalid_fields": ["category"],
+                },
             )
         if (
             isinstance(confidence, bool)
@@ -708,14 +733,24 @@ class VideoPipelineService:
             or not 0 <= confidence <= 1
         ):
             raise VideoPipelineError(
-                "reka_output_invalid", "Candidate confidence is invalid"
+                "reka_output_invalid",
+                "Candidate confidence is invalid",
+                safe_diagnostics={
+                    "proposal_index": proposal_index,
+                    "invalid_fields": ["confidence"],
+                },
             )
         start = _parse_utc(asset["captured_start"], "captured_start")
         end = _parse_utc(asset["captured_end"], "captured_end")
         occurred = start + timedelta(seconds=float(offset))
         if occurred > end:
             raise VideoPipelineError(
-                "reka_output_invalid", "Candidate timestamp falls outside the video"
+                "reka_output_invalid",
+                "Candidate timestamp falls outside the video",
+                safe_diagnostics={
+                    "proposal_index": proposal_index,
+                    "invalid_fields": ["offset_seconds"],
+                },
             )
         occurred_text = _utc(occurred)
         semantic_key = f"{asset['tenant_id']}:{asset['asset_id']}:{remote_id}:{self.prompt_version}:{occurred_text}:{category}"

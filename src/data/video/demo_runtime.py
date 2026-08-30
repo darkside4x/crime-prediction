@@ -72,6 +72,8 @@ def create_demo_runtime() -> DemoRuntime:
     provider = RekaVisionProvider(
         settings.reka_api_key,
         base_url=settings.reka_vision_base_url,
+        chat_base_url=settings.reka_chat_base_url,
+        chat_model=settings.reka_video_model,
         timeout_seconds=settings.reka_timeout_seconds,
     )
     service = VideoPipelineService(

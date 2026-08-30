@@ -12,7 +12,12 @@ def _validated_safe_diagnostics(value: dict[str, Any] | None) -> dict[str, Any]:
     """Accept only bounded, value-free diagnostics at the worker boundary."""
     if value is None:
         return {}
-    if set(value) - {"proposal_index", "missing_fields", "unexpected_field_count"}:
+    if set(value) - {
+        "proposal_index",
+        "missing_fields",
+        "invalid_fields",
+        "unexpected_field_count",
+    }:
         raise ValueError("Unsupported safe diagnostic field")
     result: dict[str, Any] = {}
     if "proposal_index" in value:
@@ -30,6 +35,14 @@ def _validated_safe_diagnostics(value: dict[str, Any] | None) -> dict[str, Any]:
         ):
             raise ValueError("missing_fields must contain only allowlisted field names")
         result["missing_fields"] = sorted(set(missing_fields))
+    if "invalid_fields" in value:
+        invalid_fields = value["invalid_fields"]
+        if not isinstance(invalid_fields, list) or any(
+            not isinstance(field, str) or field not in _CANDIDATE_FIELDS
+            for field in invalid_fields
+        ):
+            raise ValueError("invalid_fields must contain only allowlisted field names")
+        result["invalid_fields"] = sorted(set(invalid_fields))
     if "unexpected_field_count" in value:
         count = value["unexpected_field_count"]
         if isinstance(count, bool) or not isinstance(count, int) or not 0 <= count <= 100:

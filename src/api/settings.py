@@ -40,6 +40,7 @@ class Settings:
     reka_chat_base_url: str = "https://api.reka.ai/v1"
     reka_vision_base_url: str = "https://vision-agent.api.reka.ai"
     reka_model: str = "reka-flash-3"
+    reka_video_model: str = "reka-edge-2603"
     reka_prompt_version: str = "1.0.0"
     reka_timeout_seconds: float = 20.0
     reka_provider_verified: bool = False
@@ -100,6 +101,9 @@ class Settings:
                 "REKA_VISION_BASE_URL", "https://vision-agent.api.reka.ai"
             ).strip(),
             reka_model=os.environ.get("REKA_MODEL", "reka-flash-3").strip(),
+            reka_video_model=os.environ.get(
+                "REKA_VIDEO_MODEL", "reka-edge-2603"
+            ).strip(),
             reka_prompt_version=os.environ.get("REKA_PROMPT_VERSION", "1.0.0").strip(),
             reka_timeout_seconds=float(os.environ.get("REKA_TIMEOUT_SECONDS", "20")),
             reka_provider_verified=_boolean_value("REKA_PROVIDER_VERIFIED"),

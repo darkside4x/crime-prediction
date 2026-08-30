@@ -169,7 +169,14 @@ def _durable_run(
     """Collapse a durable upload/index/analyze chain into one public run."""
     operation_order = {"upload": 0, "index": 1, "analyze": 2, "delete": 3}
     jobs = store.jobs_for_asset(tenant_id, root_job["asset_id"])
-    selected = max(jobs or [root_job], key=lambda item: operation_order[item["operation"]])
+    selected = max(
+        jobs or [root_job],
+        key=lambda item: (
+            operation_order[item["operation"]],
+            item["created_at"],
+            item["job_id"],
+        ),
+    )
     state = selected["state"]
     if state == "retry":
         state = "queued"
@@ -435,6 +442,8 @@ def create_app(
             RekaVisionProvider(
                 active_settings.reka_api_key,
                 base_url=active_settings.reka_vision_base_url,
+                chat_base_url=active_settings.reka_chat_base_url,
+                chat_model=active_settings.reka_video_model,
                 timeout_seconds=active_settings.reka_timeout_seconds,
             )
             if active_settings.reka_configured

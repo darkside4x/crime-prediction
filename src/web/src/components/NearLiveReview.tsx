@@ -120,6 +120,7 @@ export default function NearLiveReview() {
   }, [run?.run_id, run?.asset_id, stage, token]);
 
   const canAnalyze = source?.analysis_mode === "reka_vision";
+  const pipelineRunning = run?.state === "queued" || run?.state === "running" || run?.state === "retry";
   const canReanalyze =
     canAnalyze
     && (session?.role === "tenant_admin" || session?.role === "platform_operator")
@@ -128,9 +129,10 @@ export default function NearLiveReview() {
   const statusText = useMemo(() => {
     if (capturing) return "Capturing…";
     if (predictionWindow) return "Forecast updated";
+    if (stage >= 4 && candidates.length === 0) return "Analysis complete — no incidents proposed";
     if (run) return run.stage.replaceAll("_", " ");
     return "Ready";
-  }, [capturing, predictionWindow, run]);
+  }, [candidates.length, capturing, predictionWindow, run, stage]);
 
   async function startCapture() {
     setError(null);
@@ -224,8 +226,8 @@ export default function NearLiveReview() {
           <h1>WATCH. CAPTURE. <span>VERIFY.</span> PREDICT.</h1>
           <p>Live source → Reka → human review → forecast.</p>
         </div>
-        <button className="capture-button" type="button" onClick={startCapture} disabled={capturing || !canAnalyze}>
-          {capturing ? "Capturing live segment…" : "Analyze next 12 seconds"}
+        <button className="capture-button" type="button" onClick={startCapture} disabled={capturing || pipelineRunning || !canAnalyze}>
+          {capturing || pipelineRunning ? "Analysis in progress…" : "Analyze next 12 seconds"}
         </button>
       </div>
 
@@ -278,7 +280,7 @@ export default function NearLiveReview() {
         <b>{candidates.length.toString().padStart(2, "0")}</b>
       </div>
       <div className="candidate-list">
-        {stage >= 4 && candidates.length === 0 && <div className="candidate-empty">No candidate in this segment.</div>}
+        {stage >= 4 && candidates.length === 0 && <div className="candidate-empty">Analysis complete. Reka proposed no qualifying incident in this segment.</div>}
         {stage < 4 && <div className="candidate-empty">Candidates appear after analysis.</div>}
         {candidates.map((candidate) => (
           <motion.article className="candidate-row" key={candidate.detection_id} layout>

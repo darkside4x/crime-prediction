@@ -22,12 +22,15 @@ REKA_API_KEY=<one server-side Reka key>
 REKA_VISION_BASE_URL=https://vision-agent.api.reka.ai
 REKA_CHAT_BASE_URL=https://api.reka.ai/v1
 REKA_MODEL=reka-flash-3
+REKA_VIDEO_MODEL=reka-edge-2603
 REKA_VIDEO_PROMPT_VERSION=1.0.0
 REKA_INSIGHT_PROMPT_VERSION=1.0.0
 REKA_TIMEOUT_SECONDS=120
 ```
 
 There is no separate `REKA_VISION_API_KEY` in this repository. The Vision API receives `REKA_API_KEY` through the `X-Api-Key` request header. The Chat API receives the same secret through its supported server-side authentication mechanism.
+
+Bounded clips of 30 seconds or less are sent as one `video_url` data payload to the multimodal Chat API using `REKA_VIDEO_MODEL`, so the complete clip remains available to the model. A strict `CLEAR`/`INCIDENT` screen maps validated routine or ambiguous footage to an empty candidate list; only validated `INCIDENT` footage enters candidate extraction. Malformed screening or candidate output still fails closed. Longer recordings retain the indexed Vision Q&A path. Both use the same server-side `REKA_API_KEY` and the same fail-closed candidate contract.
 
 The configured Chat model must be selected from the authenticated account's
 `GET /v1/models` response. As of the Review 2 deployment, `reka-flash-3` is the
