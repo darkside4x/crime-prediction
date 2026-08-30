@@ -179,7 +179,6 @@ class S3MediaStorage:
                 ExtraArgs={
                     "ServerSideEncryption": "aws:kms",
                     "SSEKMSKeyId": self.kms_key_id,
-                    "BucketKeyEnabled": True,
                     "ContentType": "video/mp4",
                     "Metadata": {"sha256": sha256},
                     **self._owner_args(),
