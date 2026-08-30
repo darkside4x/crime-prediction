@@ -581,7 +581,6 @@ def test_reka_candidate_json_parse_failure_does_not_retain_provider_value() -> N
         RekaVisionProvider._decode_candidate_json(
             provider_value,
             stage="short_video_candidate",
-            assistant_prefilled=True,
         )
     assert caught.value.code == "reka_output_invalid"
     assert caught.value.__cause__ is None
@@ -601,7 +600,6 @@ def test_reka_candidate_json_recursion_error_is_sanitized(
         RekaVisionProvider._decode_candidate_json(
             "[]",
             stage="short_video_candidate",
-            assistant_prefilled=True,
         )
     assert caught.value.code == "reka_output_invalid"
     assert caught.value.safe_diagnostics == {
@@ -706,7 +704,7 @@ def test_short_video_uses_multimodal_chat_instead_of_indexed_qa(
             "choices": [
                 {
                     "finish_reason": "stop",
-                    "message": {"role": "assistant", "content": "]"},
+                    "message": {"role": "assistant", "content": "[]"},
                 }
             ]
         }
@@ -723,7 +721,8 @@ def test_short_video_uses_multimodal_chat_instead_of_indexed_qa(
     assert "bounded-test-video" not in content[0]["video_url"]
     assert requests[0]["temperature"] == 0
     assert requests[0]["max_tokens"] == 4096
-    assert requests[0]["messages"][1] == {"role": "assistant", "content": "["}
+    assert len(requests[0]["messages"]) == 1
+    assert requests[0]["messages"][0]["role"] == "user"
     candidate_prompt = content[-1]["text"]
     assert "building or structural" in candidate_prompt
     assert "even when no person is visible" in candidate_prompt
@@ -799,7 +798,7 @@ def test_short_video_retries_frame_mismatch_with_normalized_media(
                     "message": {
                         "role": "assistant",
                         "content": (
-                            'assistant: {"offset_seconds":0,"category":"other",'
+                            '[{"offset_seconds":0,"category":"other",'
                             '"confidence":0.95}]'
                         ),
                     },
@@ -856,7 +855,7 @@ def test_short_video_empty_candidate_array_needs_no_binary_screen(
                     "finish_reason": "stop",
                     "message": {
                         "role": "assistant",
-                        "content": "]",
+                        "content": "[]",
                     },
                 }
             ]
@@ -869,7 +868,8 @@ def test_short_video_empty_candidate_array_needs_no_binary_screen(
         media_path=video,
     ) == []
     assert len(requests) == 1
-    assert requests[0]["messages"][1] == {"role": "assistant", "content": "["}
+    assert len(requests[0]["messages"]) == 1
+    assert requests[0]["messages"][0]["role"] == "user"
     assert requests[0]["max_tokens"] == 4096
     prompt = requests[0]["messages"][0]["content"][-1]["text"]
     assert "at most 25 candidate objects" in prompt
@@ -878,11 +878,11 @@ def test_short_video_empty_candidate_array_needs_no_binary_screen(
 @pytest.mark.parametrize(
     "content",
     [
-        [{"type": "text", "text": "]"}],
-        {"type": "output_text", "text": "]"},
+        [{"type": "text", "text": "[]"}],
+        {"type": "output_text", "text": "[]"},
         [
             {"type": "output_text", "text": ""},
-            {"type": "text", "text": "]"},
+            {"type": "text", "text": "[]"},
         ],
     ],
 )
@@ -1027,7 +1027,7 @@ def test_short_video_rejects_non_assistant_or_non_stop_completions(
     }
 
 
-def test_short_video_prefill_accepts_a_complete_candidate_array(
+def test_short_video_accepts_a_complete_candidate_array(
     tmp_path: Path,
 ) -> None:
     client = RekaVisionProvider("rk-test-only")
@@ -1066,7 +1066,7 @@ def test_short_video_prefill_accepts_a_complete_candidate_array(
     ]
 
 
-def test_short_video_prefill_accepts_exact_reka_assistant_role_marker(
+def test_short_video_rejects_reka_assistant_role_marker(
     tmp_path: Path,
 ) -> None:
     client = RekaVisionProvider("rk-test-only")
@@ -1090,14 +1090,20 @@ def test_short_video_prefill_accepts_exact_reka_assistant_role_marker(
         }
 
     client._chat_json_request = fake_chat_request  # type: ignore[method-assign]
-    assert client.propose_candidates(
-        "unused-indexed-id",
-        prompt_version="candidate-v2",
-        media_path=video,
-    ) == [{"offset_seconds": 0, "category": "other", "confidence": 0.94}]
+    with pytest.raises(VideoPipelineError) as caught:
+        client.propose_candidates(
+            "unused-indexed-id",
+            prompt_version="candidate-v2",
+            media_path=video,
+        )
+    assert caught.value.code == "reka_output_invalid"
+    assert caught.value.safe_diagnostics == {
+        "format_stage": "short_video_candidate",
+        "format_reason": "json_format_invalid",
+    }
 
 
-def test_short_video_prefill_accepts_exact_role_marker_then_full_json_fence(
+def test_short_video_rejects_role_marker_before_full_json_fence(
     tmp_path: Path,
 ) -> None:
     client = RekaVisionProvider("rk-test-only")
@@ -1122,11 +1128,17 @@ def test_short_video_prefill_accepts_exact_role_marker_then_full_json_fence(
         }
 
     client._chat_json_request = fake_chat_request  # type: ignore[method-assign]
-    assert client.propose_candidates(
-        "unused-indexed-id",
-        prompt_version="candidate-v2",
-        media_path=video,
-    ) == [{"offset_seconds": 0, "category": "other", "confidence": 0.92}]
+    with pytest.raises(VideoPipelineError) as caught:
+        client.propose_candidates(
+            "unused-indexed-id",
+            prompt_version="candidate-v2",
+            media_path=video,
+        )
+    assert caught.value.code == "reka_output_invalid"
+    assert caught.value.safe_diagnostics == {
+        "format_stage": "short_video_candidate",
+        "format_reason": "json_format_invalid",
+    }
 
 
 @pytest.mark.parametrize(
@@ -1137,9 +1149,10 @@ def test_short_video_prefill_accepts_exact_role_marker_then_full_json_fence(
             'assistant: explanation: {"offset_seconds":0,"category":"other",'
             '"confidence":0.9}]'
         ),
+        'human { "offset_seconds": 0, "category": "traffic_safety" }\n\n]\n\n',
     ],
 )
-def test_short_video_prefill_rejects_unallowlisted_role_or_prose_wrappers(
+def test_short_video_rejects_unallowlisted_role_or_prose_wrappers(
     tmp_path: Path,
     content: str,
 ) -> None:
@@ -1171,7 +1184,52 @@ def test_short_video_prefill_rejects_unallowlisted_role_or_prose_wrappers(
     }
 
 
-def test_short_video_prefill_accepts_a_complete_wrapped_candidate_array(
+def test_short_video_repairs_chat_role_artifact_without_inventing_fields(
+    tmp_path: Path,
+) -> None:
+    client = RekaVisionProvider("rk-test-only")
+    video = tmp_path / "short.mp4"
+    video.write_bytes(b"bounded-test-video")
+    requests: list[dict] = []
+    responses = iter(
+        [
+            'human { "offset_seconds": 0, "category": "traffic_safety" }\n\n]\n\n',
+            (
+                '[{"offset_seconds":0,"category":"traffic_safety",'
+                '"confidence":0.88}]'
+            ),
+        ]
+    )
+
+    def fake_chat_request(payload: dict) -> dict:
+        requests.append(payload)
+        return {
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "message": {
+                        "role": "assistant",
+                        "content": next(responses),
+                    },
+                }
+            ]
+        }
+
+    client._chat_json_request = fake_chat_request  # type: ignore[method-assign]
+    assert client.propose_candidates(
+        "unused-indexed-id",
+        prompt_version="candidate-v2",
+        media_path=video,
+    ) == [
+        {"offset_seconds": 0, "category": "traffic_safety", "confidence": 0.88}
+    ]
+    assert len(requests) == 2
+    assert all(len(request["messages"]) == 1 for request in requests)
+    assert all(request["messages"][0]["role"] == "user" for request in requests)
+    assert "prior answer did not match" in requests[1]["messages"][0]["content"][-1]["text"]
+
+
+def test_short_video_accepts_a_complete_wrapped_candidate_array(
     tmp_path: Path,
 ) -> None:
     client = RekaVisionProvider("rk-test-only")

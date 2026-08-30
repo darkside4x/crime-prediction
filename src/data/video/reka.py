@@ -58,7 +58,6 @@ _MAX_CHAT_TEXT_CHARS = 16_384
 _MAX_HTTP_RESPONSE_BYTES = 1024 * 1024
 _MAX_PROVIDER_CANDIDATES = 25
 _MAX_NORMALIZED_VIDEO_BYTES = 8 * 1024 * 1024
-_ASSISTANT_CONTINUATION_PREFIX = "assistant:"
 _FRAME_MISMATCH_PATTERN = re.compile(
     r"^Expected [1-9][0-9]{0,3} frames, got [0-9]{1,4} None$"
 )
@@ -600,9 +599,6 @@ class RekaVisionProvider:
                             {"type": "text", "text": prompt},
                         ],
                     },
-                    # Reka's documented assistant-completion mechanism guides
-                    # ordinary Chat models to continue a strict JSON response.
-                    {"role": "assistant", "content": "["},
                 ],
             }
         )
@@ -610,7 +606,6 @@ class RekaVisionProvider:
         return self._decode_candidate_json(
             raw,
             stage="short_video_candidate",
-            assistant_prefilled=True,
         )
 
     def _chat_json_request(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -697,7 +692,6 @@ class RekaVisionProvider:
         raw: Any,
         *,
         stage: str,
-        assistant_prefilled: bool = False,
     ) -> Any:
         if not isinstance(raw, str):
             raise _format_error(
@@ -722,44 +716,7 @@ class RekaVisionProvider:
                 candidate,
                 parse_constant=_reject_nonfinite_json_number,
             )
-        except (json.JSONDecodeError, RecursionError):
-            if assistant_prefilled:
-                continuation = candidate
-                if continuation.startswith(_ASSISTANT_CONTINUATION_PREFIX):
-                    # Reka Chat can echo this exact role marker before
-                    # continuing an assistant-prefilled JSON array. Remove at
-                    # most one anchored, case-sensitive marker; arbitrary
-                    # prose and embedded JSON remain rejected.
-                    continuation = continuation[
-                        len(_ASSISTANT_CONTINUATION_PREFIX) :
-                    ].lstrip()
-                try:
-                    if continuation.startswith("```"):
-                        fenced = _JSON_FENCE_PATTERN.fullmatch(continuation)
-                        if fenced is None:
-                            raise ValueError("invalid JSON fence")
-                        return json.loads(
-                            fenced.group("payload").strip(),
-                            parse_constant=_reject_nonfinite_json_number,
-                        )
-                    return json.loads(
-                        "[" + continuation,
-                        parse_constant=_reject_nonfinite_json_number,
-                    )
-                except (json.JSONDecodeError, RecursionError, ValueError):
-                    raise _format_error(
-                        "reka_output_invalid",
-                        "Reka candidate output was not valid JSON",
-                        stage=stage,
-                        reason="json_format_invalid",
-                    ) from None
-            raise _format_error(
-                "reka_output_invalid",
-                "Reka candidate output was not valid JSON",
-                stage=stage,
-                reason="json_format_invalid",
-            ) from None
-        except ValueError:
+        except (json.JSONDecodeError, RecursionError, ValueError):
             raise _format_error(
                 "reka_output_invalid",
                 "Reka candidate output was not valid JSON",
