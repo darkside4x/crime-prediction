@@ -65,6 +65,17 @@ Resources:
             Condition:
               Bool:
                 kms:GrantIsForAWSResource: "true"
+          - Sid: SnsDeliveryToEncryptedQueues
+            Effect: Allow
+            Principal:
+              Service: sns.amazonaws.com
+            Action:
+              - kms:Decrypt
+              - kms:GenerateDataKey*
+            Resource: "*"
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
 
   PlatformKeyAlias:
     Type: AWS::KMS::Alias
@@ -478,6 +489,39 @@ Resources:
       KmsMasterKeyId: alias/aws/sns
       DisplayName: !Sub "crime-prediction-${EnvironmentName}-alarms"
 
+  AlarmInbox:
+    Type: AWS::SQS::Queue
+    Properties:
+      KmsMasterKeyId: !GetAtt PlatformKey.Arn
+      MessageRetentionPeriod: 1209600
+
+  AlarmInboxPolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues:
+        - !Ref AlarmInbox
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: ReceiveOnlyFromAlarmTopic
+            Effect: Allow
+            Principal:
+              Service: sns.amazonaws.com
+            Action: sqs:SendMessage
+            Resource: !GetAtt AlarmInbox.Arn
+            Condition:
+              ArnEquals:
+                aws:SourceArn: !Ref AlarmTopic
+
+  AlarmInboxSubscription:
+    Type: AWS::SNS::Subscription
+    DependsOn: AlarmInboxPolicy
+    Properties:
+      Endpoint: !GetAtt AlarmInbox.Arn
+      Protocol: sqs
+      RawMessageDelivery: true
+      TopicArn: !Ref AlarmTopic
+
   UploadDlqAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
@@ -587,6 +631,8 @@ Outputs:
     Value: !Ref AppSecurityGroup
   AlarmTopicArn:
     Value: !Ref AlarmTopic
+  AlarmInboxQueueUrl:
+    Value: !Ref AlarmInbox
   DatabaseAddress:
     Value: !GetAtt Database.Endpoint.Address
   DatabaseMasterSecretArn:

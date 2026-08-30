@@ -21,13 +21,16 @@ Parameters:
     Type: String
   ModelRegistryAccessPointId:
     Type: String
+  AlarmTopicArn:
+    Type: String
+    Default: ""
   CloudFrontPrefixListId:
     Type: String
     Default: pl-9aa247f3
-  CreateReviewEndpoint:
+  ReviewEndpointMode:
     Type: String
-    Default: "false"
-    AllowedValues: ["true", "false"]
+    Default: none
+    AllowedValues: [none, cloudfront, apigateway]
   OriginVerifyHeader:
     Type: String
     NoEcho: true
@@ -38,10 +41,10 @@ Parameters:
     AllowedValues: [t3.medium, t3.large, t3.xlarge]
   RepositoryUrl:
     Type: String
-    Default: https://github.com/darkside4x/crime-prediction.git
+    Default: https://github.com/minnhaaaaa/crime-prediction.git
   RepositoryBranch:
     Type: String
-    Default: sakthi/security-scale
+    Default: main
   DockerComposeVersion:
     Type: String
     Default: v5.5.0
@@ -54,25 +57,61 @@ Parameters:
     Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
 
 Conditions:
-  CreateReviewEndpointCondition: !Equals [!Ref CreateReviewEndpoint, "true"]
+  CreateReviewEndpointCondition: !Not [!Equals [!Ref ReviewEndpointMode, none]]
+  UseCloudFront: !Equals [!Ref ReviewEndpointMode, cloudfront]
+  UseApiGateway: !Equals [!Ref ReviewEndpointMode, apigateway]
+  AlarmTopicConfigured: !Not [!Equals [!Ref AlarmTopicArn, ""]]
 
 Resources:
   LoadBalancerSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Condition: CreateReviewEndpointCondition
     Properties:
-      GroupDescription: Accept origin traffic only from the CloudFront managed prefix list
+      GroupDescription: Accept traffic only from the selected managed HTTPS ingress
       VpcId: !Ref VpcId
-      SecurityGroupIngress:
-        - IpProtocol: tcp
-          FromPort: 80
-          ToPort: 80
-          SourcePrefixListId: !Ref CloudFrontPrefixListId
       SecurityGroupEgress:
         - IpProtocol: tcp
           FromPort: 8080
           ToPort: 8080
           DestinationSecurityGroupId: !Ref AppSecurityGroupId
+
+  CloudFrontLoadBalancerIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: UseCloudFront
+    Properties:
+      GroupId: !Ref LoadBalancerSecurityGroup
+      IpProtocol: tcp
+      FromPort: 80
+      ToPort: 80
+      SourcePrefixListId: !Ref CloudFrontPrefixListId
+
+  ApiGatewayVpcLinkSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Condition: UseApiGateway
+    Properties:
+      GroupDescription: Review API Gateway VPC link egress
+      VpcId: !Ref VpcId
+      SecurityGroupEgress: []
+
+  ApiGatewayVpcLinkEgress:
+    Type: AWS::EC2::SecurityGroupEgress
+    Condition: UseApiGateway
+    Properties:
+      GroupId: !Ref ApiGatewayVpcLinkSecurityGroup
+      IpProtocol: tcp
+      FromPort: 80
+      ToPort: 80
+      DestinationSecurityGroupId: !Ref LoadBalancerSecurityGroup
+
+  ApiGatewayLoadBalancerIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: UseApiGateway
+    Properties:
+      GroupId: !Ref LoadBalancerSecurityGroup
+      IpProtocol: tcp
+      FromPort: 80
+      ToPort: 80
+      SourceSecurityGroupId: !Ref ApiGatewayVpcLinkSecurityGroup
 
   AppIngressFromLoadBalancer:
     Type: AWS::EC2::SecurityGroupIngress
@@ -170,7 +209,7 @@ Resources:
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
     Condition: CreateReviewEndpointCondition
     Properties:
-      Scheme: internet-facing
+      Scheme: !If [UseCloudFront, internet-facing, internal]
       SecurityGroups:
         - !Ref LoadBalancerSecurityGroup
       Subnets:
@@ -178,9 +217,9 @@ Resources:
         - !Ref PublicSubnetTwo
       Type: application
 
-  Listener:
+  CloudFrontListener:
     Type: AWS::ElasticLoadBalancingV2::Listener
-    Condition: CreateReviewEndpointCondition
+    Condition: UseCloudFront
     Properties:
       DefaultActions:
         - Type: fixed-response
@@ -194,7 +233,7 @@ Resources:
 
   VerifiedOriginRule:
     Type: AWS::ElasticLoadBalancingV2::ListenerRule
-    Condition: CreateReviewEndpointCondition
+    Condition: UseCloudFront
     Properties:
       Actions:
         - Type: forward
@@ -205,12 +244,23 @@ Resources:
             HttpHeaderName: X-Origin-Verify
             Values:
               - !Ref OriginVerifyHeader
-      ListenerArn: !Ref Listener
+      ListenerArn: !Ref CloudFrontListener
       Priority: 1
+
+  ApiGatewayListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Condition: UseApiGateway
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 80
+      Protocol: HTTP
 
   ReviewDistribution:
     Type: AWS::CloudFront::Distribution
-    Condition: CreateReviewEndpointCondition
+    Condition: UseCloudFront
     Properties:
       DistributionConfig:
         Comment: !Sub "Crime prediction ${EnvironmentName} TLS review endpoint"
@@ -240,9 +290,85 @@ Resources:
           CloudFrontDefaultCertificate: true
           MinimumProtocolVersion: TLSv1.2_2021
 
+  ReviewApiLogGroup:
+    Type: AWS::Logs::LogGroup
+    Condition: UseApiGateway
+    Properties:
+      LogGroupName: !Sub "/aws/apigateway/crime-prediction-${EnvironmentName}"
+      RetentionInDays: 14
+
+  ReviewApi:
+    Type: AWS::ApiGatewayV2::Api
+    Condition: UseApiGateway
+    Properties:
+      Name: !Sub "crime-prediction-${EnvironmentName}"
+      Description: TLS review endpoint for the crime prediction application
+      DisableExecuteApiEndpoint: false
+      ProtocolType: HTTP
+      Tags:
+        application: crime-prediction
+        environment: !Ref EnvironmentName
+
+  ReviewVpcLink:
+    Type: AWS::ApiGatewayV2::VpcLink
+    Condition: UseApiGateway
+    DependsOn: ApiGatewayVpcLinkEgress
+    Properties:
+      Name: !Sub "crime-prediction-${EnvironmentName}"
+      SecurityGroupIds:
+        - !Ref ApiGatewayVpcLinkSecurityGroup
+      SubnetIds:
+        - !Ref PublicSubnetOne
+        - !Ref PublicSubnetTwo
+      Tags:
+        application: crime-prediction
+        environment: !Ref EnvironmentName
+
+  ReviewIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Condition: UseApiGateway
+    Properties:
+      ApiId: !Ref ReviewApi
+      ConnectionId: !Ref ReviewVpcLink
+      ConnectionType: VPC_LINK
+      IntegrationMethod: ANY
+      IntegrationType: HTTP_PROXY
+      IntegrationUri: !Ref ApiGatewayListener
+      PayloadFormatVersion: "1.0"
+      TimeoutInMillis: 30000
+
+  ReviewRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Condition: UseApiGateway
+    Properties:
+      ApiId: !Ref ReviewApi
+      AuthorizationType: NONE
+      RouteKey: "$default"
+      Target: !Join ["/", [integrations, !Ref ReviewIntegration]]
+
+  ReviewStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Condition: UseApiGateway
+    Properties:
+      ApiId: !Ref ReviewApi
+      StageName: "$default"
+      AutoDeploy: true
+      AccessLogSettings:
+        DestinationArn: !GetAtt ReviewApiLogGroup.Arn
+        Format: >-
+          {"requestId":"$context.requestId","status":"$context.status","responseLatency":"$context.responseLatency","integrationError":"$context.integrationErrorMessage"}
+      DefaultRouteSettings:
+        DetailedMetricsEnabled: true
+        ThrottlingBurstLimit: 100
+        ThrottlingRateLimit: 50
+
   InstanceCpuAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
+      AlarmActions: !If
+        - AlarmTopicConfigured
+        - [!Ref AlarmTopicArn]
+        - !Ref AWS::NoValue
       AlarmDescription: Review host CPU is sustained above 85 percent
       ComparisonOperator: GreaterThanThreshold
       Dimensions:
@@ -260,6 +386,10 @@ Resources:
     Type: AWS::CloudWatch::Alarm
     Condition: CreateReviewEndpointCondition
     Properties:
+      AlarmActions: !If
+        - AlarmTopicConfigured
+        - [!Ref AlarmTopicArn]
+        - !Ref AWS::NoValue
       AlarmDescription: Review application target is unhealthy
       ComparisonOperator: GreaterThanThreshold
       Dimensions:
@@ -283,9 +413,12 @@ Outputs:
     Value: !GetAtt LoadBalancer.DNSName
   ReviewUrl:
     Value: !If
-      - CreateReviewEndpointCondition
+      - UseCloudFront
       - !Sub "https://${ReviewDistribution.DomainName}"
-      - pending-cloudfront-account-verification-or-acm-domain
+      - !If
+        - UseApiGateway
+        - !Sub "https://${ReviewApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}"
+        - private-ssm-only
   TargetGroupArn:
     Condition: CreateReviewEndpointCondition
     Value: !Ref TargetGroup

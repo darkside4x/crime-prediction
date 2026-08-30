@@ -1,0 +1,173 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Crime prediction Review 2 Cognito OIDC provider with validated tenant claims.
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: review2
+    AllowedPattern: "[a-z0-9-]+"
+
+Resources:
+  TokenClaimsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "crime-prediction-${EnvironmentName}-token-claims"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: LambdaLogs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: logs:CreateLogGroup
+                Resource: !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:*"
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/crime-prediction-${EnvironmentName}-token-claims:*"
+
+  TokenClaimsFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "crime-prediction-${EnvironmentName}-token-claims"
+      Description: Validates the stored tenant membership document and adds it to Cognito tokens.
+      Handler: index.handler
+      Role: !GetAtt TokenClaimsRole.Arn
+      Runtime: python3.12
+      Timeout: 5
+      MemorySize: 128
+      Code:
+        ZipFile: |
+          import json
+          import uuid
+
+          ROLES = {"viewer", "reviewer", "tenant_admin", "platform_operator"}
+
+          def _memberships(event):
+              attributes = event.get("request", {}).get("userAttributes", {})
+              raw = attributes.get("custom:tenant_memberships", "")
+              try:
+                  memberships = json.loads(raw)
+              except (TypeError, ValueError) as error:
+                  raise ValueError("tenant memberships are not valid JSON") from error
+              if not isinstance(memberships, list) or not 1 <= len(memberships) <= 10:
+                  raise ValueError("between one and ten tenant memberships are required")
+              seen = set()
+              for membership in memberships:
+                  if not isinstance(membership, dict) or set(membership) != {
+                      "tenant_id", "slug", "display_name", "role"
+                  }:
+                      raise ValueError("tenant membership fields are invalid")
+                  tenant_id = str(uuid.UUID(str(membership["tenant_id"])))
+                  if tenant_id in seen or membership["role"] not in ROLES:
+                      raise ValueError("tenant membership values are invalid")
+                  if not 1 <= len(str(membership["slug"])) <= 80:
+                      raise ValueError("tenant slug is invalid")
+                  if not 1 <= len(str(membership["display_name"])) <= 120:
+                      raise ValueError("tenant display name is invalid")
+                  seen.add(tenant_id)
+              return memberships
+
+          def handler(event, _context):
+              memberships = _memberships(event)
+              response = event.setdefault("response", {})
+              overrides = response.get("claimsAndScopeOverrideDetails") or {}
+              response["claimsAndScopeOverrideDetails"] = overrides
+              overrides["idTokenGeneration"] = {
+                  "claimsToAddOrOverride": {"tenant_memberships": memberships}
+              }
+              overrides["accessTokenGeneration"] = {
+                  "claimsToAddOrOverride": {"tenant_memberships": memberships}
+              }
+              return event
+
+  TokenClaimsLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/crime-prediction-${EnvironmentName}-token-claims"
+      RetentionInDays: 14
+
+  CognitoInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref TokenClaimsFunction
+      Principal: cognito-idp.amazonaws.com
+      SourceAccount: !Ref AWS::AccountId
+
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    DependsOn: CognitoInvokePermission
+    Properties:
+      UserPoolName: !Sub "crime-prediction-${EnvironmentName}"
+      DeletionProtection: ACTIVE
+      MfaConfiguration: OPTIONAL
+      EnabledMfas:
+        - SOFTWARE_TOKEN_MFA
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: true
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 16
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: true
+          RequireUppercase: true
+          TemporaryPasswordValidityDays: 1
+      UsernameConfiguration:
+        CaseSensitive: false
+      Schema:
+        - Name: tenant_memberships
+          AttributeDataType: String
+          DeveloperOnlyAttribute: false
+          Mutable: true
+          Required: false
+          StringAttributeConstraints:
+            MinLength: "2"
+            MaxLength: "2048"
+      LambdaConfig:
+        PreTokenGenerationConfig:
+          LambdaArn: !GetAtt TokenClaimsFunction.Arn
+          LambdaVersion: V2_0
+      UserPoolTags:
+        application: crime-prediction
+        environment: !Ref EnvironmentName
+
+  UserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      UserPoolId: !Ref UserPool
+      ClientName: !Sub "crime-prediction-${EnvironmentName}-web"
+      GenerateSecret: false
+      EnableTokenRevocation: true
+      PreventUserExistenceErrors: ENABLED
+      ExplicitAuthFlows:
+        - ALLOW_ADMIN_USER_PASSWORD_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+        - ALLOW_USER_SRP_AUTH
+      AccessTokenValidity: 60
+      IdTokenValidity: 60
+      RefreshTokenValidity: 1
+      TokenValidityUnits:
+        AccessToken: minutes
+        IdToken: minutes
+        RefreshToken: days
+
+Outputs:
+  UserPoolId:
+    Value: !Ref UserPool
+  UserPoolClientId:
+    Value: !Ref UserPoolClient
+  OidcIssuer:
+    Value: !Sub "https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}"
+  OidcJwksUrl:
+    Value: !Sub "https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}/.well-known/jwks.json"
+  OidcAudience:
+    Value: !Ref UserPoolClient
