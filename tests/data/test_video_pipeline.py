@@ -246,6 +246,36 @@ def test_retry_state_and_key_errors_are_safe(tmp_path: Path) -> None:
     assert missing.value.code == "reka_key_missing"
 
 
+def test_reka_index_lookup_retries_eventual_consistency_responses() -> None:
+    class Response:
+        status = 404
+
+        @staticmethod
+        def read() -> bytes:
+            return b"{}"
+
+    class Connection:
+        def request(self, *args, **kwargs) -> None:
+            return None
+
+        @staticmethod
+        def getresponse() -> Response:
+            return Response()
+
+        @staticmethod
+        def close() -> None:
+            return None
+
+    client = RekaVisionProvider("rk-test-only")
+    client._connection = lambda: Connection()  # type: ignore[method-assign]
+
+    with pytest.raises(VideoPipelineError) as caught:
+        client.indexing_status("opaque-video-id")
+
+    assert caught.value.code == "reka_index_pending"
+    assert caught.value.retryable is True
+
+
 @pytest.mark.parametrize(
     ("error", "expected_state"),
     [

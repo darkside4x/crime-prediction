@@ -28,6 +28,7 @@ export default function NearLiveReview() {
   const [candidates, setCandidates] = useState<CandidateDetection[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busyCandidate, setBusyCandidate] = useState<string | null>(null);
+  const [captureStarting, setCaptureStarting] = useState(false);
   const readiness = useQuery({ queryKey: ["ready"], queryFn: api.ready });
   const captureEnabled = readiness.data?.near_live_capture === "allowlisted_hls";
 
@@ -53,13 +54,16 @@ export default function NearLiveReview() {
   }, [run?.run_id, run?.state, token]);
 
   async function startCapture() {
-    if (!captureEnabled) return;
+    if (!captureEnabled || captureStarting) return;
+    setCaptureStarting(true);
     setError(null);
     setCandidates([]);
     try {
       setRun(await api.startNearLiveCapture(token, 20));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not start the public camera capture");
+    } finally {
+      setCaptureStarting(false);
     }
   }
 
@@ -121,11 +125,18 @@ export default function NearLiveReview() {
             type="button"
             className="capture-button"
             onClick={startCapture}
-            disabled={!captureEnabled || run?.state === "queued" || run?.state === "running"}
+            disabled={
+              !captureEnabled ||
+              captureStarting ||
+              run?.state === "queued" ||
+              run?.state === "running"
+            }
             whileTap={{ scale: 0.97 }}
           >
             {!captureEnabled
               ? "Production camera disabled"
+              : captureStarting
+              ? "Starting capture…"
               : run?.state === "queued" || run?.state === "running"
               ? "Pipeline running…"
               : "Capture 20 seconds"}

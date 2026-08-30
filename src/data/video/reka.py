@@ -57,7 +57,14 @@ class RekaVisionProvider:
     def _connection(self) -> http.client.HTTPSConnection:
         return http.client.HTTPSConnection(self._host, self._port, timeout=self.timeout_seconds)
 
-    def _json_request(self, method: str, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    def _json_request(
+        self,
+        method: str,
+        path: str,
+        payload: dict[str, Any] | None = None,
+        *,
+        retryable_statuses: frozenset[int] = frozenset(),
+    ) -> dict[str, Any]:
         body = json.dumps(payload, separators=(",", ":")).encode() if payload is not None else None
         headers = {"X-Api-Key": self.__api_key, "Accept": "application/json"}
         if body is not None:
@@ -73,6 +80,12 @@ class RekaVisionProvider:
                 raise VideoPipelineError("reka_access_denied", "Reka Vision rejected server credentials")
             if response.status >= 500:
                 raise VideoPipelineError("reka_unavailable", "Reka Vision is temporarily unavailable", retryable=True)
+            if response.status in retryable_statuses:
+                raise VideoPipelineError(
+                    "reka_index_pending",
+                    "Reka Vision has not made the uploaded video queryable yet",
+                    retryable=True,
+                )
             if response.status >= 400:
                 raise VideoPipelineError("reka_request_failed", "Reka Vision rejected the request")
             if not raw:
@@ -139,7 +152,11 @@ class RekaVisionProvider:
             connection.close()
 
     def indexing_status(self, video_id: str) -> str:
-        status = self._json_request("GET", f"/v1/videos/{video_id}").get("indexing_status")
+        status = self._json_request(
+            "GET",
+            f"/v1/videos/{video_id}",
+            retryable_statuses=frozenset({404, 409, 425}),
+        ).get("indexing_status")
         if status not in {"pending", "indexing", "indexed", "failed"}:
             raise VideoPipelineError("reka_response_invalid", "Reka Vision returned an invalid indexing status")
         return str(status)
