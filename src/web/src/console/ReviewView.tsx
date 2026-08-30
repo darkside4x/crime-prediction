@@ -53,7 +53,7 @@ export default function ReviewView() {
     return (
       <section className="review-view">
         <h2 className="section-title">
-          REVIEW <span className="accent">QUEUE</span>
+          Review <span className="accent">queue</span>
         </h2>
         <div className="forbidden" role="alert">
           <p>
@@ -68,7 +68,7 @@ export default function ReviewView() {
   return (
     <section className="review-view">
       <h2 className="section-title">
-        REVIEW <span className="accent">QUEUE</span>
+        Review <span className="accent">queue</span>
       </h2>
       <p className="muted">
         Detections below are <strong>unconfirmed candidates</strong> proposed by automated

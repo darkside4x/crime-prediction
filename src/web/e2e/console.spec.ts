@@ -68,17 +68,36 @@ test("reviewer sees candidates labeled as unconfirmed", async ({ page }) => {
 
 test("landing page demonstrates the complete product before sign-in", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: /City signals, forecast ahead/i })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /Xecrex — forecasts/i })).toBeVisible();
   await expect(page.getByText("H3 CELLS").first()).toBeVisible();
   await expect(page.getByRole("heading", { name: /From events to evidence/i })).toBeVisible();
   await expect(page.getByRole("link", { name: "Open the console" })).toBeVisible();
 });
 
-test("admin enters the live-only workflow with no upload navigation", async ({ page }) => {
+test("admin chooses live, uploaded, or simulated video input", async ({ page }) => {
   await signInAsAdmin(page);
   await expect(page.getByRole("link", { name: "Live" })).toHaveAttribute("aria-current", "page");
   await expect(page.getByRole("button", { name: "Analyze next 12 seconds" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: /Connect live source/ })).toHaveAttribute("aria-selected", "true");
+  await page.getByRole("tab", { name: /Upload video/ }).click();
+  await expect(page.getByText("Choose MP4 · up to 64 MB")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Upload & analyze video" })).toBeVisible();
+  await page.getByRole("tab", { name: /Simulated live/ }).click();
+  await expect(page.getByRole("button", { name: "Run simulated analysis" })).toBeVisible();
+  await expect(page.getByLabel("Synthetic road simulation preview")).toBeVisible();
   await expect(page.getByRole("link", { name: "Sources & upload" })).toHaveCount(0);
+});
+
+test("video input rail remains usable on a narrow console", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await signInAsAdmin(page);
+  const rail = page.getByRole("tablist", { name: "Video input method" });
+  await expect(rail).toBeVisible();
+  const box = await rail.boundingBox();
+  expect(box).not.toBeNull();
+  expect((box?.x ?? 0) + (box?.width ?? 0)).toBeLessThanOrEqual(390);
+  await page.getByRole("tab", { name: /Upload video/ }).click();
+  await expect(page.getByText("Choose MP4 · up to 64 MB")).toBeVisible();
 });
 
 test("tenant switch clears tenant-scoped state", async ({ page }) => {

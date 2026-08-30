@@ -1,28 +1,39 @@
-import { motion, useReducedMotion } from "motion/react";
+import { useRef } from "react";
+import gsap from "gsap";
+import { useGSAP } from "@gsap/react";
+
+gsap.registerPlugin(useGSAP);
 
 const ITEMS = [
-  "H3 CELLS", "6-HOUR WINDOWS", "CALIBRATED RISK", "TENANT ISOLATED",
-  "REPLAY INGESTION", "WALK-FORWARD EVAL", "GROUNDED AI", "HUMAN REVIEW",
+  "H3 cells", "6-hour windows", "Calibrated risk", "Tenant isolated",
+  "Replay ingestion", "Walk-forward eval", "Grounded AI", "Human review",
 ];
 
 export default function Marquee() {
-  const reduced = useReducedMotion();
+  const ref = useRef<HTMLDivElement>(null);
   const row = ITEMS.flatMap((text) => [text, "•"]);
+
+  useGSAP(
+    () => {
+      const mm = gsap.matchMedia();
+      mm.add("(prefers-reduced-motion: no-preference)", () => {
+        gsap.to(".marquee-track", { xPercent: -50, ease: "none", duration: 28, repeat: -1 });
+      });
+    },
+    { scope: ref },
+  );
+
   return (
-    <div className="marquee" aria-hidden>
-      <motion.div
-        className="marquee-track"
-        animate={reduced ? undefined : { x: ["0%", "-50%"] }}
-        transition={{ duration: 24, repeat: Infinity, ease: "linear" }}
-      >
+    <div className="marquee" aria-hidden ref={ref}>
+      <div className="marquee-track">
         {[...row, ...row].map((text, i) =>
           text === "•" ? (
             <span key={i} className="dot">•</span>
           ) : (
-            <span key={i}>{text}</span>
+            <span key={i} className="marquee-chip">{text}</span>
           ),
         )}
-      </motion.div>
+      </div>
     </div>
   );
 }

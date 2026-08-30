@@ -2,6 +2,11 @@ import { useQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
 import { useAuth } from "./AuthContext";
 
+function sentenceCase(value: string): string {
+  const text = value.replace(/_/g, " ");
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
 export default function ModelCardView() {
   const { session } = useAuth();
   const token = session!.token;
@@ -26,10 +31,11 @@ export default function ModelCardView() {
   return (
     <section className="model-card-view">
       <h2 className="section-title">
-        MODEL <span className="accent">CARD</span>
+        Model <span className="accent">card</span>
       </h2>
+      <div className="panel-flow">
       <div className="panel">
-        <h3>{data.model_name.replace(/_/g, " ")}</h3>
+        <h3>{sentenceCase(data.model_name)}</h3>
         <dl className="provenance">
           <dt>Target</dt>
           <dd>{data.target.replace(/_/g, " ")}</dd>
@@ -65,11 +71,11 @@ export default function ModelCardView() {
           </thead>
           <tbody>
             <tr>
-              <td>{String(data.baseline_comparison.baseline_model ?? "historical rate")}</td>
+              <td>{sentenceCase(String(data.baseline_comparison.baseline_model ?? "historical rate"))}</td>
               <td>{Number(data.baseline_comparison.baseline_value).toFixed(4)}</td>
             </tr>
             <tr>
-              <td>{data.model_name.replace(/_/g, " ")} (selected)</td>
+              <td>{sentenceCase(data.model_name)} (selected)</td>
               <td>{Number(data.baseline_comparison.selected_value).toFixed(4)}</td>
             </tr>
           </tbody>
@@ -107,6 +113,7 @@ export default function ModelCardView() {
           Feature interpretation: {data.feature_interpretation}. Human review required:{" "}
           {data.human_review_required ? "yes" : "no"}.
         </p>
+      </div>
       </div>
     </section>
   );

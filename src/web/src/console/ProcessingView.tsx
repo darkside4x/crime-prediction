@@ -34,8 +34,9 @@ export default function ProcessingView() {
   return (
     <section className="processing-view">
       <h2 className="section-title">
-        PROCESSING <span className="accent">&amp; COVERAGE</span>
+        Processing <span className="accent">&amp; coverage</span>
       </h2>
+      <div className="panel-flow">
 
       <div className="panel">
         <h3>Pipeline health</h3>
@@ -178,6 +179,7 @@ export default function ProcessingView() {
           {refreshError && <p className="error-banner" role="alert">{refreshError.message}</p>}
         </div>
       )}
+      </div>
     </section>
   );
 }

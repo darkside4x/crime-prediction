@@ -101,7 +101,7 @@ export default function ConsoleShell() {
     <div className={`console console-${route}`}>
       <aside className="console-sidebar">
         <div className="console-brand">
-          <a href="#/">CIVICHALO</a>
+          <a href="#/">Xecrex</a>
           <span>Console v2.4</span>
           <small>High integrity mode</small>
         </div>

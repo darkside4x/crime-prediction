@@ -146,7 +146,7 @@ export default function SourcesView() {
   return (
     <section className="sources-view">
       <h2 className="section-title">
-        SOURCES <span className="accent">&amp; UPLOAD</span>
+        Sources <span className="accent">&amp; upload</span>
       </h2>
 
       <div className="sources-grid">

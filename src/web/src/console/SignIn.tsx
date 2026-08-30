@@ -42,9 +42,9 @@ export default function SignIn() {
 
   return (
     <div className="console-signin">
-      <p className="eyebrow">CivicHalo secure console</p>
+      <p className="eyebrow">Xecrex secure console</p>
       <h1 className="section-title">
-        SIGN <span className="accent">IN</span>
+        Sign <span className="accent">in</span>
       </h1>
       <p className="muted">
         {hostedLogin
@@ -83,18 +83,28 @@ export default function SignIn() {
         </button>
       ) : (
         <>
-          <div className="persona-grid">
-        {DEV_PERSONAS.map((persona) => (
-          <button
-            key={persona.token}
-            type="button"
-            className="persona-card"
-            disabled={busy}
-            onClick={(event) => submit(event, persona.token, persona.label)}
-          >
-            {persona.label}
-          </button>
-        ))}
+          <div className="persona-groups">
+            {["Demo One", "Demo Two"].map((tenant) => (
+              <section className="persona-group" key={tenant}>
+                <p className="persona-group-title">Demo Tenant {tenant.split(" ")[1]}</p>
+                <div className="persona-grid">
+                  {DEV_PERSONAS.filter((persona) => persona.label.endsWith(tenant)).map(
+                    (persona) => (
+                      <button
+                        key={persona.token}
+                        type="button"
+                        className="persona-card"
+                        disabled={busy}
+                        aria-label={persona.label}
+                        onClick={(event) => submit(event, persona.token, persona.label)}
+                      >
+                        {persona.label.split(" · ")[0]}
+                      </button>
+                    ),
+                  )}
+                </div>
+              </section>
+            ))}
           </div>
           <form onSubmit={(event) => submit(event, token, "Custom token")} className="token-form">
         <label htmlFor="token-input">Bearer token</label>

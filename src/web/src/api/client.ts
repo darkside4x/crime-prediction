@@ -19,6 +19,7 @@ import type {
 } from "./contracts.gen";
 
 export type RecordedSourceCreate = components["schemas"]["RecordedSourceCreate"];
+export type LiveSourceCreate = components["schemas"]["LiveSourceCreate"];
 export type ReviewRequest = components["schemas"]["ReviewRequest"];
 
 export type Role = "viewer" | "reviewer" | "tenant_admin" | "platform_operator";
@@ -88,6 +89,7 @@ export interface NearLiveRun {
   stage: string;
   label:
     | "near-live CCTV segment"
+    | "simulated live segment"
     | "recorded video upload"
     | "recorded video processing"
     | "controlled video re-analysis";
@@ -238,6 +240,12 @@ export const api = {
       body: JSON.stringify(body),
       idempotencyKey,
     }),
+  createLiveSource: (token: string, body: LiveSourceCreate, idempotencyKey: string) =>
+    request<PublicSource>("/v1/sources/live-camera", token, {
+      method: "POST",
+      body: JSON.stringify(body),
+      idempotencyKey,
+    }),
   uploadVideo: (
     token: string,
     upload: {
@@ -278,6 +286,12 @@ export const api = {
         source_key: "louisiana-dot-i20",
         duration_seconds: durationSeconds,
       }),
+      idempotencyKey: newIdempotencyKey(),
+    }),
+  startSimulatedCapture: (token: string, durationSeconds = 8) =>
+    request<NearLiveRun>("/v1/demo/simulated-cctv/captures", token, {
+      method: "POST",
+      body: JSON.stringify({ duration_seconds: durationSeconds }),
       idempotencyKey: newIdempotencyKey(),
     }),
   coverage: (token: string) =>
