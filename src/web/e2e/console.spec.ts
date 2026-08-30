@@ -163,6 +163,21 @@ test("tenant switch clears tenant-scoped state", async ({ page }) => {
   await expect(page.getByRole("link", { name: "Live" })).toHaveCount(0);
 });
 
+test("OAuth history restoration synchronizes the rendered console route", async ({ page }) => {
+  await signInAsAdmin(page);
+  await page.evaluate(() => {
+    const oldURL = window.location.href;
+    window.history.replaceState(null, "", `${window.location.pathname}#/console/model-card`);
+    window.dispatchEvent(
+      new HashChangeEvent("hashchange", { oldURL, newURL: window.location.href }),
+    );
+  });
+
+  await expect(page.getByRole("heading", { name: "Model card", exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Model" })).toHaveAttribute("aria-current", "page");
+  await expect(page.getByRole("heading", { name: "Live monitor" })).toHaveCount(0);
+});
+
 test("keyboard navigation reaches the primary flow", async ({ page }) => {
   await page.goto("/#/console");
   const firstPersona = page.getByRole("button", { name: /Tenant admin · Demo One/ });
