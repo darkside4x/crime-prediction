@@ -94,6 +94,55 @@ test("admin chooses live, uploaded, or simulated video input", async ({ page }) 
   await expect(page.getByRole("link", { name: "Sources & upload" })).toHaveCount(0);
 });
 
+test("production-disabled capture and historical fallback are represented honestly", async ({ page }) => {
+  await page.route("**/ready", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        status: "ready",
+        deployment_mode: "production",
+        reka_chat: "verified",
+        reka_vision: "verified",
+        video_service: "durable_connected",
+        queue: "durable_connected",
+        near_live_capture: "disabled",
+        forecast_models: "approved_or_historical_fallback",
+        forecast_data: "synthetic_demo",
+      }),
+    });
+  });
+  await page.route("**/v1/model-card", async (route) => {
+    await route.fulfill({
+      status: 404,
+      contentType: "application/problem+json",
+      body: JSON.stringify({
+        status: 404,
+        code: "approved_model_not_found",
+        message: "No approved model is active",
+        retryable: false,
+      }),
+    });
+  });
+
+  await signInAsAdmin(page);
+  const liveAction = page.getByRole("button", { name: "Public demo capture disabled" });
+  await expect(liveAction).toBeVisible();
+  await expect(liveAction).toBeDisabled();
+  await expect(page.getByText("Public demo camera disabled in production")).toBeVisible();
+  await page.getByText("Register tenant camera connector").click();
+  await expect(page.getByLabel("Source name")).toBeEnabled();
+  await expect(page.getByText(/Registration stores only the tenant-scoped connector reference/)).toBeVisible();
+
+  await page.getByRole("tab", { name: /Simulated live/ }).click();
+  await expect(page.getByRole("button", { name: "Generated demo capture disabled" })).toBeDisabled();
+
+  await page.getByRole("link", { name: "Model" }).click();
+  await expect(page.getByRole("heading", { name: /Historical baseline/ })).toBeVisible();
+  await expect(page.getByText("Safe fallback is active")).toBeVisible();
+  await expect(page.getByText("Could not load the model card.")).toHaveCount(0);
+});
+
 test("video input rail remains usable on a narrow console", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await signInAsAdmin(page);
