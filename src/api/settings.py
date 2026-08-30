@@ -7,6 +7,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 
+def _boolean_value(name: str, default: bool = False) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    value = raw.strip().lower()
+    if value not in {"true", "false"}:
+        raise ValueError(f"{name} must be true or false")
+    return value == "true"
+
+
 def _secret_value(name: str) -> str:
     direct = os.environ.get(name, "").strip()
     file_name = os.environ.get(f"{name}_FILE", "").strip()
@@ -32,6 +42,7 @@ class Settings:
     reka_model: str = "reka-flash"
     reka_prompt_version: str = "1.0.0"
     reka_timeout_seconds: float = 20.0
+    reka_provider_verified: bool = False
     cors_origins: tuple[str, ...] = ("http://localhost:5173",)
     runtime_dir: Path = Path("data/runtime")
     near_live_capture_seconds: int = 20
@@ -89,6 +100,7 @@ class Settings:
             reka_model=os.environ.get("REKA_MODEL", "reka-flash").strip(),
             reka_prompt_version=os.environ.get("REKA_PROMPT_VERSION", "1.0.0").strip(),
             reka_timeout_seconds=float(os.environ.get("REKA_TIMEOUT_SECONDS", "20")),
+            reka_provider_verified=_boolean_value("REKA_PROVIDER_VERIFIED"),
             cors_origins=origins,
             runtime_dir=Path(os.environ.get("RUNTIME_DIR", "data/runtime")),
             near_live_capture_seconds=int(
