@@ -147,6 +147,7 @@ POST   /v1/sources/live-camera
 POST   /v1/video-assets/uploads
 GET    /v1/ingestion/runs/{run_id}
 GET    /v1/candidate-detections
+GET    /v1/candidate-detections/{detection_id}/evidence
 POST   /v1/candidate-detections/{detection_id}/review
 GET    /v1/coverage
 GET    /v1/forecasts?window_start=...&category=...&bbox=...

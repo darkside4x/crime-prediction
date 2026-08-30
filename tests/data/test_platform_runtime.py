@@ -139,6 +139,10 @@ def test_separate_workers_resume_persisted_chain_after_restart(tmp_path: Path) -
     assert index_worker.poll_once()[0].state == "completed"
     assert analyze_worker.poll_once()[0].state == "completed"
     assert len(restarted_store.list_candidates(TENANT)) == 1
+    assert [
+        job["operation"]
+        for job in restarted_store.jobs_for_asset(TENANT, asset["asset_id"])
+    ] == ["upload", "index", "analyze"]
     assert restarted_store.job_metrics(TENANT) == {"completed": 3}
     assert telemetry.observations[0].detector_available is True
 
@@ -159,6 +163,80 @@ def test_retry_uses_persisted_exponential_backoff(tmp_path: Path) -> None:
     assert persisted["state"] == "retry"
     assert persisted["last_error_code"] == "reka_unavailable"
     assert worker.poll_once() == []
+
+
+def test_unexpected_worker_error_is_safely_dead_lettered(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store, _, service, asset = _setup(tmp_path)
+    job = store.enqueue(TENANT, asset["asset_id"], "upload")
+
+    def fail_unexpectedly(*_args, **_kwargs):
+        raise FileNotFoundError("internal package path")
+
+    monkeypatch.setattr(service, "execute_operation", fail_unexpectedly)
+    worker = VideoJobWorker(
+        store=store,
+        broker=DatabaseJobBroker(store),
+        service=service,
+        operations=("upload",),
+        worker_id="upload-1",
+    )
+
+    result = worker.poll_once()[0]
+    persisted = store.get_job(TENANT, job["job_id"])
+    assert result.state == "failed"
+    assert result.error_code == "worker_unexpected_error"
+    assert persisted["state"] == "failed"
+    assert persisted["last_error_code"] == "worker_unexpected_error"
+    assert persisted["dead_lettered_at"] is not None
+
+
+def test_index_pending_has_longer_bound_and_finishes_as_failed(tmp_path: Path) -> None:
+    store, provider, service, asset = _setup(tmp_path)
+    provider.status = "pending"
+    broker = DatabaseJobBroker(store)
+    upload = store.enqueue(TENANT, asset["asset_id"], "upload")
+    broker.publish(JobMessage(TENANT, upload["job_id"], "upload"))
+    upload_worker = VideoJobWorker(
+        store=store,
+        broker=broker,
+        service=service,
+        operations=("upload",),
+        worker_id="upload-1",
+    )
+    assert upload_worker.poll_once()[0].state == "completed"
+
+    index = store.ready_jobs(operations=("index",), limit=1)[0]
+    assert index["max_attempts"] == 20
+
+    # Use a one-attempt job to exercise the terminal pending-status path
+    # without waiting through the production retry window.
+    isolated_root = tmp_path / "isolated"
+    isolated_root.mkdir()
+    isolated_store, isolated_provider, isolated_service, isolated_asset = _setup(
+        isolated_root
+    )
+    isolated_provider.status = "pending"
+    isolated_service.execute_operation(
+        TENANT, isolated_asset["asset_id"], "upload"
+    )
+    pending = isolated_store.enqueue(
+        TENANT, isolated_asset["asset_id"], "index", max_attempts=1
+    )
+    pending_worker = VideoJobWorker(
+        store=isolated_store,
+        broker=DatabaseJobBroker(isolated_store),
+        service=isolated_service,
+        operations=("index",),
+        worker_id="index-1",
+    )
+    result = pending_worker.poll_once()[0]
+    persisted = isolated_store.get_job(TENANT, pending["job_id"])
+    assert result.state == "failed"
+    assert result.error_code == "reka_index_timeout"
+    assert persisted["state"] == "failed"
+    assert persisted["last_error_code"] == "reka_index_timeout"
 
 
 class FakeS3:

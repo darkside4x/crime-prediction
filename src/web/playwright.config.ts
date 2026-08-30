@@ -10,7 +10,7 @@ export default defineConfig({
   webServer: process.env.E2E_BASE_URL
     ? undefined
     : {
-        command: "npm run dev",
+        command: "pnpm dev",
         url: "http://localhost:5173",
         reuseExistingServer: true,
       },

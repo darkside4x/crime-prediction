@@ -21,13 +21,17 @@ The deterministic statistical/ML pipeline remains responsible for numeric future
 REKA_API_KEY=<one server-side Reka key>
 REKA_VISION_BASE_URL=https://vision-agent.api.reka.ai
 REKA_CHAT_BASE_URL=https://api.reka.ai/v1
-REKA_MODEL=reka-flash
+REKA_MODEL=reka-flash-3
 REKA_VIDEO_PROMPT_VERSION=1.0.0
 REKA_INSIGHT_PROMPT_VERSION=1.0.0
 REKA_TIMEOUT_SECONDS=120
 ```
 
 There is no separate `REKA_VISION_API_KEY` in this repository. The Vision API receives `REKA_API_KEY` through the `X-Api-Key` request header. The Chat API receives the same secret through its supported server-side authentication mechanism.
+
+The configured Chat model must be selected from the authenticated account's
+`GET /v1/models` response. As of the Review 2 deployment, `reka-flash-3` is the
+verified Reka-hosted replacement for the retired `reka-flash` identifier.
 
 Never expose the key through Vite variables, browser bundles, upload forms, logs, fixtures, API responses, or client-side direct calls. The browser uploads to the tenant-authenticated FastAPI service; FastAPI calls Reka.
 

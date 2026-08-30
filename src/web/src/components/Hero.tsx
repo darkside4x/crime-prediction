@@ -33,8 +33,8 @@ export default function Hero() {
         >
           Aggregate area-level forecasting · decision support · human in the loop
         </motion.p>
-        <h1 className="hero-title" aria-label="Hotspot risk, forecast ahead">
-          {["HOTSPOT", "RISK,", "FORECAST"].map((word, i) => (
+        <h1 className="hero-title" aria-label="City signals, forecast ahead">
+          {["CITY", "SIGNALS,", "FORECAST"].map((word, i) => (
             <span key={word} style={{ display: "block", overflow: "hidden" }}>
               <motion.span
                 style={{ display: "block" }}

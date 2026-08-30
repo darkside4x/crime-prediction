@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { motion } from "motion/react";
+import { useQuery } from "@tanstack/react-query";
 import { api, newIdempotencyKey, type NearLiveRun, type PublicCandidate } from "../api/client";
 import { useAuth } from "../console/AuthContext";
+import CandidateEvidence from "../console/CandidateEvidence";
 
 type CandidateDetection = PublicCandidate;
 
@@ -26,6 +28,9 @@ export default function NearLiveReview() {
   const [candidates, setCandidates] = useState<CandidateDetection[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busyCandidate, setBusyCandidate] = useState<string | null>(null);
+  const [captureStarting, setCaptureStarting] = useState(false);
+  const readiness = useQuery({ queryKey: ["ready"], queryFn: api.ready });
+  const captureEnabled = readiness.data?.near_live_capture === "allowlisted_hls";
 
   const activeStage = useMemo(() => stageIndex(run?.stage), [run?.stage]);
 
@@ -49,12 +54,16 @@ export default function NearLiveReview() {
   }, [run?.run_id, run?.state, token]);
 
   async function startCapture() {
+    if (!captureEnabled || captureStarting) return;
+    setCaptureStarting(true);
     setError(null);
     setCandidates([]);
     try {
       setRun(await api.startNearLiveCapture(token, 20));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not start the public camera capture");
+    } finally {
+      setCaptureStarting(false);
     }
   }
 
@@ -98,23 +107,37 @@ export default function NearLiveReview() {
   return (
     <section className="review-workbench" id="near-live">
       <div className="container">
-        <p className="eyebrow">Real public feed · restricted review workflow</p>
+        <p className="eyebrow">
+          {captureEnabled
+            ? "Real public feed · restricted review workflow"
+            : "Licensed India recordings · restricted review workflow"}
+        </p>
         <div className="review-heading">
           <div>
             <h2>NEAR-LIVE <span>CCTV</span> SEGMENT</h2>
             <p>
-              Captures one bounded segment from an allowlisted Louisiana DOT HLS feed.
-              This is not continuous live monitoring.
+              {captureEnabled
+                ? "Captures one bounded segment from an allowlisted Louisiana DOT HLS feed. This is not continuous live monitoring."
+                : "Public-camera capture is disabled in production. Upload a licensed India MP4 above to exercise the same bounded Reka workflow."}
             </p>
           </div>
           <motion.button
             type="button"
             className="capture-button"
             onClick={startCapture}
-            disabled={run?.state === "queued" || run?.state === "running"}
+            disabled={
+              !captureEnabled ||
+              captureStarting ||
+              run?.state === "queued" ||
+              run?.state === "running"
+            }
             whileTap={{ scale: 0.97 }}
           >
-            {run?.state === "queued" || run?.state === "running"
+            {!captureEnabled
+              ? "Production camera disabled"
+              : captureStarting
+              ? "Starting capture…"
+              : run?.state === "queued" || run?.state === "running"
               ? "Pipeline running…"
               : "Capture 20 seconds"}
           </motion.button>
@@ -135,10 +158,16 @@ export default function NearLiveReview() {
         <div className="review-status" aria-live="polite">
           <div>
             <span className={`status-lamp ${run?.state ?? "idle"}`} />
-            <strong>{run ? run.stage.replaceAll("_", " ") : "Ready to capture"}</strong>
+            <strong>
+              {run
+                ? run.stage.replaceAll("_", " ")
+                : captureEnabled
+                  ? "Ready to capture"
+                  : "Ready for India MP4 upload"}
+            </strong>
           </div>
           <div className="status-meta">
-            {run?.source_attribution ?? "LADOTD / 511 Louisiana"}
+            {run?.source_attribution ?? (captureEnabled ? "LADOTD / 511 Louisiana" : "Licensed India demo media")}
             {run && ` · ${run.analysis_mode === "reka_vision" ? "Reka Vision" : "offline test analyzer"}`}
           </div>
         </div>
@@ -150,6 +179,12 @@ export default function NearLiveReview() {
           </div>
         )}
         {error && <div className="pipeline-notice error">{error}</div>}
+        {!captureEnabled && !readiness.isLoading && (
+          <div className="pipeline-notice warning">
+            Public-camera capture is intentionally closed in production. Use the authenticated
+            India MP4 upload above; it follows the same S3 → Reka → human-review pipeline.
+          </div>
+        )}
 
         <div className="candidate-header">
           <div>
@@ -167,7 +202,9 @@ export default function NearLiveReview() {
           )}
           {!run && (
             <div className="candidate-empty">
-              Start a capture to create a bounded MP4, send it through Reka, and populate this queue.
+              {captureEnabled
+                ? "Start a capture to create a bounded MP4, send it through Reka, and populate this queue."
+                : "Upload an India MP4 above, then open the Review queue for any unconfirmed Reka proposals."}
             </div>
           )}
           {candidates.map((candidate) => (
@@ -208,12 +245,19 @@ export default function NearLiveReview() {
                   </span>
                 )}
               </div>
+              <CandidateEvidence
+                token={token}
+                detectionId={candidate.detection_id}
+                available={candidate.evidence_available}
+              />
             </article>
           ))}
         </div>
 
         <p className="review-limitation">
-          “Near-live CCTV segment” means a short clip captured from a live public traffic feed.
+          {captureEnabled
+            ? "“Near-live CCTV segment” means a short clip captured from a live public traffic feed. "
+            : "The production demo uses uploaded, licensed recordings rather than an open live feed. "}
           Reka proposes candidates only; it does not confirm crime or calculate future area risk.
         </p>
       </div>

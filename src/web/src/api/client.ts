@@ -39,6 +39,7 @@ export interface Metadata {
   categories: string[];
   h3_resolution: number;
   forecast_window_minutes: number;
+  forecast_data: "operational" | "synthetic_demo";
   limitations: string[];
 }
 
@@ -52,8 +53,11 @@ export interface ForecastPage {
 export interface Readiness {
   status: string;
   reka_chat: string;
+  reka_vision: string;
   video_service: string;
+  near_live_capture: string;
   forecast_models: string;
+  forecast_data: "operational" | "synthetic_demo";
 }
 
 export interface CopilotInsight {
@@ -88,6 +92,14 @@ export type PublicCandidate = Omit<RestrictedCandidateDetection, "evidence_ref">
   evidence_available: boolean;
 };
 
+export interface SourceMapLocation {
+  source_id: string;
+  source_name: string;
+  cell_id: string;
+  h3_resolution: number;
+  precision: "h3_area";
+}
+
 export type PublicSource = Pick<
   CameraSource,
   | "schema_version"
@@ -118,7 +130,11 @@ export class ApiError extends Error {
   }
 }
 
-const BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? "";
+const BASE = ((import.meta.env.VITE_API_BASE as string | undefined) ?? "").replace(/\/$/, "");
+
+if (import.meta.env.PROD && BASE && !BASE.startsWith("https://")) {
+  throw new Error("VITE_API_BASE must use HTTPS in production");
+}
 
 export function newIdempotencyKey(): string {
   return typeof crypto !== "undefined" && "randomUUID" in crypto
@@ -152,6 +168,23 @@ async function request<T>(
   return (await response.json()) as T;
 }
 
+async function requestBlob(path: string, token: string): Promise<Blob> {
+  const response = await fetch(`${BASE}${path}`, {
+    headers: { Authorization: `Bearer ${token}` },
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    let body: Partial<TypedApiError> | undefined;
+    try {
+      body = (await response.json()) as Partial<TypedApiError>;
+    } catch {
+      body = undefined;
+    }
+    throw new ApiError(response.status, body, `Evidence request failed with ${response.status}`);
+  }
+  return response.blob();
+}
+
 export const api = {
   ready: () => fetch(`${BASE}/ready`).then((r) => r.json() as Promise<Readiness>),
   meTenants: (token: string) => request<MeTenants>("/v1/me/tenants", token),
@@ -163,6 +196,11 @@ export const api = {
     ),
   metadata: (token: string) => request<Metadata>("/v1/metadata", token),
   sources: (token: string) => request<{ items: PublicSource[] }>("/v1/sources", token),
+  sourceMapLocation: (token: string, sourceId: string) =>
+    request<SourceMapLocation>(
+      `/v1/sources/${encodeURIComponent(sourceId)}/map-location`,
+      token,
+    ),
   createRecordedSource: (token: string, body: RecordedSourceCreate, idempotencyKey: string) =>
     request<PublicSource>("/v1/sources/recorded-video", token, {
       method: "POST",
@@ -207,6 +245,11 @@ export const api = {
     request<{ items: SourceCoverageSnapshot[] }>("/v1/coverage", token),
   candidates: (token: string, limit = 50) =>
     request<{ items: PublicCandidate[] }>(`/v1/candidate-detections?limit=${limit}`, token),
+  candidateEvidence: (token: string, detectionId: string) =>
+    requestBlob(
+      `/v1/candidate-detections/${encodeURIComponent(detectionId)}/evidence`,
+      token,
+    ),
   reviewCandidate: (
     token: string,
     detectionId: string,

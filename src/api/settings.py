@@ -39,13 +39,15 @@ class Settings:
     reka_api_key: str = field(default="", repr=False)
     reka_chat_base_url: str = "https://api.reka.ai/v1"
     reka_vision_base_url: str = "https://vision-agent.api.reka.ai"
-    reka_model: str = "reka-flash"
+    reka_model: str = "reka-flash-3"
     reka_prompt_version: str = "1.0.0"
     reka_timeout_seconds: float = 20.0
     reka_provider_verified: bool = False
     cors_origins: tuple[str, ...] = ("http://localhost:5173",)
     runtime_dir: Path = Path("data/runtime")
     near_live_capture_seconds: int = 20
+    public_hls_demo_enabled: bool = False
+    synthetic_demo_forecasts: bool = False
     reka_index_poll_seconds: float = 3.0
     reka_index_max_polls: int = 20
     oidc_issuer: str = ""
@@ -97,7 +99,7 @@ class Settings:
             reka_vision_base_url=os.environ.get(
                 "REKA_VISION_BASE_URL", "https://vision-agent.api.reka.ai"
             ).strip(),
-            reka_model=os.environ.get("REKA_MODEL", "reka-flash").strip(),
+            reka_model=os.environ.get("REKA_MODEL", "reka-flash-3").strip(),
             reka_prompt_version=os.environ.get("REKA_PROMPT_VERSION", "1.0.0").strip(),
             reka_timeout_seconds=float(os.environ.get("REKA_TIMEOUT_SECONDS", "20")),
             reka_provider_verified=_boolean_value("REKA_PROVIDER_VERIFIED"),
@@ -106,6 +108,8 @@ class Settings:
             near_live_capture_seconds=int(
                 os.environ.get("NEAR_LIVE_CAPTURE_SECONDS", "20")
             ),
+            public_hls_demo_enabled=_boolean_value("PUBLIC_HLS_DEMO_ENABLED"),
+            synthetic_demo_forecasts=_boolean_value("SYNTHETIC_DEMO_FORECASTS"),
             reka_index_poll_seconds=float(
                 os.environ.get("REKA_INDEX_POLL_SECONDS", "3")
             ),

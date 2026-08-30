@@ -185,6 +185,16 @@ class PostgresVideoStore:
             raise VideoPipelineError("job_not_found", "Processing job was not found")
         return self._job(row)
 
+    def jobs_for_asset(self, tenant_id: str, asset_id: str) -> list[dict[str, Any]]:
+        with self.database.transaction(tenant_id) as cursor:
+            cursor.execute(
+                """SELECT * FROM video_processing_jobs
+                   WHERE tenant_id=%s AND asset_id=%s
+                   ORDER BY created_at, job_id""",
+                (tenant_id, asset_id),
+            )
+            return [self._job(row) for row in cursor.fetchall()]
+
     def claim_job(
         self, tenant_id: str, job_id: str, *, worker_id: str, lease_seconds: int
     ) -> dict[str, Any]:

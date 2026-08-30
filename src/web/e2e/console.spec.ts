@@ -13,6 +13,12 @@ async function signInAsAdmin(page: Page) {
 }
 
 test("viewer inspects the forecast map with suppression and limitations", async ({ page }) => {
+  const mapRequests: string[] = [];
+  page.on("request", (request) => {
+    if (request.url().includes("openfreemap") || request.url().includes("cartocdn")) {
+      mapRequests.push(request.url());
+    }
+  });
   await page.goto("/#/console");
   await page.getByRole("button", { name: /Viewer · Demo One/ }).click();
   await expect(page.getByText(/Aggregate area-level forecasts/)).toBeVisible();
@@ -21,20 +27,33 @@ test("viewer inspects the forecast map with suppression and limitations", async 
   await expect(page.getByRole("link", { name: "Review queue" })).toHaveCount(0);
   // Map legend renders, including the suppressed state wording.
   await expect(page.getByText(/suppressed \(no estimate — not zero\)/)).toBeVisible();
+  await expect.poll(() => mapRequests.some((url) => url.includes("openfreemap"))).toBe(true);
+  expect(mapRequests.some((url) => url.includes("cartocdn"))).toBe(false);
 });
 
 test("reviewer sees candidates labeled as unconfirmed", async ({ page }) => {
+  await page.route("**/v1/candidate-detections/*/evidence", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "video/mp4",
+      body: Buffer.from("bounded synthetic evidence video"),
+    });
+  });
   await page.goto("/#/console");
   await page.getByRole("button", { name: /Reviewer · Demo One/ }).click();
   await page.getByRole("link", { name: "Review queue" }).click();
   await expect(page.getByText("UNCONFIRMED CANDIDATE").first()).toBeVisible();
   await expect(page.getByText(/Decisions are final and immutable/)).toBeVisible();
+  await page.getByRole("button", { name: "Load evidence video" }).first().click();
+  await expect(page.getByLabel(/Evidence video for candidate/).first()).toBeVisible();
 });
 
 test("admin upload flow surfaces the degraded media-intake state honestly", async ({ page }) => {
   await signInAsAdmin(page);
   await page.getByRole("link", { name: "Sources & upload" }).click();
-  await expect(page.getByText("Register recorded-video source")).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Register recorded-video source" }),
+  ).toBeVisible();
 });
 
 test("admin sends an authorized recording as bounded multipart data", async ({ page }) => {
@@ -62,6 +81,26 @@ test("admin sends an authorized recording as bounded multipart data", async ({ p
       }),
     });
   });
+  await page.route(
+    "**/v1/ingestion/runs/70000000-0000-4000-8000-000000000001",
+    async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          run_id: "70000000-0000-4000-8000-000000000001",
+          state: "completed",
+          stage: "awaiting_human_review",
+          label: "recorded video upload",
+          asset_id: "71000000-0000-4000-8000-000000000001",
+          candidate_count: 1,
+          analysis_mode: "reka_vision",
+          created_at: "2026-08-30T00:00:00Z",
+          updated_at: "2026-08-30T00:03:00Z",
+        }),
+      });
+    },
+  );
 
   await signInAsAdmin(page);
   await page.getByRole("link", { name: "Sources & upload" }).click();
@@ -73,7 +112,8 @@ test("admin sends an authorized recording as bounded multipart data", async ({ p
   await page.getByLabel("Recorded source").selectOption({ index: 1 });
   await page.getByLabel(/I confirm this tenant is authorized/).check();
   await page.getByRole("button", { name: "Start upload" }).click();
-  await expect(page.getByText(/Upload accepted\. Processing run 70000000 is queued/)).toBeVisible();
+  await expect(page.getByText(/Upload accepted\. Processing run 70000000\./)).toBeVisible();
+  await expect(page.getByText(/Analysis complete · 1 unconfirmed candidate/)).toBeVisible();
 });
 
 test("tenant switch clears tenant-scoped state", async ({ page }) => {

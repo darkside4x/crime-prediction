@@ -42,6 +42,7 @@ export default function SignIn() {
 
   return (
     <div className="console-signin">
+      <p className="eyebrow">CivicHalo secure console</p>
       <h1 className="section-title">
         SIGN <span className="accent">IN</span>
       </h1>
