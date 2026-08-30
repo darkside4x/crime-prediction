@@ -2,8 +2,13 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
+# Signature updates run without a resident clamd process. Debian enables
+# NotifyClamd by default, which makes a successful update exit non-zero when
+# no clamd configuration is present.
 RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
-    ffmpeg clamav && rm -rf /var/lib/apt/lists/*
+    ffmpeg clamav && \
+    sed -i '/^[[:space:]]*NotifyClamd[[:space:]]/d' /etc/clamav/freshclam.conf && \
+    rm -rf /var/lib/apt/lists/*
 
 RUN groupadd --gid 10001 crime && \
     useradd --uid 10001 --gid crime --no-create-home --shell /usr/sbin/nologin crime && \
