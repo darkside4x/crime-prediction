@@ -16,7 +16,7 @@ function Landing() {
     <>
       <motion.div className="scroll-progress" style={{ scaleX: progress }} />
       <nav className="nav">
-        <a className="nav-logo" href="#top">HOT<span>SPOT</span></a>
+        <a className="nav-logo" href="#top" aria-label="CivicHalo home">CIVIC<span>HALO</span></a>
         <div className="nav-links">
           <a href="#how">Pipeline</a>
           <a href="#/console">Console</a>
@@ -71,7 +71,7 @@ function Landing() {
             every cell as an uncertain forecast, never as ground truth.
           </p>
           <p style={{ fontFamily: "var(--font-mono)", fontSize: 11 }}>
-            crime-hotspot prototype · hackathon demo · person 3: api / web / integration
+            CivicHalo · human-reviewed urban safety intelligence · hackathon prototype
           </p>
         </div>
       </footer>

@@ -49,8 +49,8 @@ export default function ConsoleShell() {
   return (
     <div className="console">
       <header className="console-bar">
-        <a className="nav-logo" href="#/">
-          HOT<span>SPOT</span>
+        <a className="nav-logo" href="#/" aria-label="CivicHalo home">
+          CIVIC<span>HALO</span>
         </a>
         <nav aria-label="Console">
           {allowed.map((item) => (

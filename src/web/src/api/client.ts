@@ -52,7 +52,9 @@ export interface ForecastPage {
 export interface Readiness {
   status: string;
   reka_chat: string;
+  reka_vision: string;
   video_service: string;
+  near_live_capture: string;
   forecast_models: string;
 }
 
@@ -118,7 +120,11 @@ export class ApiError extends Error {
   }
 }
 
-const BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? "";
+const BASE = ((import.meta.env.VITE_API_BASE as string | undefined) ?? "").replace(/\/$/, "");
+
+if (import.meta.env.PROD && BASE && !BASE.startsWith("https://")) {
+  throw new Error("VITE_API_BASE must use HTTPS in production");
+}
 
 export function newIdempotencyKey(): string {
   return typeof crypto !== "undefined" && "randomUUID" in crypto
