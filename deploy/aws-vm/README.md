@@ -98,6 +98,22 @@ operator.
 
 After the host is online and EFS is mounted:
 
+Materialize runtime secrets with ownership matching the unprivileged image
+user. Keep the directory root-only and never place secret values in the env
+file or shell history:
+
+```bash
+install -d -o root -g root -m 0700 /opt/crime-platform/secrets
+install -o 10001 -g 10001 -m 0400 /secure/input/database-url \
+  /opt/crime-platform/secrets/database-url
+install -o 10001 -g 10001 -m 0400 /secure/input/reka-api-key \
+  /opt/crime-platform/secrets/reka-api-key
+```
+
+In AWS, retrieve each value from Secrets Manager directly into a protected
+temporary file, install it as above, and securely remove the temporary file.
+The numeric owner is the fixed `crime` runtime identity in the API image.
+
 ```bash
 cp deploy/aws-vm/.env.production.example deploy/aws-vm/.env.production
 chmod 600 deploy/aws-vm/.env.production

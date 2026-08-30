@@ -94,6 +94,10 @@ services:
     read_only: true
     tmpfs:
       - /tmp:size=64m,mode=1777
+      # Debian's freshclam configuration writes a log even when --stdout is
+      # enabled. Keep the root filesystem immutable while giving the
+      # unprivileged updater an ephemeral log directory.
+      - /var/log/clamav:size=16m,mode=1777
     volumes:
       - clamav-db:/var/lib/clamav
     cap_drop:
