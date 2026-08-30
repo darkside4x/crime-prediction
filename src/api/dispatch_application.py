@@ -160,14 +160,6 @@ class PostgresDispatchApplicationService:
         limit: int,
         cursor: str | None,
     ) -> ResponseContactPage:
-        arguments: list[Any] = [tenant_id]
-        predicates = ["tenant_id=%s"]
-        if zone_id is not None:
-            predicates.append("zone_id=%s")
-            arguments.append(zone_id)
-        if enabled is not None:
-            predicates.append("enabled=%s")
-            arguments.append(enabled)
         if cursor is not None:
             try:
                 uuid.UUID(cursor)
@@ -175,15 +167,24 @@ class PostgresDispatchApplicationService:
                 raise DispatchApiError(
                     422, "cursor_invalid", "Contact cursor is invalid"
                 ) from error
-            predicates.append("contact_id>%s")
-            arguments.append(cursor)
-        arguments.append(limit + 1)
         with self.database.transaction(tenant_id) as db_cursor:
             db_cursor.execute(
-                f"""SELECT * FROM response_contacts
-                     WHERE {" AND ".join(predicates)}
+                """SELECT * FROM response_contacts
+                     WHERE tenant_id=%s
+                       AND (%s::text IS NULL OR zone_id=%s)
+                       AND (%s::boolean IS NULL OR enabled=%s)
+                       AND (%s::uuid IS NULL OR contact_id>%s::uuid)
                      ORDER BY contact_id LIMIT %s""",
-                tuple(arguments),
+                (
+                    tenant_id,
+                    zone_id,
+                    zone_id,
+                    enabled,
+                    enabled,
+                    cursor,
+                    cursor,
+                    limit + 1,
+                ),
             )
             rows = db_cursor.fetchall()
         next_cursor = str(rows[limit - 1]["contact_id"]) if len(rows) > limit else None
@@ -281,10 +282,6 @@ class PostgresDispatchApplicationService:
             self.phone_secrets.update(
                 current["destination_secret_ref"], phone_secret.get_secret_value()
             )
-        mapping = {
-            "display_name": "contact_label",
-            "last_verified_at": "verified_at",
-        }
         if "opted_in_for_demo" in values:
             values["opted_in_at"] = _now() if values.pop("opted_in_for_demo") else None
         if "coverage_h3_cells" in values:
@@ -292,19 +289,64 @@ class PostgresDispatchApplicationService:
         values["updated_at"] = _now()
         if phone_secret is not None:
             values["masked_destination"] = mask_phone(phone_secret.get_secret_value())
-        assignments: list[str] = []
-        parameters: list[Any] = []
-        for field, value in values.items():
-            column = mapping.get(field, field)
-            assignments.append(f"{column}=%s")
-            parameters.append(value)
-        parameters.extend((tenant_id, contact_id))
+        next_values = {
+            "broad_location_label": values.get(
+                "broad_location_label", current["broad_location_label"]
+            ),
+            "coverage_h3_cells": values.get(
+                "coverage_h3_cells", current["coverage_h3_cells"]
+            ),
+            "role": values.get("role", current["role"]),
+            "contact_label": values.get("display_name", current["contact_label"]),
+            "masked_destination": values.get(
+                "masked_destination", current["masked_destination"]
+            ),
+            "timezone": values.get("timezone", current["timezone"]),
+            "calling_window_start": values.get(
+                "calling_window_start", current["calling_window_start"]
+            ),
+            "calling_window_end": values.get(
+                "calling_window_end", current["calling_window_end"]
+            ),
+            "enabled": values.get("enabled", current["enabled"]),
+            "opted_in_at": values.get("opted_in_at", current["opted_in_at"]),
+            "verified_at": values.get("last_verified_at", current["verified_at"]),
+            "updated_at": values["updated_at"],
+        }
         try:
             with self.database.transaction(tenant_id) as cursor:
                 cursor.execute(
-                    f"""UPDATE response_contacts SET {", ".join(assignments)}
-                        WHERE tenant_id=%s AND contact_id=%s RETURNING *""",
-                    tuple(parameters),
+                    """UPDATE response_contacts
+                       SET broad_location_label=%s,
+                           coverage_h3_cells=%s,
+                           role=%s,
+                           contact_label=%s,
+                           masked_destination=%s,
+                           timezone=%s,
+                           calling_window_start=%s,
+                           calling_window_end=%s,
+                           enabled=%s,
+                           opted_in_at=%s,
+                           verified_at=%s,
+                           updated_at=%s
+                       WHERE tenant_id=%s AND contact_id=%s
+                       RETURNING *""",
+                    (
+                        next_values["broad_location_label"],
+                        next_values["coverage_h3_cells"],
+                        next_values["role"],
+                        next_values["contact_label"],
+                        next_values["masked_destination"],
+                        next_values["timezone"],
+                        next_values["calling_window_start"],
+                        next_values["calling_window_end"],
+                        next_values["enabled"],
+                        next_values["opted_in_at"],
+                        next_values["verified_at"],
+                        next_values["updated_at"],
+                        tenant_id,
+                        contact_id,
+                    ),
                 )
                 row = cursor.fetchone()
         except Exception:
