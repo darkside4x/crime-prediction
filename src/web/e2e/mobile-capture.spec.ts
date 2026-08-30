@@ -43,14 +43,26 @@ async function mockAuthenticatedApis(page: Page, role = "tenant_admin") {
       }),
     });
   });
+  await page.route("**/v1/demo/session/start", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ status: "started", deleted_pending_candidates: 0 }),
+    });
+  });
 }
 
 async function installCameraMock(
   page: Page,
-  options: { permissionDenied?: boolean; mp4Supported?: boolean; webmSupported?: boolean } = {},
+  options: {
+    permissionDenied?: boolean;
+    mp4Supported?: boolean;
+    webmSupported?: boolean;
+    recordedBytes?: number;
+  } = {},
 ) {
   await page.addInitScript(
-    ({ permissionDenied, mp4Supported, webmSupported }) => {
+    ({ permissionDenied, mp4Supported, webmSupported, recordedBytes }) => {
       const browserWindow = window as typeof window & { __cameraRequests: number };
       browserWindow.__cameraRequests = 0;
 
@@ -102,12 +114,14 @@ async function installCameraMock(
         stop() {
           if (this.state !== "recording") return;
           this.state = "inactive";
-          const bytes = this.mimeType.startsWith("video/mp4")
-            ? new Uint8Array([
-                0, 0, 0, 24, 102, 116, 121, 112, 105, 115, 111, 109, 0, 0, 0, 0,
-                105, 115, 111, 109, 97, 118, 99, 49,
-              ])
-            : new Uint8Array([26, 69, 223, 163, 66, 134, 129, 1]);
+          const bytes = recordedBytes
+            ? new Uint8Array(recordedBytes)
+            : this.mimeType.startsWith("video/mp4")
+              ? new Uint8Array([
+                  0, 0, 0, 24, 102, 116, 121, 112, 105, 115, 111, 109, 0, 0, 0, 0,
+                  105, 115, 111, 109, 97, 118, 99, 49,
+                ])
+              : new Uint8Array([26, 69, 223, 163, 66, 134, 129, 1]);
           this.ondataavailable?.({
             data: new Blob([bytes], { type: this.mimeType }),
           } as BlobEvent);
@@ -161,6 +175,7 @@ async function installCameraMock(
       permissionDenied: options.permissionDenied ?? false,
       mp4Supported: options.mp4Supported ?? true,
       webmSupported: options.webmSupported ?? true,
+      recordedBytes: options.recordedBytes ?? 0,
     },
   );
 }
@@ -328,6 +343,28 @@ test("a browser without an accepted MediaRecorder format fails closed before cam
   expect(await page.evaluate(() => (window as typeof window & { __cameraRequests: number }).__cameraRequests)).toBe(0);
 });
 
+test("an oversized mobile recording is rejected before any upload request", async ({ page }) => {
+  await page.clock.install();
+  await installCameraMock(page, { recordedBytes: 8 * 1024 * 1024 + 1 });
+  await mockAuthenticatedApis(page);
+  let uploadRequests = 0;
+  await page.route("**/v1/video-assets/uploads", async (route) => {
+    uploadRequests += 1;
+    await route.abort();
+  });
+
+  await signIn(page);
+  await page.getByLabel("Registered recorded source").selectOption(SOURCE_ID);
+  await page.getByRole("button", { name: "Enable camera preview" }).click();
+  await page.getByLabel("10s").check();
+  await page.getByRole("button", { name: "Start 10-second recording" }).click();
+  await page.clock.fastForward(10_000);
+
+  await expect(page.getByRole("alert").filter({ hasText: /exceeded the secure 8 MB gateway limit/i })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Upload for human review" })).toBeDisabled();
+  expect(uploadRequests).toBe(0);
+});
+
 test("sources shares a clean authenticated route without OAuth or tenant data", async ({ page }) => {
   await mockAuthenticatedApis(page);
   await page.goto("/?code=oauth-code-must-not-leak#/console/sources");
@@ -344,6 +381,32 @@ test("sources shares a clean authenticated route without OAuth or tenant data", 
     "href",
     "#/console/mobile-capture",
   );
+});
+
+test("a registered source renders only its aggregate H3 map location", async ({ page }) => {
+  await mockAuthenticatedApis(page);
+  await page.route(`**/v1/sources/${SOURCE_ID}/map-location`, async (route) => {
+    expect(route.request().headers().authorization).toBe("Bearer demo-token-one");
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        source_id: SOURCE_ID,
+        source_name: "Phone demo zone",
+        cell_id: "8861892581fffff",
+        h3_resolution: 8,
+        precision: "h3_area",
+      }),
+    });
+  });
+
+  await page.goto("/#/console/sources");
+  await page.getByRole("button", { name: /Tenant admin · Demo One/ }).click();
+  await page.getByRole("button", { name: "Show map location" }).click();
+
+  await expect(page.getByLabel("Phone demo zone map location")).toBeVisible();
+  await expect(page.getByText(/Approximate H3 resolution 8 area/)).toBeVisible();
+  await expect(page.locator(".source-location-map .maplibregl-canvas")).toBeVisible();
 });
 
 test("server-resolved viewer role cannot mount the camera route", async ({ page }) => {

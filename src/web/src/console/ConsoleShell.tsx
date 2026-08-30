@@ -147,17 +147,21 @@ export default function ConsoleShell() {
             <span>{routeContext.code}</span>
           </div>
         <div className="console-identity">
-          <label className="visually-hidden" htmlFor="persona-select">Demo persona</label>
-          <select
-            id="persona-select"
-            value={session.token}
-            disabled={switching}
-            onChange={(event) => void onPersonaChange(event.target.value)}
-          >
-            {DEV_PERSONAS.map((persona) => (
-              <option key={persona.token} value={persona.token}>{persona.label}</option>
-            ))}
-          </select>
+          {DEV_PERSONAS.length > 0 && (
+            <>
+              <label className="visually-hidden" htmlFor="persona-select">Demo persona</label>
+              <select
+                id="persona-select"
+                value={session.token}
+                disabled={switching}
+                onChange={(event) => void onPersonaChange(event.target.value)}
+              >
+                {DEV_PERSONAS.map((persona) => (
+                  <option key={persona.token} value={persona.token}>{persona.label}</option>
+                ))}
+              </select>
+            </>
+          )}
           <label className="visually-hidden" htmlFor="tenant-select">
             Active tenant
           </label>
@@ -193,21 +197,21 @@ export default function ConsoleShell() {
         ) : (
           <Suspense fallback={<p className="muted">Loading tenant view…</p>}>
             {route === "live" ? (
-              <LiveOperations />
+              <LiveOperations key={session.activeTenantId} />
             ) : route === "map" ? (
-              <ForecastView />
+              <ForecastView key={session.activeTenantId} />
             ) : route === "sources" ? (
-              <SourcesView />
+              <SourcesView key={session.activeTenantId} />
             ) : route === "processing" ? (
-              <ProcessingView />
+              <ProcessingView key={session.activeTenantId} />
             ) : route === "review" ? (
-              <ReviewView />
+              <ReviewView key={session.activeTenantId} />
             ) : route === "response" ? (
-              <ResponseDirectoryView />
+              <ResponseDirectoryView key={session.activeTenantId} />
             ) : route === "mobile-capture" ? (
-              <MobileCaptureView />
+              <MobileCaptureView key={session.activeTenantId} />
             ) : (
-              <ModelCardView />
+              <ModelCardView key={session.activeTenantId} />
             )}
           </Suspense>
         )}

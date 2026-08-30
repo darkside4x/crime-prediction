@@ -38,14 +38,16 @@ interface AuthValue {
 
 const AuthContext = createContext<AuthValue | null>(null);
 
-export const DEV_PERSONAS = [
-  { label: "Tenant admin · Demo One", token: "demo-token-one" },
-  { label: "Reviewer · Demo One", token: "demo-reviewer-one" },
-  { label: "Viewer · Demo One", token: "demo-viewer-one" },
-  { label: "Tenant admin · Demo Two", token: "demo-admin-two" },
-  { label: "Reviewer · Demo Two", token: "demo-reviewer-two" },
-  { label: "Viewer · Demo Two", token: "demo-token-two" },
-] as const;
+export const DEV_PERSONAS = import.meta.env.PROD
+  ? []
+  : ([
+      { label: "Tenant admin · Demo One", token: "demo-token-one" },
+      { label: "Reviewer · Demo One", token: "demo-reviewer-one" },
+      { label: "Viewer · Demo One", token: "demo-viewer-one" },
+      { label: "Tenant admin · Demo Two", token: "demo-admin-two" },
+      { label: "Reviewer · Demo Two", token: "demo-reviewer-two" },
+      { label: "Viewer · Demo Two", token: "demo-token-two" },
+    ] as const);
 
 function roleFor(me: MeTenants): Role {
   const active = me.tenants.find((item) => item.tenant_id === me.active_tenant_id);
@@ -65,7 +67,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       try {
         const me = await api.meTenants(token);
         const role = roleFor(me);
-        if (role === "tenant_admin" || role === "platform_operator") {
+        if (
+          !import.meta.env.PROD &&
+          (role === "tenant_admin" || role === "platform_operator")
+        ) {
           await api.startDemoSession(token, crypto.randomUUID());
         }
         queryClient.clear();
@@ -81,7 +86,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           if (error.code === "expired_token") setExpired(true);
           setAuthError(
             error.code === "missing_token" || error.code === "invalid_token"
-              ? "That token was not accepted. Use one of the development personas."
+              ? import.meta.env.PROD
+                ? "Your identity token was not accepted. Sign in again through the configured identity provider."
+                : "That token was not accepted. Use one of the development personas."
               : error.message,
           );
         } else {

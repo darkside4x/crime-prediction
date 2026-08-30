@@ -6,7 +6,8 @@ import NearLiveReview from "../components/NearLiveReview";
 import SourceLocationMap from "./SourceLocationMap";
 import MobileCaptureShare from "./MobileCaptureShare";
 
-const MAX_UPLOAD_BYTES = 512 * 1024 * 1024;
+// Keep multipart requests below the AWS HTTP API 10 MB payload ceiling.
+const MAX_UPLOAD_BYTES = 8 * 1024 * 1024;
 
 export default function SourcesView() {
   const { session } = useAuth();
@@ -108,7 +109,7 @@ export default function SourcesView() {
       return;
     }
     if (selected.size > MAX_UPLOAD_BYTES) {
-      setFileError("File exceeds the 512 MB upload bound.");
+      setFileError("File exceeds the secure 8 MB gateway upload bound.");
       setFile(null);
       setDurationSeconds(null);
       return;

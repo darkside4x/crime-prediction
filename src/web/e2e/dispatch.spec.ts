@@ -99,6 +99,9 @@ async function mockSession(page: Page, role: "reviewer" | "tenant_admin") {
       ],
     }),
   );
+  await page.route("**/v1/demo/session/start", (route) =>
+    json(route, { status: "started", deleted_pending_candidates: 0 }),
+  );
 }
 
 async function openReviewer(page: Page) {

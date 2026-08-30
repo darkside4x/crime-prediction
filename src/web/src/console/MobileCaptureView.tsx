@@ -7,6 +7,7 @@ import "./MobileCaptureView.css";
 const CAPTURE_DURATIONS = [10, 15, 20] as const;
 const PERMISSION_SLOW_MS = 8_000;
 const UPLOAD_SLOW_MS = 8_000;
+const MAX_UPLOAD_BYTES = 8 * 1024 * 1024;
 const CAPTURE_MIME_TYPES = [
   "video/mp4;codecs=avc1.42E01E,mp4a.40.2",
   "video/mp4;codecs=avc1.42E01E",
@@ -29,6 +30,7 @@ type CapturePhase =
   | "permission_denied"
   | "camera_unavailable"
   | "unsupported"
+  | "clip_too_large"
   | "interrupted"
   | "upload_interrupted"
   | "upload_failed";
@@ -89,6 +91,8 @@ function phaseMessage(phase: CapturePhase): string {
       return "No usable camera was found. Check the selected camera or close other camera apps.";
     case "unsupported":
       return "This browser cannot create an MP4 or WebM clip accepted by the secure media intake service.";
+    case "clip_too_large":
+      return "The clip exceeded the secure 8 MB gateway limit. Discard it and record a shorter clip.";
     case "interrupted":
       return "Camera capture was interrupted. The incomplete clip was discarded and was not uploaded.";
     case "upload_interrupted":
@@ -247,7 +251,7 @@ export default function MobileCaptureView() {
     try {
       const recorder = new MediaRecorder(stream, {
         mimeType: captureMimeType,
-        videoBitsPerSecond: 2_000_000,
+        videoBitsPerSecond: 1_200_000,
       });
       recorderRef.current = recorder;
       recorder.ondataavailable = (event) => {
@@ -281,7 +285,7 @@ export default function MobileCaptureView() {
           capturedEnd: new Date(stoppedAt).toISOString(),
         });
         setRemainingSeconds(0);
-        setPhase("recorded");
+        setPhase(blob.size > MAX_UPLOAD_BYTES ? "clip_too_large" : "recorded");
       };
       recorder.start(1_000);
       setPhase("recording");
@@ -363,6 +367,7 @@ export default function MobileCaptureView() {
     "permission_denied",
     "camera_unavailable",
     "unsupported",
+    "clip_too_large",
     "interrupted",
     "upload_interrupted",
     "upload_failed",
@@ -456,6 +461,7 @@ export default function MobileCaptureView() {
             ) : null}
             {(phase === "recorded" ||
               phase === "uploaded" ||
+              phase === "clip_too_large" ||
               phase === "upload_failed" ||
               phase === "upload_interrupted") && (
               <button
@@ -571,7 +577,14 @@ export default function MobileCaptureView() {
 
           <button
             type="button"
-            disabled={!clip || !sourceId || !consentConfirmed || upload.isPending || upload.isSuccess}
+            disabled={
+              !clip ||
+              clip.file.size > MAX_UPLOAD_BYTES ||
+              !sourceId ||
+              !consentConfirmed ||
+              upload.isPending ||
+              upload.isSuccess
+            }
             onClick={() => clip && upload.mutate(clip)}
           >
             {upload.isPending ? "Uploading securely…" : "Upload for human review"}

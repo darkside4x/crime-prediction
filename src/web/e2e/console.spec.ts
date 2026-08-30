@@ -17,10 +17,15 @@ test("viewer inspects the forecast map with suppression and limitations", async 
   await page.getByRole("button", { name: /Viewer · Demo One/ }).click();
   await expect(page.getByRole("link", { name: "Prediction" })).toHaveAttribute("aria-current", "page");
   // Viewer must not see admin or reviewer navigation.
-  await expect(page.getByRole("link", { name: "Sources & upload" })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "Sources", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "Capture", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "Response", exact: true })).toHaveCount(0);
   await expect(page.getByRole("link", { name: "Review" })).toHaveCount(0);
   // Map legend renders, including the suppressed state wording.
   await expect(page.getByText(/suppressed \(no estimate — not zero\)/)).toBeVisible();
+  await expect(page.getByRole("application", { name: "Aggregate forecast map" })).toBeVisible();
+  await expect(page.locator(".maplibregl-canvas")).toBeVisible();
+  await expect(page.getByText(/data as of/)).toBeVisible();
 });
 
 test("reviewer sees candidates labeled as unconfirmed", async ({ page }) => {
