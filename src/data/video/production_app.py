@@ -90,6 +90,7 @@ def build_production_app():
         audit_log=audit_log,
         idempotency_store=idempotency_store,
         video_broker=runtime.broker,
+        deployment_mode="production",
         media_transcoder=FfmpegWebmTranscoder(
             timeout_seconds=20,
             max_duration_seconds=20,

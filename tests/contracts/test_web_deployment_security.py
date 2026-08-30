@@ -30,7 +30,7 @@ def test_aws_host_requires_imdsv2_and_has_no_unrestricted_egress() -> None:
     # Keep these deployment invariants explicit without trying to interpret
     # CloudFormation's intrinsic YAML tags with a generic parser.
     assert "HttpTokens: required" in host_template
-    assert "HttpPutResponseHopLimit: 1" in host_template
+    assert "HttpPutResponseHopLimit: 2" in host_template
     assert "MetadataOptions:" in host_template
 
     app_group = foundation_template.split("  AppSecurityGroup:", 1)[1].split(
@@ -72,6 +72,13 @@ def test_aws_proxy_allows_same_origin_camera_and_bounds_uploads() -> None:
         in compose
     )
     assert "WEB_BIND_ADDRESS=0.0.0.0" in environment
+
+
+def test_production_composition_reports_its_real_deployment_mode() -> None:
+    composition = (
+        ROOT / "src" / "data" / "video" / "production_app.py"
+    ).read_text(encoding="utf-8")
+    assert 'deployment_mode="production"' in composition
 
 
 def test_frontend_security_config_is_valid_json() -> None:

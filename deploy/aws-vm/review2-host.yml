@@ -148,7 +148,9 @@ Resources:
       InstanceType: !Ref InstanceType
       MetadataOptions:
         HttpEndpoint: enabled
-        HttpPutResponseHopLimit: 1
+        # Docker bridge networking adds one hop. Keep tokens mandatory while
+        # allowing containers to obtain the instance-role credentials.
+        HttpPutResponseHopLimit: 2
         HttpTokens: required
         InstanceMetadataTags: disabled
       Monitoring: true
