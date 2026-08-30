@@ -23,7 +23,8 @@ services:
       dockerfile: docker/api.Dockerfile
     command: ["python", "-c", "from src.data.video.cli import migrate; migrate()"]
     environment:
-      DATABASE_URL: postgresql://crime_app:local-development-only@postgres:5432/crime_prediction
+      DATABASE_MIGRATOR_URL: postgresql://crime_migrator:local-migrator-development-only@postgres:5432/crime_prediction
+      DATABASE_MIGRATOR_ROLE: crime_migrator
     depends_on:
       postgres:
         condition: service_healthy
@@ -37,7 +38,7 @@ services:
     environment:
       APP_ENVIRONMENT: development
       CORS_ORIGINS: http://localhost:5173,http://localhost:8080
-      DATABASE_URL: postgresql://crime_app:local-development-only@postgres:5432/crime_prediction
+      DATABASE_URL: postgresql://crime_app:local-runtime-development-only@postgres:5432/crime_prediction
       REKA_API_KEY: ${REKA_API_KEY:-}
       RUNTIME_DIR: /app/data/runtime
       TRUSTED_HOSTS: localhost,127.0.0.1,api
@@ -69,7 +70,7 @@ services:
       dockerfile: docker/api.Dockerfile
     command: ["python", "-c", "from src.data.video.cli import demo_worker; demo_worker()", "--operation", "upload"]
     environment: &demo-worker-environment
-      DATABASE_URL: postgresql://crime_app:local-development-only@postgres:5432/crime_prediction
+      DATABASE_URL: postgresql://crime_app:local-runtime-development-only@postgres:5432/crime_prediction
       REKA_API_KEY: ${REKA_API_KEY:-}
       RUNTIME_DIR: /app/data/runtime
     depends_on:

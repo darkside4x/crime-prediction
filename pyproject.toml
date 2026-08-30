@@ -31,6 +31,7 @@ dev = [
 platform = [
   "boto3==1.40.31",
   "psycopg[binary,pool]==3.2.10",
+  "twilio==9.11.0",
 ]
 
 [project.scripts]
@@ -41,6 +42,7 @@ crime-platform-migrate = "src.data.video.cli:migrate"
 crime-video-worker = "src.data.video.cli:worker"
 crime-video-capture-worker = "src.data.video.cli:capture_worker"
 crime-demo-worker = "src.data.video.cli:demo_worker"
+crime-dispatch-worker = "src.data.dispatch.cli:worker"
 
 [build-system]
 requires = ["hatchling==1.27.0"]
@@ -55,3 +57,7 @@ packages = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+
+[tool.ruff.lint.per-file-ignores]
+# FastAPI intentionally evaluates dependency/parameter marker factories in route defaults.
+"src/api/app.py" = ["B008"]

@@ -17,10 +17,15 @@ test("viewer inspects the forecast map with suppression and limitations", async 
   await page.getByRole("button", { name: /Viewer · Demo One/ }).click();
   await expect(page.getByRole("link", { name: "Prediction" })).toHaveAttribute("aria-current", "page");
   // Viewer must not see admin or reviewer navigation.
-  await expect(page.getByRole("link", { name: "Sources & upload" })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "Sources", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "Capture", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "Response", exact: true })).toHaveCount(0);
   await expect(page.getByRole("link", { name: "Review" })).toHaveCount(0);
   // Map legend renders, including the suppressed state wording.
   await expect(page.getByText(/suppressed \(no estimate — not zero\)/)).toBeVisible();
+  await expect(page.getByRole("application", { name: "Aggregate forecast map" })).toBeVisible();
+  await expect(page.locator(".maplibregl-canvas")).toBeVisible();
+  await expect(page.getByText(/data as of/)).toBeVisible();
 });
 
 test("reviewer sees candidates labeled as unconfirmed", async ({ page }) => {
@@ -89,6 +94,55 @@ test("admin chooses live, uploaded, or simulated video input", async ({ page }) 
   await expect(page.getByRole("link", { name: "Sources & upload" })).toHaveCount(0);
 });
 
+test("production-disabled capture and historical fallback are represented honestly", async ({ page }) => {
+  await page.route("**/ready", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        status: "ready",
+        deployment_mode: "production",
+        reka_chat: "verified",
+        reka_vision: "verified",
+        video_service: "durable_connected",
+        queue: "durable_connected",
+        near_live_capture: "disabled",
+        forecast_models: "approved_or_historical_fallback",
+        forecast_data: "synthetic_demo",
+      }),
+    });
+  });
+  await page.route("**/v1/model-card", async (route) => {
+    await route.fulfill({
+      status: 404,
+      contentType: "application/problem+json",
+      body: JSON.stringify({
+        status: 404,
+        code: "approved_model_not_found",
+        message: "No approved model is active",
+        retryable: false,
+      }),
+    });
+  });
+
+  await signInAsAdmin(page);
+  const liveAction = page.getByRole("button", { name: "Public demo capture disabled" });
+  await expect(liveAction).toBeVisible();
+  await expect(liveAction).toBeDisabled();
+  await expect(page.getByText("Public demo camera disabled in production")).toBeVisible();
+  await page.getByText("Register tenant camera connector").click();
+  await expect(page.getByLabel("Source name")).toBeEnabled();
+  await expect(page.getByText(/Registration stores only the tenant-scoped connector reference/)).toBeVisible();
+
+  await page.getByRole("tab", { name: /Simulated live/ }).click();
+  await expect(page.getByRole("button", { name: "Generated demo capture disabled" })).toBeDisabled();
+
+  await page.getByRole("link", { name: "Model" }).click();
+  await expect(page.getByRole("heading", { name: /Historical baseline/ })).toBeVisible();
+  await expect(page.getByText("Safe fallback is active")).toBeVisible();
+  await expect(page.getByText("Could not load the model card.")).toHaveCount(0);
+});
+
 test("video input rail remains usable on a narrow console", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await signInAsAdmin(page);
@@ -107,6 +161,21 @@ test("tenant switch clears tenant-scoped state", async ({ page }) => {
   // Role downgrades to viewer in tenant two; admin nav must disappear.
   await expect(page.getByTitle("Active role in this tenant")).toHaveText("viewer");
   await expect(page.getByRole("link", { name: "Live" })).toHaveCount(0);
+});
+
+test("OAuth history restoration synchronizes the rendered console route", async ({ page }) => {
+  await signInAsAdmin(page);
+  await page.evaluate(() => {
+    const oldURL = window.location.href;
+    window.history.replaceState(null, "", `${window.location.pathname}#/console/model-card`);
+    window.dispatchEvent(
+      new HashChangeEvent("hashchange", { oldURL, newURL: window.location.href }),
+    );
+  });
+
+  await expect(page.getByRole("heading", { name: "Model card", exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Model" })).toHaveAttribute("aria-current", "page");
+  await expect(page.getByRole("heading", { name: "Live monitor" })).toHaveCount(0);
 });
 
 test("keyboard navigation reaches the primary flow", async ({ page }) => {

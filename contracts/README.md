@@ -20,6 +20,22 @@ Every schema has a synthetic fixture with the same basename under `contracts/fix
 | `tenant-context.schema.json` | internal | server-derived request tenant and role context |
 | `api-error.schema.json` | public | typed safe error response |
 
+## Review 3 voice-notification contract
+
+The generated `contracts/openapi.json` document is the single public contract
+for response contacts, dispatch previews, dispatch cases and their embedded call
+attempts. In particular, the browser DTOs are `ResponseContactView`,
+`DispatchPreviewView`, `DispatchCaseView` and `DispatchAttemptView`. Do not add
+parallel JSON Schemas for these DTOs: doing so creates two independently
+versioned definitions for the same HTTP response.
+
+The public contract deliberately omits tenant IDs, callable destinations,
+secret references, provider call IDs, callback tokens and raw provider events.
+Callable destinations live behind restricted secret references. Durable call
+events are internal audit/storage records, not a browser endpoint. A dispatch
+case can be created only after an immutable confirmed review promoted the
+referenced incident and a reviewer explicitly authorized the call.
+
 ## Existing model and AI artifact contracts
 
 | Schema | Boundary |
@@ -46,6 +62,11 @@ Every schema has a synthetic fixture with the same basename under `contracts/fix
 - Suppressed operational forecasts use null estimates, a `suppressed` band, and no drivers.
 - Reka Vision may receive tenant-approved video and produce unconfirmed candidates; it never receives exact coordinates, event IDs, credentials, secret references, or cross-tenant context.
 - Reka Chat receives only approved aggregate forecast facts and never calculates forecast values.
+- Candidates, forecasts, and rejected reviews cannot create dispatch cases.
+- Voice dispatch is explicitly human-authorized and limited to two primary
+  attempts followed by one supervisor attempt.
+- Browser dispatch records contain masked destinations only; secret references,
+  full phone numbers, provider call IDs, and callback tokens are prohibited.
 
 ## Versioning and changes
 
@@ -73,6 +94,22 @@ Every schema has a synthetic fixture with the same basename under `contracts/fix
 - Added an authenticated, tenant-scoped re-analysis mutation that creates fresh
   durable work and never reopens or mutates a dead-letter job.
 - Shared endpoint-contract review is required before this addition is frozen.
+
+### 2026-08-30 — human-authorized voice escalation
+
+- Added browser-safe response-contact, dispatch-preview, dispatch-case and
+  embedded call-attempt DTOs to the generated OpenAPI contract.
+- Removed proposed parallel JSON Schemas for those HTTP DTOs; generated OpenAPI
+  is authoritative for the browser integration, while durable call events stay
+  internal.
+- Dispatch triggers are restricted to confirmed review promotions and require
+  explicit call authorization.
+- The escalation contract fixes the maximum at three logical calls: two to the
+  primary contact and one to the supervisor.
+- Full callable destinations remain outside browser contracts and are stored
+  through restricted `secret://` references.
+- This shared-contract addition requires review by a teammate outside the
+  schema author's primary area.
 
 ### 2026-08-30 — calibrated operational model artifacts
 

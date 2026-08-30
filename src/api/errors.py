@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
-from typing import Any
 import uuid
+from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
+from src.data.dispatch.errors import DispatchError
+from src.data.video.errors import VideoPipelineError
 from src.models.contracts import validate_contract
 from src.models.errors import DataContractError
-from src.data.video.errors import VideoPipelineError
 
 
 def problem(
@@ -138,5 +139,21 @@ def install_error_handlers(app: FastAPI) -> None:
                     "details": [],
                 },
                 status,
+            ),
+        )
+
+    @app.exception_handler(DispatchError)
+    async def dispatch_error(request: Request, error: DispatchError) -> JSONResponse:
+        return JSONResponse(
+            status_code=error.http_status,
+            content=_payload(
+                request,
+                {
+                    "code": error.code,
+                    "message": str(error),
+                    "retryable": error.retryable,
+                    "details": [],
+                },
+                error.http_status,
             ),
         )

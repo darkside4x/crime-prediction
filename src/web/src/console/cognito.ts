@@ -98,11 +98,20 @@ export async function consumeCognitoCallback(): Promise<CognitoCallback | null> 
   if (!response.ok || typeof result.id_token !== "string") {
     throw new Error("Cognito token exchange failed");
   }
-  const returnHash = sessionStorage.getItem(RETURN_HASH) || "#/console";
+  const storedReturnHash = sessionStorage.getItem(RETURN_HASH);
+  const returnHash = storedReturnHash?.startsWith("#/console")
+    ? storedReturnHash
+    : "#/console";
   sessionStorage.removeItem(PKCE_VERIFIER);
   sessionStorage.removeItem(OAUTH_STATE);
   sessionStorage.removeItem(RETURN_HASH);
+  const oldURL = window.location.href;
   window.history.replaceState(null, "", `${window.location.pathname}${returnHash}`);
+  // replaceState does not emit hashchange. Notify every mounted router so an
+  // OAuth callback cannot leave the URL and rendered console view out of sync.
+  window.dispatchEvent(
+    new HashChangeEvent("hashchange", { oldURL, newURL: window.location.href }),
+  );
   return { token: result.id_token, returnHash };
 }
 

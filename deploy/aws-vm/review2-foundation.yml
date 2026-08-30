@@ -158,12 +158,30 @@ Resources:
     Properties:
       GroupDescription: Review application hosts; no public ingress
       VpcId: !Ref VpcId
-      SecurityGroupEgress:
-        - IpProtocol: -1
-          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress: []
       Tags:
         - Key: Name
           Value: !Sub "crime-prediction-${EnvironmentName}-app"
+
+  AppHttpsEgress:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      Description: TLS for AWS APIs, Reka, source control, and package registries
+      GroupId: !Ref AppSecurityGroup
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      CidrIp: 0.0.0.0/0
+
+  AppHttpEgress:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      Description: Package repositories and ClamAV signature mirrors
+      GroupId: !Ref AppSecurityGroup
+      IpProtocol: tcp
+      FromPort: 80
+      ToPort: 80
+      CidrIp: 0.0.0.0/0
 
   DatabaseSecurityGroup:
     Type: AWS::EC2::SecurityGroup
@@ -180,6 +198,16 @@ Resources:
         - Key: Name
           Value: !Sub "crime-prediction-${EnvironmentName}-database"
 
+  AppDatabaseEgress:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      Description: PostgreSQL runtime and migration traffic
+      GroupId: !Ref AppSecurityGroup
+      IpProtocol: tcp
+      FromPort: 5432
+      ToPort: 5432
+      DestinationSecurityGroupId: !Ref DatabaseSecurityGroup
+
   ModelRegistrySecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -194,6 +222,16 @@ Resources:
       Tags:
         - Key: Name
           Value: !Sub "crime-prediction-${EnvironmentName}-model-registry"
+
+  AppModelRegistryEgress:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      Description: Encrypted EFS model-registry mounts
+      GroupId: !Ref AppSecurityGroup
+      IpProtocol: tcp
+      FromPort: 2049
+      ToPort: 2049
+      DestinationSecurityGroupId: !Ref ModelRegistrySecurityGroup
 
   ModelRegistryFileSystem:
     Type: AWS::EFS::FileSystem
@@ -301,11 +339,23 @@ Resources:
   AppDatabaseSecret:
     Type: AWS::SecretsManager::Secret
     Properties:
-      Description: Generated non-superuser application database credentials
+      Description: Generated RLS-constrained runtime database credentials
       KmsKeyId: !GetAtt PlatformKey.Arn
       Name: !Sub "crime-prediction/${EnvironmentName}/database-app"
       GenerateSecretString:
         SecretStringTemplate: '{"username":"crime_app"}'
+        GenerateStringKey: password
+        ExcludeCharacters: '"@/\\''`$&;|<> (){}[]'
+        PasswordLength: 40
+
+  MigratorDatabaseSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: Generated schema-owner credentials used only by the migration job
+      KmsKeyId: !GetAtt PlatformKey.Arn
+      Name: !Sub "crime-prediction/${EnvironmentName}/database-migrator"
+      GenerateSecretString:
+        SecretStringTemplate: '{"username":"crime_migrator"}'
         GenerateStringKey: password
         ExcludeCharacters: '"@/\\''`$&;|<> (){}[]'
         PasswordLength: 40
@@ -317,6 +367,20 @@ Resources:
       KmsKeyId: !GetAtt PlatformKey.Arn
       Name: !Sub "crime-prediction/${EnvironmentName}/reka-api-key"
       GenerateSecretString:
+        ExcludePunctuation: true
+        PasswordLength: 48
+
+  TwilioVoiceSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: >-
+        Fail-closed Twilio Voice configuration placeholder. Replace with opted-in
+        demo credentials before setting DISPATCH_MODE=live.
+      KmsKeyId: !GetAtt PlatformKey.Arn
+      Name: !Sub "crime-prediction/${EnvironmentName}/twilio-voice"
+      GenerateSecretString:
+        SecretStringTemplate: '{"configured":false}'
+        GenerateStringKey: callback_token_secret
         ExcludePunctuation: true
         PasswordLength: 48
 
@@ -398,6 +462,24 @@ Resources:
         maxReceiveCount: 5
       VisibilityTimeout: 180
 
+  DispatchDlq:
+    Type: AWS::SQS::Queue
+    Properties:
+      KmsMasterKeyId: !GetAtt PlatformKey.Arn
+      MessageRetentionPeriod: 1209600
+      SqsManagedSseEnabled: false
+
+  DispatchQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      DelaySeconds: 0
+      KmsMasterKeyId: !GetAtt PlatformKey.Arn
+      MessageRetentionPeriod: 345600
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt DispatchDlq.Arn
+        maxReceiveCount: 5
+      VisibilityTimeout: 90
+
   PlatformInstanceRole:
     Type: AWS::IAM::Role
     Properties:
@@ -435,30 +517,46 @@ Resources:
                   - !GetAtt VideoIndexQueue.Arn
                   - !GetAtt VideoAnalyzeQueue.Arn
                   - !GetAtt VideoDeleteQueue.Arn
+                  - !GetAtt DispatchQueue.Arn
                   - !GetAtt VideoUploadDlq.Arn
                   - !GetAtt VideoIndexDlq.Arn
                   - !GetAtt VideoAnalyzeDlq.Arn
                   - !GetAtt VideoDeleteDlq.Arn
+                  - !GetAtt DispatchDlq.Arn
               - Sid: RuntimeSecrets
                 Effect: Allow
                 Action: secretsmanager:GetSecretValue
                 Resource:
                   - !Ref AppDatabaseSecret
                   - !Ref RekaApiSecret
+                  - !Ref TwilioVoiceSecret
                   - !Sub "arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:crime-prediction/${EnvironmentName}/tenants/*"
+              - Sid: DispatchContactSecrets
+                Effect: Allow
+                Action:
+                  - secretsmanager:CreateSecret
+                  - secretsmanager:DeleteSecret
+                  - secretsmanager:GetSecretValue
+                  - secretsmanager:PutSecretValue
+                  - secretsmanager:TagResource
+                Resource: !Sub "arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:crime-prediction/${EnvironmentName}/tenants/*/dispatch-contacts/*"
               - !If
                 - AllowDatabaseBootstrapCondition
                 - Sid: OneTimeDatabaseBootstrap
                   Effect: Allow
                   Action: secretsmanager:GetSecretValue
-                  Resource: !GetAtt Database.MasterUserSecret.SecretArn
+                  Resource:
+                    - !GetAtt Database.MasterUserSecret.SecretArn
+                    - !Ref MigratorDatabaseSecret
                 - !Ref AWS::NoValue
               - !If
                 - AllowDatabaseBootstrapCondition
                 - Sid: OneTimeDatabaseDsnSeal
                   Effect: Allow
                   Action: secretsmanager:PutSecretValue
-                  Resource: !Ref AppDatabaseSecret
+                  Resource:
+                    - !Ref AppDatabaseSecret
+                    - !Ref MigratorDatabaseSecret
                 - !Ref AWS::NoValue
               - Sid: RuntimeKey
                 Effect: Allow
@@ -592,6 +690,23 @@ Resources:
       Threshold: 0
       TreatMissingData: notBreaching
 
+  DispatchDlqAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmActions: [!Ref AlarmTopic]
+      AlarmDescription: Authorized voice-dispatch jobs entered the dead-letter queue
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt DispatchDlq.QueueName
+      EvaluationPeriods: 1
+      MetricName: ApproximateNumberOfMessagesVisible
+      Namespace: AWS/SQS
+      Period: 60
+      Statistic: Maximum
+      Threshold: 0
+      TreatMissingData: notBreaching
+
   DatabaseCpuAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
@@ -629,6 +744,10 @@ Resources:
 Outputs:
   AppDatabaseSecretArn:
     Value: !Ref AppDatabaseSecret
+  RuntimeDatabaseSecretArn:
+    Value: !Ref AppDatabaseSecret
+  MigratorDatabaseSecretArn:
+    Value: !Ref MigratorDatabaseSecret
   AppSecurityGroupId:
     Value: !Ref AppSecurityGroup
   AlarmTopicArn:
@@ -657,6 +776,12 @@ Outputs:
     Value: !Ref ModelRegistryFileSystem
   RekaApiSecretArn:
     Value: !Ref RekaApiSecret
+  TwilioVoiceSecretArn:
+    Value: !Ref TwilioVoiceSecret
+  DispatchDlqUrl:
+    Value: !Ref DispatchDlq
+  DispatchQueueUrl:
+    Value: !Ref DispatchQueue
   VideoAnalyzeDlqUrl:
     Value: !Ref VideoAnalyzeDlq
   VideoAnalyzeQueueUrl:

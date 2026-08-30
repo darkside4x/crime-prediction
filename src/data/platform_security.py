@@ -32,7 +32,9 @@ class PostgresRateLimiter:
         with self.database.system_transaction() as cursor:
             if (int(key_hash[:4], 16) + int(current)) % 128 == 0:
                 cursor.execute(
-                    "DELETE FROM api_rate_limit_buckets WHERE expires_at < now()"
+                    "DELETE FROM api_rate_limit_buckets "
+                    "WHERE expires_at < to_timestamp(%s)",
+                    (current,),
                 )
             cursor.execute(
                 "DELETE FROM api_rate_limit_buckets WHERE key_hash=%s AND window_start < %s",

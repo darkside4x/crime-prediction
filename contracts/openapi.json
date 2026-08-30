@@ -36,6 +36,28 @@
         "title": "Body_create_video_upload_v1_video_assets_uploads_post",
         "type": "object"
       },
+      "CancelDispatchRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "cancel_pending_calls": {
+            "const": true,
+            "default": true,
+            "title": "Cancel Pending Calls",
+            "type": "boolean"
+          },
+          "reason": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "title": "CancelDispatchRequest",
+        "type": "object"
+      },
       "CopilotMessage": {
         "additionalProperties": false,
         "properties": {
@@ -50,6 +72,339 @@
           "question"
         ],
         "title": "CopilotMessage",
+        "type": "object"
+      },
+      "DispatchAttemptView": {
+        "additionalProperties": false,
+        "properties": {
+          "attempt_id": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Attempt Id",
+            "type": "string"
+          },
+          "attempt_number": {
+            "maximum": 3.0,
+            "minimum": 1.0,
+            "title": "Attempt Number",
+            "type": "integer"
+          },
+          "contact_name": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Contact Name",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "phone_masked": {
+            "maxLength": 32,
+            "minLength": 3,
+            "pattern": "^[*\u2022]{4} ?[0-9]{4}$",
+            "title": "Phone Masked",
+            "type": "string"
+          },
+          "safe_error_code": {
+            "anyOf": [
+              {
+                "pattern": "^[a-z0-9_]{1,80}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Safe Error Code"
+          },
+          "state": {
+            "enum": [
+              "queued",
+              "dialing",
+              "ringing",
+              "answered",
+              "acknowledged",
+              "retry_scheduled",
+              "manual_follow_up",
+              "unacknowledged",
+              "failed",
+              "canceled"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "target_role": {
+            "enum": [
+              "primary",
+              "supervisor"
+            ],
+            "title": "Target Role",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "attempt_id",
+          "attempt_number",
+          "target_role",
+          "contact_name",
+          "phone_masked",
+          "state",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "DispatchAttemptView",
+        "type": "object"
+      },
+      "DispatchAuthorizationRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "authorize_call": {
+            "const": true,
+            "title": "Authorize Call",
+            "type": "boolean"
+          },
+          "message_template_version": {
+            "default": "dispatch-alert-v1",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+            "title": "Message Template Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "authorize_call"
+        ],
+        "title": "DispatchAuthorizationRequest",
+        "type": "object"
+      },
+      "DispatchCaseView": {
+        "additionalProperties": false,
+        "properties": {
+          "attempts": {
+            "items": {
+              "$ref": "#/components/schemas/DispatchAttemptView"
+            },
+            "maxItems": 3,
+            "title": "Attempts",
+            "type": "array"
+          },
+          "authorized_at": {
+            "format": "date-time",
+            "title": "Authorized At",
+            "type": "string"
+          },
+          "authorized_by_principal_id": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Authorized By Principal Id",
+            "type": "string"
+          },
+          "canceled_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Canceled At"
+          },
+          "case_reference": {
+            "maxLength": 40,
+            "minLength": 1,
+            "title": "Case Reference",
+            "type": "string"
+          },
+          "category": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Category",
+            "type": "string"
+          },
+          "dispatch_case_id": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Dispatch Case Id",
+            "type": "string"
+          },
+          "incident_id": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Incident Id",
+            "type": "string"
+          },
+          "message_template_version": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+            "title": "Message Template Version",
+            "type": "string"
+          },
+          "next_attempt_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Attempt At"
+          },
+          "occurred_at": {
+            "format": "date-time",
+            "title": "Occurred At",
+            "type": "string"
+          },
+          "primary_contact": {
+            "$ref": "#/components/schemas/DispatchContactSummary"
+          },
+          "state": {
+            "enum": [
+              "queued",
+              "dialing",
+              "ringing",
+              "answered",
+              "acknowledged",
+              "retry_scheduled",
+              "escalated",
+              "manual_follow_up",
+              "unacknowledged",
+              "failed",
+              "canceled"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "supervisor_contact": {
+            "$ref": "#/components/schemas/DispatchContactSummary"
+          },
+          "zone_label": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Zone Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "dispatch_case_id",
+          "incident_id",
+          "case_reference",
+          "category",
+          "zone_label",
+          "occurred_at",
+          "state",
+          "message_template_version",
+          "authorized_by_principal_id",
+          "authorized_at",
+          "primary_contact",
+          "supervisor_contact"
+        ],
+        "title": "DispatchCaseView",
+        "type": "object"
+      },
+      "DispatchContactSummary": {
+        "additionalProperties": false,
+        "properties": {
+          "display_name": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Display Name",
+            "type": "string"
+          },
+          "phone_masked": {
+            "maxLength": 32,
+            "minLength": 3,
+            "pattern": "^[*\u2022]{4} ?[0-9]{4}$",
+            "title": "Phone Masked",
+            "type": "string"
+          },
+          "role": {
+            "enum": [
+              "primary",
+              "supervisor"
+            ],
+            "title": "Role",
+            "type": "string"
+          }
+        },
+        "required": [
+          "display_name",
+          "phone_masked",
+          "role"
+        ],
+        "title": "DispatchContactSummary",
+        "type": "object"
+      },
+      "DispatchPreviewView": {
+        "additionalProperties": false,
+        "properties": {
+          "case_reference": {
+            "maxLength": 40,
+            "minLength": 1,
+            "title": "Case Reference",
+            "type": "string"
+          },
+          "category": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Category",
+            "type": "string"
+          },
+          "incident_id": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Incident Id",
+            "type": "string"
+          },
+          "maximum_attempts": {
+            "const": 3,
+            "default": 3,
+            "title": "Maximum Attempts",
+            "type": "integer"
+          },
+          "occurred_at": {
+            "format": "date-time",
+            "title": "Occurred At",
+            "type": "string"
+          },
+          "primary_contact": {
+            "$ref": "#/components/schemas/DispatchContactSummary"
+          },
+          "retry_delay_seconds": {
+            "maximum": 3600.0,
+            "minimum": 5.0,
+            "title": "Retry Delay Seconds",
+            "type": "integer"
+          },
+          "supervisor_contact": {
+            "$ref": "#/components/schemas/DispatchContactSummary"
+          },
+          "zone_label": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Zone Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "incident_id",
+          "case_reference",
+          "category",
+          "zone_label",
+          "occurred_at",
+          "primary_contact",
+          "supervisor_contact",
+          "retry_delay_seconds"
+        ],
+        "title": "DispatchPreviewView",
         "type": "object"
       },
       "HTTPValidationError": {
@@ -215,6 +570,386 @@
         "title": "RecordedSourceCreate",
         "type": "object"
       },
+      "ResponseContactCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "broad_location_label": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Broad Location Label",
+            "type": "string"
+          },
+          "calling_window_end": {
+            "pattern": "^(?:[01][0-9]|2[0-3]):[0-5][0-9]$",
+            "title": "Calling Window End",
+            "type": "string"
+          },
+          "calling_window_start": {
+            "pattern": "^(?:[01][0-9]|2[0-3]):[0-5][0-9]$",
+            "title": "Calling Window Start",
+            "type": "string"
+          },
+          "coverage_h3_cells": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 256,
+            "minItems": 1,
+            "title": "Coverage H3 Cells",
+            "type": "array"
+          },
+          "display_name": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Display Name",
+            "type": "string"
+          },
+          "enabled": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "last_verified_at": {
+            "format": "date-time",
+            "title": "Last Verified At",
+            "type": "string"
+          },
+          "opted_in_for_demo": {
+            "default": false,
+            "title": "Opted In For Demo",
+            "type": "boolean"
+          },
+          "phone_number": {
+            "format": "password",
+            "title": "Phone Number",
+            "type": "string",
+            "writeOnly": true
+          },
+          "role": {
+            "enum": [
+              "primary",
+              "supervisor"
+            ],
+            "title": "Role",
+            "type": "string"
+          },
+          "timezone": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Timezone",
+            "type": "string"
+          },
+          "zone_id": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Zone Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "zone_id",
+          "broad_location_label",
+          "coverage_h3_cells",
+          "display_name",
+          "phone_number",
+          "role",
+          "timezone",
+          "calling_window_start",
+          "calling_window_end",
+          "last_verified_at"
+        ],
+        "title": "ResponseContactCreate",
+        "type": "object"
+      },
+      "ResponseContactPage": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ResponseContactView"
+            },
+            "maxItems": 100,
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "ResponseContactPage",
+        "type": "object"
+      },
+      "ResponseContactPatch": {
+        "additionalProperties": false,
+        "properties": {
+          "broad_location_label": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Broad Location Label"
+          },
+          "calling_window_end": {
+            "anyOf": [
+              {
+                "pattern": "^(?:[01][0-9]|2[0-3]):[0-5][0-9]$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Calling Window End"
+          },
+          "calling_window_start": {
+            "anyOf": [
+              {
+                "pattern": "^(?:[01][0-9]|2[0-3]):[0-5][0-9]$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Calling Window Start"
+          },
+          "coverage_h3_cells": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 256,
+                "minItems": 1,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Coverage H3 Cells"
+          },
+          "display_name": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          },
+          "enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enabled"
+          },
+          "last_verified_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Verified At"
+          },
+          "opted_in_for_demo": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Opted In For Demo"
+          },
+          "phone_number": {
+            "anyOf": [
+              {
+                "format": "password",
+                "type": "string",
+                "writeOnly": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Phone Number"
+          },
+          "role": {
+            "anyOf": [
+              {
+                "enum": [
+                  "primary",
+                  "supervisor"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Role"
+          },
+          "timezone": {
+            "anyOf": [
+              {
+                "maxLength": 80,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timezone"
+          }
+        },
+        "title": "ResponseContactPatch",
+        "type": "object"
+      },
+      "ResponseContactView": {
+        "additionalProperties": false,
+        "properties": {
+          "broad_location_label": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Broad Location Label",
+            "type": "string"
+          },
+          "calling_window_end": {
+            "pattern": "^(?:[01][0-9]|2[0-3]):[0-5][0-9]$",
+            "title": "Calling Window End",
+            "type": "string"
+          },
+          "calling_window_start": {
+            "pattern": "^(?:[01][0-9]|2[0-3]):[0-5][0-9]$",
+            "title": "Calling Window Start",
+            "type": "string"
+          },
+          "contact_id": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Contact Id",
+            "type": "string"
+          },
+          "coverage_h3_cells": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 256,
+            "minItems": 1,
+            "title": "Coverage H3 Cells",
+            "type": "array"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "display_name": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Display Name",
+            "type": "string"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "last_verified_at": {
+            "format": "date-time",
+            "title": "Last Verified At",
+            "type": "string"
+          },
+          "opted_in_for_demo": {
+            "title": "Opted In For Demo",
+            "type": "boolean"
+          },
+          "phone_masked": {
+            "maxLength": 32,
+            "minLength": 3,
+            "pattern": "^[*\u2022]{4} ?[0-9]{4}$",
+            "title": "Phone Masked",
+            "type": "string"
+          },
+          "role": {
+            "enum": [
+              "primary",
+              "supervisor"
+            ],
+            "title": "Role",
+            "type": "string"
+          },
+          "timezone": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Timezone",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "zone_id": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Zone Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "contact_id",
+          "zone_id",
+          "broad_location_label",
+          "coverage_h3_cells",
+          "display_name",
+          "phone_masked",
+          "role",
+          "enabled",
+          "opted_in_for_demo",
+          "timezone",
+          "calling_window_start",
+          "calling_window_end",
+          "last_verified_at",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "ResponseContactView",
+        "type": "object"
+      },
       "ReviewRequest": {
         "additionalProperties": false,
         "properties": {
@@ -281,6 +1016,74 @@
           }
         },
         "title": "SimulatedCaptureRequest",
+        "type": "object"
+      },
+      "TestCallRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "authorize_test_call": {
+            "const": true,
+            "title": "Authorize Test Call",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "authorize_test_call"
+        ],
+        "title": "TestCallRequest",
+        "type": "object"
+      },
+      "TestCallView": {
+        "additionalProperties": false,
+        "properties": {
+          "contact_id": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Contact Id",
+            "type": "string"
+          },
+          "contact_name": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Contact Name",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "phone_masked": {
+            "maxLength": 32,
+            "minLength": 3,
+            "pattern": "^[*\u2022]{4} ?[0-9]{4}$",
+            "title": "Phone Masked",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "queued",
+              "simulated"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "test_call_id": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Test Call Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "test_call_id",
+          "contact_id",
+          "contact_name",
+          "phone_masked",
+          "state",
+          "created_at"
+        ],
+        "title": "TestCallView",
         "type": "object"
       },
       "ValidationError": {
@@ -871,6 +1674,124 @@
         "summary": "Start Simulated Capture"
       }
     },
+    "/v1/dispatch-cases/{dispatch_case_id}": {
+      "get": {
+        "operationId": "get_dispatch_case_v1_dispatch_cases__dispatch_case_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "dispatch_case_id",
+            "required": true,
+            "schema": {
+              "maxLength": 120,
+              "minLength": 1,
+              "title": "Dispatch Case Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DispatchCaseView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Dispatch Case"
+      }
+    },
+    "/v1/dispatch-cases/{dispatch_case_id}/cancel": {
+      "post": {
+        "operationId": "cancel_dispatch_v1_dispatch_cases__dispatch_case_id__cancel_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "dispatch_case_id",
+            "required": true,
+            "schema": {
+              "maxLength": 120,
+              "minLength": 1,
+              "title": "Dispatch Case Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CancelDispatchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DispatchCaseView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Cancel Dispatch"
+      }
+    },
     "/v1/forecasts": {
       "get": {
         "operationId": "forecasts_v1_forecasts_get",
@@ -1010,6 +1931,124 @@
           }
         ],
         "summary": "Forecast Detail"
+      }
+    },
+    "/v1/incidents/{incident_id}/dispatch-authorizations": {
+      "post": {
+        "operationId": "authorize_dispatch_v1_incidents__incident_id__dispatch_authorizations_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "incident_id",
+            "required": true,
+            "schema": {
+              "maxLength": 120,
+              "minLength": 1,
+              "title": "Incident Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DispatchAuthorizationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DispatchCaseView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Authorize Dispatch"
+      }
+    },
+    "/v1/incidents/{incident_id}/dispatch-preview": {
+      "get": {
+        "operationId": "preview_dispatch_v1_incidents__incident_id__dispatch_preview_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "incident_id",
+            "required": true,
+            "schema": {
+              "maxLength": 120,
+              "minLength": 1,
+              "title": "Incident Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DispatchPreviewView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Preview Dispatch"
       }
     },
     "/v1/ingestion/runs": {
@@ -1457,6 +2496,405 @@
           }
         ],
         "summary": "Rollback Model"
+      }
+    },
+    "/v1/response-contacts": {
+      "get": {
+        "operationId": "list_response_contacts_v1_response_contacts_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "zone_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 120,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Zone Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "enabled",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Enabled"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 500,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResponseContactPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Response Contacts"
+      },
+      "post": {
+        "operationId": "create_response_contact_v1_response_contacts_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResponseContactCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResponseContactView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Response Contact"
+      }
+    },
+    "/v1/response-contacts/{contact_id}": {
+      "delete": {
+        "operationId": "delete_response_contact_v1_response_contacts__contact_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "contact_id",
+            "required": true,
+            "schema": {
+              "maxLength": 120,
+              "minLength": 1,
+              "title": "Contact Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Delete Response Contact"
+      },
+      "get": {
+        "operationId": "get_response_contact_v1_response_contacts__contact_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "contact_id",
+            "required": true,
+            "schema": {
+              "maxLength": 120,
+              "minLength": 1,
+              "title": "Contact Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResponseContactView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Response Contact"
+      },
+      "patch": {
+        "operationId": "update_response_contact_v1_response_contacts__contact_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "contact_id",
+            "required": true,
+            "schema": {
+              "maxLength": 120,
+              "minLength": 1,
+              "title": "Contact Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResponseContactPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResponseContactView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Update Response Contact"
+      }
+    },
+    "/v1/response-contacts/{contact_id}/test-calls": {
+      "post": {
+        "operationId": "create_test_call_v1_response_contacts__contact_id__test_calls_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "contact_id",
+            "required": true,
+            "schema": {
+              "maxLength": 120,
+              "minLength": 1,
+              "title": "Contact Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TestCallRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TestCallView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Test Call"
       }
     },
     "/v1/sources": {

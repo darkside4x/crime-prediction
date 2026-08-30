@@ -1,16 +1,31 @@
 from __future__ import annotations
 
+import hashlib
 import os
-from pathlib import Path
 import uuid
+from pathlib import Path
 
 import pytest
 
-DSN = os.getenv("TEST_POSTGRES_DSN")
+MIGRATOR_DSN = os.getenv("TEST_POSTGRES_MIGRATOR_DSN")
+RUNTIME_DSN = os.getenv("TEST_POSTGRES_RUNTIME_DSN")
 pytestmark = pytest.mark.skipif(
-    not DSN,
-    reason="Set TEST_POSTGRES_DSN to run direct PostgreSQL RLS integration tests",
+    not MIGRATOR_DSN or not RUNTIME_DSN,
+    reason=(
+        "Set TEST_POSTGRES_MIGRATOR_DSN and TEST_POSTGRES_RUNTIME_DSN to run "
+        "direct PostgreSQL RLS integration tests"
+    ),
 )
+
+
+def _key_that_triggers_cleanup(prefix: str, current: int) -> str:
+    suffix = 0
+    while True:
+        key = f"{prefix}-{suffix}"
+        key_hash = hashlib.sha256(key.encode()).hexdigest()
+        if (int(key_hash[:4], 16) + current) % 128 == 0:
+            return key
+        suffix += 1
 
 
 def test_database_rls_denies_known_cross_tenant_id() -> None:
@@ -19,7 +34,7 @@ def test_database_rls_denies_known_cross_tenant_id() -> None:
 
     root = Path(__file__).resolve().parents[2]
     with (
-        psycopg.connect(DSN, autocommit=True) as connection,
+        psycopg.connect(MIGRATOR_DSN, autocommit=True) as connection,
         connection.cursor() as cursor,
     ):
         for migration in sorted((root / "migrations" / "postgres").glob("*.sql")):
@@ -28,7 +43,7 @@ def test_database_rls_denies_known_cross_tenant_id() -> None:
     tenant_a = "11111111-1111-4111-8111-111111111111"
     tenant_b = "22222222-2222-4222-8222-222222222222"
     source_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
-    database = TenantPostgres(DSN)
+    database = TenantPostgres(RUNTIME_DSN)
     try:
         with database.transaction(tenant_a) as cursor:
             cursor.execute(
@@ -57,22 +72,126 @@ def test_database_rls_denies_known_cross_tenant_id() -> None:
         database.close()
 
 
+def test_demo_job_queue_denies_two_tenant_direct_access_but_workers_can_claim() -> None:
+    psycopg = pytest.importorskip("psycopg")
+    from src.data.postgres import TenantPostgres
+    from src.data.video.broker import JobMessage, PostgresJobBroker
+
+    root = Path(__file__).resolve().parents[2]
+    with psycopg.connect(MIGRATOR_DSN, autocommit=True) as connection:
+        for migration in sorted((root / "migrations" / "postgres").glob("*.sql")):
+            connection.execute(migration.read_text(encoding="utf-8"))
+
+    tenant_a = str(uuid.uuid4())
+    tenant_b = str(uuid.uuid4())
+    jobs: dict[str, str] = {}
+    database = TenantPostgres(RUNTIME_DSN)
+    broker = PostgresJobBroker(database)
+    try:
+        for tenant_id in (tenant_a, tenant_b):
+            source_id = str(uuid.uuid4())
+            asset_id = str(uuid.uuid4())
+            job_id = str(uuid.uuid4())
+            jobs[tenant_id] = job_id
+            with database.transaction(tenant_id) as cursor:
+                cursor.execute(
+                    """INSERT INTO camera_sources
+                       (tenant_id,source_id,definition)
+                       VALUES (%s,%s,'{}'::jsonb)""",
+                    (tenant_id, source_id),
+                )
+                cursor.execute(
+                    """INSERT INTO video_assets_restricted
+                       (tenant_id,asset_id,source_id,metadata)
+                       VALUES (%s,%s,%s,'{}'::jsonb)""",
+                    (tenant_id, asset_id, source_id),
+                )
+                cursor.execute(
+                    """INSERT INTO video_processing_jobs
+                       (tenant_id,job_id,asset_id,operation,idempotency_key,state,
+                        max_attempts)
+                       VALUES (%s,%s,%s,'delete',%s,'queued',3)""",
+                    (tenant_id, job_id, asset_id, f"queue-rls:{job_id}"),
+                )
+            broker.publish(JobMessage(tenant_id, job_id, "delete"))
+
+        with database.transaction(tenant_a) as cursor:
+            cursor.execute(
+                "SELECT tenant_id,job_id FROM demo_job_messages ORDER BY tenant_id"
+            )
+            assert [str(row["tenant_id"]) for row in cursor.fetchall()] == [tenant_a]
+            cursor.execute(
+                """UPDATE demo_job_messages SET error_code='cross_tenant_write'
+                   WHERE tenant_id=%s AND job_id=%s""",
+                (tenant_b, jobs[tenant_b]),
+            )
+            assert cursor.rowcount == 0
+            cursor.execute(
+                "DELETE FROM demo_job_messages WHERE tenant_id=%s AND job_id=%s",
+                (tenant_b, jobs[tenant_b]),
+            )
+            assert cursor.rowcount == 0
+
+        with database.transaction(tenant_b) as cursor:
+            cursor.execute(
+                "SELECT error_code FROM demo_job_messages WHERE job_id=%s",
+                (jobs[tenant_b],),
+            )
+            assert cursor.fetchone()["error_code"] is None
+            cursor.execute(
+                "SELECT job_id FROM demo_job_messages WHERE job_id=%s",
+                (jobs[tenant_a],),
+            )
+            assert cursor.fetchone() is None
+
+        deliveries = broker.receive(operations=("delete",), limit=10)
+        claimed = {
+            delivery.message.job_id: delivery
+            for delivery in deliveries
+            if delivery.message.job_id in jobs.values()
+        }
+        assert set(claimed) == set(jobs.values())
+        for delivery in claimed.values():
+            broker.acknowledge(delivery)
+        with database.transaction(tenant_a) as cursor:
+            cursor.execute(
+                "SELECT job_id FROM demo_job_messages WHERE job_id=%s",
+                (jobs[tenant_a],),
+            )
+            assert cursor.fetchone() is None
+        with database.transaction(tenant_b) as cursor:
+            cursor.execute(
+                "SELECT job_id FROM demo_job_messages WHERE job_id=%s",
+                (jobs[tenant_b],),
+            )
+            assert cursor.fetchone() is None
+    finally:
+        database.close()
+
+
 def test_database_rate_limit_is_atomic_and_stores_no_raw_key() -> None:
     psycopg = pytest.importorskip("psycopg")
     from src.data.platform_security import PostgresRateLimiter
     from src.data.postgres import TenantPostgres
 
     root = Path(__file__).resolve().parents[2]
-    with psycopg.connect(DSN, autocommit=True) as connection:
+    with psycopg.connect(MIGRATOR_DSN, autocommit=True) as connection:
         for migration in sorted((root / "migrations" / "postgres").glob("*.sql")):
             connection.execute(migration.read_text(encoding="utf-8"))
 
-    database = TenantPostgres(DSN)
+    database = TenantPostgres(RUNTIME_DSN)
     try:
         limiter = PostgresRateLimiter(database, requests=2, window_seconds=60)
-        raw_key = f"token:raw-credential-must-not-be-stored-{uuid.uuid4()}"
+        raw_key = _key_that_triggers_cleanup(
+            f"token:raw-credential-must-not-be-stored-{uuid.uuid4()}", 122
+        )
+        key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
+        assert (int(key_hash[:4], 16) + 122) % 128 == 0
         assert limiter.allow(raw_key, now=120.0) == (True, 0)
         assert limiter.allow(raw_key, now=121.0) == (True, 0)
+        # The key deliberately selects the periodic cleanup branch here. Cleanup
+        # must use the injected clock, not the database wall clock, or it deletes
+        # this active simulated-time bucket before enforcing its request limit.
         assert limiter.allow(raw_key, now=122.0) == (False, 58)
         with database.system_transaction() as cursor:
             cursor.execute(
@@ -92,11 +211,11 @@ def test_active_tenant_state_is_shared_without_principal_pii() -> None:
     from src.data.postgres import TenantPostgres
 
     root = Path(__file__).resolve().parents[2]
-    with psycopg.connect(DSN, autocommit=True) as connection:
+    with psycopg.connect(MIGRATOR_DSN, autocommit=True) as connection:
         for migration in sorted((root / "migrations" / "postgres").glob("*.sql")):
             connection.execute(migration.read_text(encoding="utf-8"))
 
-    database = TenantPostgres(DSN)
+    database = TenantPostgres(RUNTIME_DSN)
     try:
         first_replica = PostgresActiveTenantStore(database)
         second_replica = PostgresActiveTenantStore(database)
@@ -123,7 +242,7 @@ def test_video_job_safe_diagnostics_are_json_and_tenant_scoped() -> None:
     from src.data.video.postgres import PostgresVideoStore
 
     root = Path(__file__).resolve().parents[2]
-    with psycopg.connect(DSN, autocommit=True) as connection:
+    with psycopg.connect(MIGRATOR_DSN, autocommit=True) as connection:
         for migration in sorted((root / "migrations" / "postgres").glob("*.sql")):
             connection.execute(migration.read_text(encoding="utf-8"))
 
@@ -131,7 +250,7 @@ def test_video_job_safe_diagnostics_are_json_and_tenant_scoped() -> None:
     tenant_b = "22222222-2222-4222-8222-222222222222"
     source_id = str(uuid.uuid4())
     asset_id = str(uuid.uuid4())
-    database = TenantPostgres(DSN)
+    database = TenantPostgres(RUNTIME_DSN)
     store = PostgresVideoStore(database, PostgresIngestionStore(database))
     try:
         store.put_source(

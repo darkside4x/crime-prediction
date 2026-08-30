@@ -114,6 +114,30 @@ export interface LiveCctvSource {
   limitations: string[];
 }
 
+export type ContactRole = components["schemas"]["DispatchContactSummary"]["role"];
+
+/** Browser-safe response-contact projection generated from FastAPI/OpenAPI. */
+export type ResponseContact = components["schemas"]["ResponseContactView"];
+export type ResponseContactWrite = components["schemas"]["ResponseContactCreate"];
+export type ResponseContactPatch = components["schemas"]["ResponseContactPatch"];
+export type TestCallResult = components["schemas"]["TestCallView"];
+export type DispatchState = components["schemas"]["DispatchCaseView"]["state"];
+export type DispatchAttemptState = components["schemas"]["DispatchAttemptView"]["state"];
+export type DispatchContactSummary = components["schemas"]["DispatchContactSummary"];
+export type DispatchAttempt = Omit<
+  components["schemas"]["DispatchAttemptView"],
+  "attempt_number"
+> & { attempt_number: 1 | 2 | 3 };
+export type DispatchCase = Omit<
+  components["schemas"]["DispatchCaseView"],
+  "attempts" | "next_attempt_at" | "canceled_at"
+> & {
+  attempts: DispatchAttempt[];
+  next_attempt_at: string | null;
+  canceled_at: string | null;
+};
+export type DispatchPreview = components["schemas"]["DispatchPreviewView"];
+
 export type PublicCandidate = Omit<RestrictedCandidateDetection, "evidence_ref"> & {
   evidence_available: boolean;
 };
@@ -209,6 +233,28 @@ async function requestBlob(path: string, token: string): Promise<Blob> {
     throw new ApiError(response.status, body, `Evidence request failed with ${response.status}`);
   }
   return response.blob();
+}
+
+async function requestNoContent(
+  path: string,
+  token: string,
+  init: RequestInit & { idempotencyKey?: string },
+): Promise<void> {
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${token}`,
+    ...(init.headers as Record<string, string> | undefined),
+  };
+  if (init.idempotencyKey) headers["Idempotency-Key"] = init.idempotencyKey;
+  const response = await fetch(`${BASE}${path}`, { ...init, headers });
+  if (!response.ok) {
+    let body: Partial<TypedApiError> | undefined;
+    try {
+      body = (await response.json()) as Partial<TypedApiError>;
+    } catch {
+      body = undefined;
+    }
+    throw new ApiError(response.status, body, `Request failed with ${response.status}`);
+  }
 }
 
 export const api = {
@@ -320,6 +366,97 @@ export const api = {
       body: JSON.stringify({}),
       idempotencyKey: newIdempotencyKey(),
     }),
+  responseContacts: (token: string, zoneId?: string) => {
+    const query = new URLSearchParams();
+    if (zoneId) query.set("zone_id", zoneId);
+    const suffix = query.size > 0 ? `?${query.toString()}` : "";
+    return request<{ items: ResponseContact[]; next_cursor: string | null }>(
+      `/v1/response-contacts${suffix}`,
+      token,
+    );
+  },
+  createResponseContact: (
+    token: string,
+    body: ResponseContactWrite,
+    idempotencyKey: string,
+  ) =>
+    request<ResponseContact>("/v1/response-contacts", token, {
+      method: "POST",
+      body: JSON.stringify(body),
+      idempotencyKey,
+    }),
+  updateResponseContact: (
+    token: string,
+    contactId: string,
+    body: ResponseContactPatch,
+    idempotencyKey: string,
+  ) =>
+    request<ResponseContact>(
+      `/v1/response-contacts/${encodeURIComponent(contactId)}`,
+      token,
+      { method: "PATCH", body: JSON.stringify(body), idempotencyKey },
+    ),
+  deleteResponseContact: (token: string, contactId: string, idempotencyKey: string) =>
+    requestNoContent(`/v1/response-contacts/${encodeURIComponent(contactId)}`, token, {
+      method: "DELETE",
+      idempotencyKey,
+    }),
+  createResponseContactTestCall: (
+    token: string,
+    contactId: string,
+    idempotencyKey: string,
+  ) =>
+    request<TestCallResult>(
+      `/v1/response-contacts/${encodeURIComponent(contactId)}/test-calls`,
+      token,
+      {
+        method: "POST",
+        body: JSON.stringify({ authorize_test_call: true }),
+        idempotencyKey,
+      },
+    ),
+  authorizeDispatch: (
+    token: string,
+    incidentId: string,
+    idempotencyKey: string,
+  ) =>
+    request<DispatchCase>(
+      `/v1/incidents/${encodeURIComponent(incidentId)}/dispatch-authorizations`,
+      token,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          authorize_call: true,
+          message_template_version: "dispatch-alert-v1",
+        }),
+        idempotencyKey,
+      },
+    ),
+  dispatchPreview: (token: string, incidentId: string) =>
+    request<DispatchPreview>(
+      `/v1/incidents/${encodeURIComponent(incidentId)}/dispatch-preview`,
+      token,
+    ),
+  dispatchCase: (token: string, dispatchCaseId: string) =>
+    request<DispatchCase>(
+      `/v1/dispatch-cases/${encodeURIComponent(dispatchCaseId)}`,
+      token,
+    ),
+  cancelDispatch: (
+    token: string,
+    dispatchCaseId: string,
+    reason: string,
+    idempotencyKey: string,
+  ) =>
+    request<DispatchCase>(
+      `/v1/dispatch-cases/${encodeURIComponent(dispatchCaseId)}/cancel`,
+      token,
+      {
+        method: "POST",
+        body: JSON.stringify({ cancel_pending_calls: true, reason }),
+        idempotencyKey,
+      },
+    ),
   forecasts: (
     token: string,
     params: { windowStart: string; category: string; page?: number; pageSize?: number; bbox?: string },

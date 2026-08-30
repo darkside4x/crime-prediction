@@ -4,7 +4,6 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MotionConfig } from "motion/react";
 import App from "./App";
 import ErrorBoundary from "./ErrorBoundary";
-import "maplibre-gl/dist/maplibre-gl.css";
 import "./theme.css";
 
 const queryClient = new QueryClient({

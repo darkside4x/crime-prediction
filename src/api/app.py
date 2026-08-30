@@ -2,29 +2,25 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import math
 import os
-from pathlib import Path
-from typing import Any, Callable, Literal
 import threading
 import time
 import uuid
+from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from typing import Any, Literal
 
 from fastapi import Depends, FastAPI, File, Form, Header, Query, Request, UploadFile
-from fastapi.responses import Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.background import BackgroundTask
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.responses import FileResponse
 
-from src.models.contracts import validate_contract
-from src.models.data import parse_utc
-from src.models.operational import ForecastService
-from src.models.registry import FilesystemApprovedModelRegistry
 from src.data.store import IngestionStore
 from src.data.video import (
     FakeRekaVisionProvider,
@@ -34,14 +30,24 @@ from src.data.video import (
     VideoPipelineService,
     VideoStore,
 )
-from src.data.video.errors import VideoPipelineError
 from src.data.video.broker import JobBroker, JobMessage
+from src.data.video.errors import VideoPipelineError
+from src.data.video.transcode import FfmpegWebmTranscoder
+from src.models.contracts import validate_contract
+from src.models.data import parse_utc
+from src.models.operational import ForecastService
+from src.models.registry import FilesystemApprovedModelRegistry
 
 from . import demo_data, reka
+from .dispatch import DispatchApiDependencies, create_dispatch_router
+from .dispatch_development import (
+    DevelopmentConfirmedIncident,
+    create_development_dispatch_dependencies,
+)
 from .errors import install_error_handlers, problem
 from .forecasting import ForecastOrchestrator, InMemoryForecastRepository
-from .settings import Settings
 from .security import ApiSecurityMiddleware, InMemoryRateLimiter, RateLimiter
+from .settings import Settings
 from .state import AuditLog, IdempotencyStore
 from .tenancy import (
     AuthenticationProvider,
@@ -49,8 +55,8 @@ from .tenancy import (
     OidcAuthenticationProvider,
     TenantContext,
     context_for,
-    require_owner,
     require_operator,
+    require_owner,
     require_reviewer,
     require_tenant,
 )
@@ -96,12 +102,20 @@ class ReviewRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     decision: Literal["confirmed", "rejected"]
-    confirmed_category: Literal[
-        "property", "violence", "public_order", "traffic_safety", "other"
-    ] | None = None
-    rejection_reason: Literal[
-        "false_positive", "insufficient_evidence", "duplicate", "outside_scope", "other"
-    ] | None = None
+    confirmed_category: (
+        Literal["property", "violence", "public_order", "traffic_safety", "other"]
+        | None
+    ) = None
+    rejection_reason: (
+        Literal[
+            "false_positive",
+            "insufficient_evidence",
+            "duplicate",
+            "outside_scope",
+            "other",
+        ]
+        | None
+    ) = None
 
 
 class CopilotMessage(BaseModel):
@@ -126,7 +140,9 @@ class SimulatedCaptureRequest(BaseModel):
 class ModelPromotionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    model_version: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._-]+$")
+    model_version: str = Field(
+        min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._-]+$"
+    )
     reason: str = Field(min_length=1, max_length=500)
 
 
@@ -220,7 +236,17 @@ def _durable_run(
 
 
 def _load_fixture(name: str) -> dict[str, Any]:
-    return json.loads((REPO_ROOT / "contracts" / "fixtures" / f"{name}.json").read_text())
+    return json.loads(
+        (REPO_ROOT / "contracts" / "fixtures" / f"{name}.json").read_text()
+    )
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _public_source(source: dict[str, Any]) -> dict[str, Any]:
@@ -247,9 +273,13 @@ def _parse_bbox(value: str | None) -> tuple[float, float, float, float] | None:
     try:
         west, south, east, north = (float(part) for part in value.split(","))
     except (ValueError, TypeError) as exc:
-        raise problem(422, "invalid_bbox", "bbox must be west,south,east,north") from exc
+        raise problem(
+            422, "invalid_bbox", "bbox must be west,south,east,north"
+        ) from exc
     if not (-180 <= west < east <= 180 and -90 <= south < north <= 90):
-        raise problem(422, "invalid_bbox", "bbox coordinates are out of range or unordered")
+        raise problem(
+            422, "invalid_bbox", "bbox coordinates are out of range or unordered"
+        )
     return west, south, east, north
 
 
@@ -261,9 +291,11 @@ def _future_row(
     *,
     coverage_ratio: float,
 ) -> dict[str, Any]:
-    seed = int(hashlib.sha256(f"{tenant_id}|{cell_id}|{category}".encode()).hexdigest()[:8], 16)
+    seed = int(
+        hashlib.sha256(f"{tenant_id}|{cell_id}|{category}".encode()).hexdigest()[:8], 16
+    )
     lag_1, lag_2, lag_7, lag_14 = ((seed >> shift) % 4 for shift in (0, 3, 6, 9))
-    data_as_of = min(datetime.now(timezone.utc), window_start - timedelta(seconds=1))
+    data_as_of = min(datetime.now(UTC), window_start - timedelta(seconds=1))
     hour_angle = 2 * math.pi * window_start.hour / 24
     day_angle = 2 * math.pi * window_start.weekday() / 7
 
@@ -294,7 +326,7 @@ def _future_row(
 def _new_source(
     *, tenant_id: str, body: RecordedSourceCreate, mode: str, connection: dict[str, str]
 ) -> dict[str, Any]:
-    now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
     source = {
         "schema_version": "1.0.0",
         "tenant_id": tenant_id,
@@ -333,6 +365,8 @@ def create_app(
     forecast_refresher: Callable[[str, datetime], dict[str, Any]] | None = None,
     seed_demo_fixtures: bool = True,
     deployment_mode: str = "development",
+    media_transcoder: FfmpegWebmTranscoder | None = None,
+    dispatch_dependencies: DispatchApiDependencies | None = None,
 ) -> FastAPI:
     active_settings = settings or Settings.from_environment()
     production = active_settings.app_environment == "production"
@@ -357,8 +391,12 @@ def create_app(
             memberships_claim=active_settings.oidc_memberships_claim,
         )
     if production and getattr(auth_provider, "development_only", False):
-        raise ValueError("A development AuthenticationProvider cannot run in production")
-    if production and any(not origin.startswith("https://") for origin in active_settings.cors_origins):
+        raise ValueError(
+            "A development AuthenticationProvider cannot run in production"
+        )
+    if production and any(
+        not origin.startswith("https://") for origin in active_settings.cors_origins
+    ):
         raise ValueError("Production CORS origins must use HTTPS")
     if rate_limiter is None:
         if production:
@@ -395,12 +433,14 @@ def create_app(
         rate_limiter=rate_limiter,
         production=production,
     )
-    app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(active_settings.trusted_hosts))
+    app.add_middleware(
+        TrustedHostMiddleware, allowed_hosts=list(active_settings.trusted_hosts)
+    )
     app.add_middleware(
         CORSMiddleware,
         allow_origins=list(active_settings.cors_origins),
         allow_credentials=False,
-        allow_methods=["GET", "POST", "PUT"],
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
         allow_headers=["Authorization", "Content-Type", "Idempotency-Key"],
         expose_headers=["X-Request-ID"],
     )
@@ -409,14 +449,18 @@ def create_app(
     if production and model_registry is None:
         raise ValueError("An approved production model registry must be injected")
     app.state.model_registry = model_registry
-    app.state.forecast_service = forecast_service or ForecastService(models=model_registry)
+    app.state.forecast_service = forecast_service or ForecastService(
+        models=model_registry
+    )
     if forecast_orchestrator is None:
         if production:
             raise ValueError("A production ForecastOrchestrator must be injected")
         forecast_orchestrator = ForecastOrchestrator(
             app.state.forecast_service, InMemoryForecastRepository()
         )
-    if production and getattr(forecast_orchestrator.repository, "development_only", False):
+    if production and getattr(
+        forecast_orchestrator.repository, "development_only", False
+    ):
         raise ValueError("A development forecast repository cannot run in production")
     app.state.forecast_orchestrator = forecast_orchestrator
     audit_log = audit_log or AuditLog()
@@ -433,7 +477,9 @@ def create_app(
     )
     candidate = None if production or not seed_demo_fixtures else _load_fixture("candidate-detection")
     app.state.candidates = (
-        {} if candidate is None else {candidate["tenant_id"]: {candidate["detection_id"]: candidate}}
+        {}
+        if candidate is None
+        else {candidate["tenant_id"]: {candidate["detection_id"]: candidate}}
     )
     app.state.reviews = {}
     runtime_dir = active_settings.runtime_dir.resolve()
@@ -458,7 +504,11 @@ def create_app(
             if active_settings.reka_configured
             else FakeRekaVisionProvider(
                 proposals=[
-                    {"offset_seconds": 3, "category": "traffic_safety", "confidence": 0.58}
+                    {
+                        "offset_seconds": 3,
+                        "category": "traffic_safety",
+                        "confidence": 0.58,
+                    }
                 ]
             )
         )
@@ -471,10 +521,63 @@ def create_app(
         )
     app.state.video_service = video_service
     app.state.video_broker = video_broker
+    app.state.media_transcoder = media_transcoder or FfmpegWebmTranscoder()
     app.state.hls_capture = hls_capture or FfmpegHlsCapture()
     app.state.simulated_capture = simulated_capture or SimulatedVideoCapture()
     app.state.video_runs = {}
-    app.state.vision_mode = "reka_vision" if active_settings.reka_configured else "deterministic_fake"
+    app.state.vision_mode = (
+        "reka_vision" if active_settings.reka_configured else "deterministic_fake"
+    )
+    if production and dispatch_dependencies is None:
+        raise ValueError("Production dispatch dependencies must be injected")
+    if not production and dispatch_dependencies is None:
+
+        def resolve_development_incident(
+            tenant_id: str, incident_id: str
+        ) -> DevelopmentConfirmedIncident | None:
+            try:
+                uuid.UUID(incident_id)
+            except ValueError:
+                return None
+            detection_id = incident_id
+            review = app.state.reviews.get((tenant_id, detection_id))
+            if review is None:
+                try:
+                    review = app.state.video_service.store.get_review_for_candidate(
+                        tenant_id, detection_id
+                    )
+                except VideoPipelineError:
+                    return None
+            if (
+                review is None
+                or review.get("decision") != "confirmed"
+                or not review.get("promoted_external_event_id")
+            ):
+                return None
+            try:
+                candidate_record = app.state.video_service.store.get_candidate(
+                    tenant_id, detection_id
+                )
+            except VideoPipelineError:
+                candidate_record = app.state.candidates.get(tenant_id, {}).get(
+                    detection_id
+                )
+            if candidate_record is None:
+                return None
+            occurred_at = datetime.fromisoformat(str(candidate_record["occurred_at"]))
+            return DevelopmentConfirmedIncident(
+                incident_id=detection_id,
+                category=str(review["confirmed_category"]),
+                occurred_at=occurred_at,
+            )
+
+        dispatch_dependencies = create_development_dispatch_dependencies(
+            idempotency=app.state.idempotency,
+            resolve_incident=resolve_development_incident,
+        )
+    app.state.dispatch_dependencies = dispatch_dependencies
+    if dispatch_dependencies is not None:
+        app.include_router(create_dispatch_router(dispatch_dependencies))
     if first_source is not None:
         try:
             app.state.video_service.register_recorded_source(
@@ -491,8 +594,7 @@ def create_app(
     @app.get("/ready")
     def ready() -> dict[str, Any]:
         provider_ready = (
-            active_settings.reka_configured
-            and active_settings.reka_provider_verified
+            active_settings.reka_configured and active_settings.reka_provider_verified
         )
         return {
             "status": "ready" if provider_ready else "degraded",
@@ -520,6 +622,15 @@ def create_app(
                 if active_settings.synthetic_demo_forecasts
                 else "operational"
             ),
+            "dispatch_voice": (
+                dispatch_dependencies.twilio_mode
+                if dispatch_dependencies is not None
+                else "disabled"
+            ),
+            "external_calls_enabled": bool(
+                dispatch_dependencies is not None
+                and dispatch_dependencies.external_calls_enabled
+            ),
         }
 
     @app.get("/v1/demo/live-cctv")
@@ -539,7 +650,9 @@ def create_app(
         }
 
     @app.get("/v1/me/tenants")
-    def me_tenants(request: Request, ctx: TenantContext = Depends(require_tenant)) -> dict[str, Any]:
+    def me_tenants(
+        request: Request, ctx: TenantContext = Depends(require_tenant)
+    ) -> dict[str, Any]:
         principal = request.state.principal
         return {
             "active_tenant_id": ctx.tenant_id,
@@ -654,9 +767,7 @@ def create_app(
         source_id: uuid.UUID,
         ctx: TenantContext = Depends(require_tenant),
     ) -> dict[str, Any]:
-        source = app.state.video_service.store.get_source(
-            ctx.tenant_id, str(source_id)
-        )
+        source = app.state.video_service.store.get_source(ctx.tenant_id, str(source_id))
         try:
             location = app.state.video_service.location_resolver.resolve(
                 ctx.tenant_id, source["location_ref"]
@@ -720,7 +831,11 @@ def create_app(
         ctx: TenantContext = Depends(require_owner),
     ) -> dict[str, Any]:
         return create_source_record(
-            body, ctx, idempotency_key, "recorded_video", {"transport": "uploaded_asset"}
+            body,
+            ctx,
+            idempotency_key,
+            "recorded_video",
+            {"transport": "uploaded_asset"},
         )
 
     @app.post("/v1/sources/live-camera", status_code=201)
@@ -750,36 +865,55 @@ def create_app(
     def process_asset_run(run_id: str, tenant_id: str, asset_id: str) -> None:
         run = app.state.video_runs[run_id]
         try:
-            run.update(state="running", stage="reka_upload", updated_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"))
+            run.update(
+                state="running",
+                stage="reka_upload",
+                updated_at=datetime.now(UTC)
+                .isoformat()
+                .replace("+00:00", "Z"),
+            )
             candidates_found: list[dict[str, Any]] = []
             for poll in range(active_settings.reka_index_max_polls):
-                candidates_found = app.state.video_service.process_asset(tenant_id, asset_id)
+                candidates_found = app.state.video_service.process_asset(
+                    tenant_id, asset_id
+                )
                 mapping = app.state.video_service.store.get_mapping(tenant_id, asset_id)
                 if mapping and mapping["indexing_status"] == "indexed":
                     break
-                run.update(stage="reka_indexing", updated_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"))
+                run.update(
+                    stage="reka_indexing",
+                    updated_at=datetime.now(UTC)
+                    .isoformat()
+                    .replace("+00:00", "Z"),
+                )
                 if poll + 1 < active_settings.reka_index_max_polls:
                     time.sleep(active_settings.reka_index_poll_seconds)
             else:
                 raise VideoPipelineError(
-                    "reka_index_timeout", "Reka indexing did not complete in the bounded polling window", retryable=True
+                    "reka_index_timeout",
+                    "Reka indexing did not complete in the bounded polling window",
+                    retryable=True,
                 )
             run.update(
                 state="completed",
                 stage="awaiting_human_review",
                 candidate_count=len(candidates_found),
-                updated_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                updated_at=datetime.now(UTC)
+                .isoformat()
+                .replace("+00:00", "Z"),
             )
         except VideoPipelineError as error:
             run.update(
                 state="failed",
                 stage="failed",
                 error_code=error.code,
-                updated_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                updated_at=datetime.now(UTC)
+                .isoformat()
+                .replace("+00:00", "Z"),
             )
 
     def enqueue_asset_run(tenant_id: str, asset_id: str, label: str) -> dict[str, Any]:
-        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
         if app.state.video_broker is not None:
             job = app.state.video_service.store.enqueue(tenant_id, asset_id, "upload")
             app.state.video_broker.publish(
@@ -829,7 +963,22 @@ def create_app(
         idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
         ctx: TenantContext = Depends(require_owner),
     ) -> dict[str, Any]:
-        destination = app.state.video_service.media_root / ctx.tenant_id / f"{uuid.uuid4()}.mp4"
+        supplied_content_type = (
+            (file.content_type or "").split(";", 1)[0].strip().lower()
+        )
+        if supplied_content_type not in {"video/mp4", "video/webm"}:
+            await file.close()
+            raise problem(
+                415,
+                "video_type_invalid",
+                "Only MP4 or WebM mobile video is accepted",
+            )
+        upload_id = str(uuid.uuid4())
+        suffix = ".mp4" if supplied_content_type == "video/mp4" else ".webm"
+        destination = (
+            app.state.video_service.media_root / ctx.tenant_id / f"{upload_id}{suffix}"
+        )
+        converted = destination.with_suffix(".mp4")
         destination.parent.mkdir(parents=True, exist_ok=True)
         checksum = hashlib.sha256()
         received_bytes = 0
@@ -838,7 +987,11 @@ def create_app(
                 while chunk := await file.read(1024 * 1024):
                     received_bytes += len(chunk)
                     if received_bytes > app.state.video_service.max_upload_bytes:
-                        raise problem(413, "video_size_invalid", "Video exceeds the configured upload limit")
+                        raise problem(
+                            413,
+                            "video_size_invalid",
+                            "Video exceeds the configured upload limit",
+                        )
                     checksum.update(chunk)
                     handle.write(chunk)
         except Exception:
@@ -847,23 +1000,47 @@ def create_app(
         finally:
             await file.close()
         checksum_hex = checksum.hexdigest()
+        accepted_persisted = False
 
         def accept() -> dict[str, Any]:
+            nonlocal accepted_persisted
+            accepted_path = destination
             try:
+                if supplied_content_type == "video/webm":
+                    # Scan the original container before invoking a media decoder,
+                    # then scan the resulting MP4 again in accept_upload.
+                    app.state.video_service.media_scanner.scan(destination)
+                    app.state.media_transcoder.transcode(destination, converted)
+                    if (
+                        converted.stat().st_size
+                        > app.state.video_service.max_upload_bytes
+                    ):
+                        raise problem(
+                            413,
+                            "video_size_invalid",
+                            "Converted video exceeds the configured upload limit",
+                        )
+                    accepted_path = converted
+                accepted_checksum = _file_sha256(accepted_path)
                 asset = app.state.video_service.accept_upload(
                     authenticated_tenant_id=ctx.tenant_id,
                     source_id=str(source_id),
-                    path=destination,
-                    content_type=file.content_type or "application/octet-stream",
+                    path=accepted_path,
+                    content_type="video/mp4",
                     captured_start=captured_start,
                     captured_end=captured_end,
                     duration_seconds=None,
                     consent_confirmed=consent_confirmed,
-                    expected_sha256=checksum_hex,
+                    expected_sha256=accepted_checksum,
                 )
+                accepted_persisted = True
             except Exception:
                 destination.unlink(missing_ok=True)
+                converted.unlink(missing_ok=True)
                 raise
+            finally:
+                if supplied_content_type == "video/webm":
+                    destination.unlink(missing_ok=True)
             run = enqueue_asset_run(
                 ctx.tenant_id, asset["asset_id"], "recorded video upload"
             )
@@ -877,25 +1054,34 @@ def create_app(
             )
             return _public_run(run)
 
-        return app.state.idempotency.execute(
-            tenant_id=ctx.tenant_id,
-            operation="create_video_upload",
-            key=idempotency_key,
-            payload={
-                "source_id": str(source_id),
-                "captured_start": captured_start,
-                "captured_end": captured_end,
-                "consent_confirmed": consent_confirmed,
-                "sha256": checksum_hex,
-            },
-            action=accept,
-        )
+        try:
+            return app.state.idempotency.execute(
+                tenant_id=ctx.tenant_id,
+                operation="create_video_upload",
+                key=idempotency_key,
+                payload={
+                    "source_id": str(source_id),
+                    "captured_start": captured_start,
+                    "captured_end": captured_end,
+                    "consent_confirmed": consent_confirmed,
+                    "content_type": supplied_content_type,
+                    "sha256": checksum_hex,
+                },
+                action=accept,
+            )
+        finally:
+            if supplied_content_type == "video/webm" or not accepted_persisted:
+                destination.unlink(missing_ok=True)
+            if not accepted_persisted:
+                converted.unlink(missing_ok=True)
 
     def ensure_demo_hls_source(tenant_id: str) -> dict[str, Any]:
         try:
-            return app.state.video_service.store.get_source(tenant_id, DEMO_HLS_SOURCE_ID)
+            return app.state.video_service.store.get_source(
+                tenant_id, DEMO_HLS_SOURCE_ID
+            )
         except VideoPipelineError:
-            now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
             definition = app.state.hls_capture.source("louisiana-dot-i20")
             source = {
                 "schema_version": "1.0.0",
@@ -914,7 +1100,9 @@ def create_app(
                 "created_at": now,
                 "updated_at": now,
             }
-            app.state.video_service.register_source(source, authenticated_tenant_id=tenant_id)
+            app.state.video_service.register_source(
+                source, authenticated_tenant_id=tenant_id
+            )
             app.state.sources.setdefault(tenant_id, []).append(source)
             return source
 
@@ -924,7 +1112,7 @@ def create_app(
                 tenant_id, DEMO_SIMULATED_SOURCE_ID
             )
         except VideoPipelineError:
-            now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
             source = {
                 "schema_version": "1.0.0",
                 "tenant_id": tenant_id,
@@ -951,14 +1139,24 @@ def create_app(
     def capture_near_live_run(run_id: str, tenant_id: str, source_key: str) -> None:
         run = app.state.video_runs[run_id]
         try:
-            run.update(state="running", stage="capturing_hls", updated_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"))
+            run.update(
+                state="running",
+                stage="capturing_hls",
+                updated_at=datetime.now(UTC)
+                .isoformat()
+                .replace("+00:00", "Z"),
+            )
             source = ensure_demo_hls_source(tenant_id)
-            destination = app.state.video_service.media_root / tenant_id / f"{run_id}.mp4"
+            destination = (
+                app.state.video_service.media_root / tenant_id / f"{run_id}.mp4"
+            )
             segment = app.state.hls_capture.capture(
                 source_key, destination, duration_seconds=run["capture_seconds"]
             )
-            duration = app.state.video_service.media_inspector.duration_seconds(segment.path)
-            start = datetime.fromisoformat(segment.captured_start.replace("Z", "+00:00"))
+            duration = app.state.video_service.media_inspector.duration_seconds(
+                segment.path
+            )
+            start = datetime.fromisoformat(segment.captured_start)
             end = start + timedelta(seconds=duration)
             asset = app.state.video_service.accept_upload(
                 authenticated_tenant_id=tenant_id,
@@ -980,7 +1178,7 @@ def create_app(
                     state="running",
                     stage="reka_upload_queued",
                     durable_run_id=durable["run_id"],
-                    updated_at=datetime.now(timezone.utc)
+                    updated_at=datetime.now(UTC)
                     .isoformat()
                     .replace("+00:00", "Z"),
                 )
@@ -991,7 +1189,9 @@ def create_app(
                 state="failed",
                 stage="failed",
                 error_code=error.code,
-                updated_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                updated_at=datetime.now(UTC)
+                .isoformat()
+                .replace("+00:00", "Z"),
             )
 
     def capture_simulated_run(run_id: str, tenant_id: str) -> None:
@@ -1000,7 +1200,7 @@ def create_app(
             run.update(
                 state="running",
                 stage="generating_simulated_segment",
-                updated_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                updated_at=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
             )
             source = ensure_demo_simulated_source(tenant_id)
             destination = (
@@ -1012,9 +1212,7 @@ def create_app(
             duration = app.state.video_service.media_inspector.duration_seconds(
                 segment.path
             )
-            start = datetime.fromisoformat(
-                segment.captured_start.replace("Z", "+00:00")
-            )
+            start = datetime.fromisoformat(segment.captured_start)
             end = start + timedelta(seconds=duration)
             asset = app.state.video_service.accept_upload(
                 authenticated_tenant_id=tenant_id,
@@ -1036,7 +1234,7 @@ def create_app(
                     state="running",
                     stage="reka_upload_queued",
                     durable_run_id=durable["run_id"],
-                    updated_at=datetime.now(timezone.utc)
+                    updated_at=datetime.now(UTC)
                     .isoformat()
                     .replace("+00:00", "Z"),
                 )
@@ -1047,7 +1245,7 @@ def create_app(
                 state="failed",
                 stage="failed",
                 error_code=error.code,
-                updated_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                updated_at=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
             )
 
     @app.post("/v1/demo/near-live-cctv/captures", status_code=202)
@@ -1066,7 +1264,7 @@ def create_app(
 
         def start() -> dict[str, Any]:
             definition = app.state.hls_capture.source(body.source_key)
-            now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
             run_id = str(uuid.uuid4())
             run = {
                 "run_id": run_id,
@@ -1122,7 +1320,7 @@ def create_app(
             )
 
         def start() -> dict[str, Any]:
-            now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
             run_id = str(uuid.uuid4())
             run = {
                 "run_id": run_id,
@@ -1228,7 +1426,9 @@ def create_app(
             try:
                 job = app.state.video_service.store.get_job(ctx.tenant_id, str(run_id))
             except VideoPipelineError:
-                raise problem(404, "ingestion_run_not_found", "Ingestion run was not found")
+                raise problem(
+                    404, "ingestion_run_not_found", "Ingestion run was not found"
+                )
             return _durable_run(
                 app.state.video_service.store,
                 ctx.tenant_id,
@@ -1297,10 +1497,19 @@ def create_app(
     ) -> dict[str, Any]:
         durable = app.state.video_service.store.list_candidates(ctx.tenant_id)
         fixture_records = (
-            [] if production else list(app.state.candidates.get(ctx.tenant_id, {}).values())
+            []
+            if production
+            else list(app.state.candidates.get(ctx.tenant_id, {}).values())
         )
         seen = {record["detection_id"] for record in durable}
-        records = (durable + [record for record in fixture_records if record["detection_id"] not in seen])[:limit]
+        records = (
+            durable
+            + [
+                record
+                for record in fixture_records
+                if record["detection_id"] not in seen
+            ]
+        )[:limit]
         return {
             "items": [
                 {
@@ -1331,7 +1540,7 @@ def create_app(
             )
         except VideoPipelineError:
             raise problem(404, "candidate_not_found", "Candidate was not found")
-        if parse_utc(candidate["expires_at"]) <= datetime.now(timezone.utc):
+        if parse_utc(candidate["expires_at"]) <= datetime.now(UTC):
             raise problem(410, "evidence_expired", "Candidate evidence has expired")
         materialized = app.state.video_service.candidate_evidence(
             ctx.tenant_id,
@@ -1378,11 +1587,19 @@ def create_app(
             else app.state.candidates.get(ctx.tenant_id, {}).get(detection_id)
         )
         if candidate_record is None:
-            raise problem(404, "candidate_not_found", "Candidate detection was not found")
+            raise problem(
+                404, "candidate_not_found", "Candidate detection was not found"
+            )
         if body.decision == "confirmed" and not body.confirmed_category:
-            raise problem(422, "confirmed_category_required", "Confirmed reviews require a category")
+            raise problem(
+                422,
+                "confirmed_category_required",
+                "Confirmed reviews require a category",
+            )
         if body.decision == "rejected" and not body.rejection_reason:
-            raise problem(422, "rejection_reason_required", "Rejected reviews require a reason")
+            raise problem(
+                422, "rejection_reason_required", "Rejected reviews require a reason"
+            )
 
         def action() -> dict[str, Any]:
             if durable_candidate is not None:
@@ -1414,7 +1631,9 @@ def create_app(
                 "detection_id": detection_id,
                 "decision": body.decision,
                 "reviewed_by": ctx.principal_id,
-                "reviewed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                "reviewed_at": datetime.now(UTC)
+                .isoformat()
+                .replace("+00:00", "Z"),
             }
             if body.decision == "confirmed":
                 result["confirmed_category"] = body.confirmed_category
@@ -1459,7 +1678,7 @@ def create_app(
             raise problem(404, "demo_refresh_unavailable", "Integrated demo refresh is unavailable")
 
         def action() -> dict[str, Any]:
-            result = forecast_refresher(ctx.tenant_id, datetime.now(timezone.utc))
+            result = forecast_refresher(ctx.tenant_id, datetime.now(UTC))
             app.state.audit.record(
                 tenant_id=ctx.tenant_id,
                 principal_id=ctx.principal_id,
@@ -1490,19 +1709,21 @@ def create_app(
         if category not in CATEGORIES:
             raise problem(422, "invalid_category", "Category is not allowlisted")
         start = parse_utc(window_start)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         if start <= now:
-            raise problem(422, "window_not_future", "Forecast window must start in the future")
+            raise problem(
+                422, "window_not_future", "Forecast window must start in the future"
+            )
         if start > now + timedelta(days=7):
-            raise problem(422, "window_too_distant", "Forecast horizon is limited to seven days")
+            raise problem(
+                422, "window_too_distant", "Forecast horizon is limited to seven days"
+            )
         bounds = _parse_bbox(bbox)
         start_text = start.isoformat().replace("+00:00", "Z")
         items = app.state.forecast_orchestrator.repository.list_window(
             ctx.tenant_id, start_text, category
         )
-        if not items and (
-            not production or active_settings.synthetic_demo_forecasts
-        ):
+        if not items and (not production or active_settings.synthetic_demo_forecasts):
             measured_coverage = (
                 1.0
                 if active_settings.synthetic_demo_forecasts
@@ -1533,12 +1754,17 @@ def create_app(
             import h3
 
             west, south, east, north = bounds
+
+            def inside_bounds(item: dict[str, Any]) -> bool:
+                latitude, longitude = h3.cell_to_latlng(item["cell_id"])
+                return (
+                    south <= latitude <= north and west <= longitude <= east
+                )
+
             items = [
                 item
                 for item in items
-                if (lambda point: south <= point[0] <= north and west <= point[1] <= east)(
-                    h3.cell_to_latlng(item["cell_id"])
-                )
+                if inside_bounds(item)
             ]
         total = len(items)
         offset = (page - 1) * page_size
@@ -1549,7 +1775,9 @@ def create_app(
     def forecast_detail(
         forecast_id: str, ctx: TenantContext = Depends(require_tenant)
     ) -> dict[str, Any]:
-        item = app.state.forecast_orchestrator.repository.get(ctx.tenant_id, forecast_id)
+        item = app.state.forecast_orchestrator.repository.get(
+            ctx.tenant_id, forecast_id
+        )
         if item is None:
             raise problem(404, "forecast_not_found", "Forecast was not found")
         return item
@@ -1561,7 +1789,9 @@ def create_app(
             if approved_card is not None:
                 return approved_card
         if production:
-            raise problem(404, "approved_model_not_found", "No approved model is active")
+            raise problem(
+                404, "approved_model_not_found", "No approved model is active"
+            )
         card = _load_fixture("model-card")
         card["tenant_id"] = ctx.tenant_id
         return card
@@ -1581,7 +1811,12 @@ def create_app(
         ctx: TenantContext = Depends(require_operator),
     ) -> dict[str, Any]:
         if app.state.model_registry is None:
-            raise problem(503, "model_registry_unavailable", "Model registry is unavailable", retryable=True)
+            raise problem(
+                503,
+                "model_registry_unavailable",
+                "Model registry is unavailable",
+                retryable=True,
+            )
 
         def action() -> dict[str, Any]:
             result = app.state.model_registry.promote(
@@ -1615,7 +1850,12 @@ def create_app(
         ctx: TenantContext = Depends(require_operator),
     ) -> dict[str, Any]:
         if app.state.model_registry is None:
-            raise problem(503, "model_registry_unavailable", "Model registry is unavailable", retryable=True)
+            raise problem(
+                503,
+                "model_registry_unavailable",
+                "Model registry is unavailable",
+                retryable=True,
+            )
 
         def action() -> dict[str, Any]:
             result = app.state.model_registry.rollback(
@@ -1686,4 +1926,8 @@ def create_app(
 # Importing the reusable factory must not instantiate development adapters in a
 # production process. Production deployments use
 # ``src.data.video.production_app:app`` which injects all durable dependencies.
-app = create_app() if os.environ.get("APP_ENVIRONMENT", "development").lower() != "production" else None
+app = (
+    create_app()
+    if os.environ.get("APP_ENVIRONMENT", "development").lower() != "production"
+    else None
+)

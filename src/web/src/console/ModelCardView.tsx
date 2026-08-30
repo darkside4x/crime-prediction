@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { api } from "../api/client";
+import { api, ApiError } from "../api/client";
 import { useAuth } from "./AuthContext";
 
 function sentenceCase(value: string): string {
@@ -18,6 +18,39 @@ export default function ModelCardView() {
   });
 
   if (card.isLoading) return <p className="muted">Loading model card…</p>;
+  if (card.error instanceof ApiError && card.error.code === "approved_model_not_found") {
+    return (
+      <section className="model-card-view">
+        <h2 className="section-title">
+          Historical <span className="accent">baseline</span>
+        </h2>
+        <div className="panel-flow">
+          <div className="panel">
+            <h3>Safe fallback is active</h3>
+            <p role="status" className="ok-banner">
+              Forecasts use the historical aggregate baseline because no trained model bundle has been approved for this tenant.
+            </p>
+            <dl className="provenance">
+              <dt>Active forecast path</dt>
+              <dd>Historical aggregate baseline</dd>
+              <dt>Approved trained model</dt>
+              <dd>None</dd>
+              <dt>Publication policy</dt>
+              <dd>Minimum-count suppression and measured-coverage checks still apply</dd>
+              <dt>Human interpretation</dt>
+              <dd>Required for every area-level estimate</dd>
+            </dl>
+          </div>
+          <div className="panel">
+            <h3>Why no trained metrics are shown</h3>
+            <p className="muted">
+              Xecrex does not fabricate a model card or evaluation score. Training, temporal validation, calibration, approval, and registry promotion must finish before a learned model can replace this baseline.
+            </p>
+          </div>
+        </div>
+      </section>
+    );
+  }
   if (card.error || !card.data)
     return (
       <p role="alert" className="error-banner">

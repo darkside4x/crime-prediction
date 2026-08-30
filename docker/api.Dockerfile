@@ -20,7 +20,7 @@ RUN pip install --no-cache-dir \
     "jsonschema[format]==4.25.1" "numpy==2.2.3" "polars==1.32.3" "openai==3.6.0" \
     "python-dotenv==1.2.3" "boto3==1.40.31" \
     "psycopg[binary,pool]==3.2.10" "python-multipart==0.0.31" \
-    "PyJWT[crypto]==2.13.0"
+    "PyJWT[crypto]==2.13.0" "twilio==9.11.0"
 
 COPY pyproject.toml ./
 COPY contracts/ contracts/
@@ -33,7 +33,8 @@ COPY src/models/ src/models/
 
 RUN pip install --no-cache-dir --no-deps . && \
     command -v crime-platform-migrate && \
-    command -v crime-video-worker
+    command -v crime-video-worker && \
+    command -v crime-dispatch-worker
 
 USER 10001:10001
 

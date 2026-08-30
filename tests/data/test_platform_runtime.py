@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from threading import Event
 
 import pytest
 
@@ -165,6 +167,55 @@ def test_retry_uses_persisted_exponential_backoff(tmp_path: Path) -> None:
     assert worker.poll_once() == []
 
 
+def test_worker_renews_persisted_and_broker_leases_during_provider_call(
+    tmp_path: Path,
+) -> None:
+    store, provider, service, asset = _setup(tmp_path)
+    job = store.enqueue(TENANT, asset["asset_id"], "upload")
+    broker = DatabaseJobBroker(store)
+    provider_started = Event()
+    release_provider = Event()
+    renewed = Event()
+    original_upload = provider.upload
+    heartbeat_count = 0
+
+    class RecordingStore:
+        def __getattr__(self, name: str):
+            return getattr(store, name)
+
+        def heartbeat(self, *args, **kwargs) -> None:
+            nonlocal heartbeat_count
+            store.heartbeat(*args, **kwargs)
+            heartbeat_count += 1
+            if heartbeat_count >= 2:
+                renewed.set()
+
+    def blocking_upload(*args, **kwargs):
+        provider_started.set()
+        assert release_provider.wait(timeout=5)
+        return original_upload(*args, **kwargs)
+
+    provider.upload = blocking_upload
+    worker = VideoJobWorker(
+        store=RecordingStore(),
+        broker=broker,
+        service=service,
+        operations=("upload",),
+        worker_id="lease-renewal-worker",
+        lease_seconds=1,
+    )
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        result = executor.submit(worker.poll_once)
+        assert provider_started.wait(timeout=5)
+        assert renewed.wait(timeout=5)
+        release_provider.set()
+        assert result.result(timeout=5)[0].state == "completed"
+
+    assert store.get_job(TENANT, job["job_id"])["state"] == "completed"
+    assert heartbeat_count >= 2
+
+
 def test_only_one_analysis_job_can_be_active_per_asset(tmp_path: Path) -> None:
     store, _, _, asset = _setup(tmp_path)
     first = store.enqueue(
@@ -227,9 +278,7 @@ def test_exhausted_legacy_index_adopts_the_configured_bound(tmp_path: Path) -> N
         idempotency_key="legacy-index-bound",
     )
     store.transition_job(TENANT, job["job_id"], "running")
-    store.transition_job(
-        TENANT, job["job_id"], "retry", "reka_index_pending"
-    )
+    store.transition_job(TENANT, job["job_id"], "retry", "reka_index_pending")
     provider.status = "indexed"
     worker = VideoJobWorker(
         store=store,
@@ -450,13 +499,49 @@ def test_camera_connection_hides_credentials_and_rejects_embedded_userinfo() -> 
         }
     }
     secrets = Secrets()
-    connection = resolve_camera_connection(source, secrets)
+
+    def public_dns(_host: str, _port: int) -> set[str]:
+        return {"8.8.8.8"}
+
+    connection = resolve_camera_connection(source, secrets, address_resolver=public_dns)
     assert "never-print-me" not in repr(connection)
     secrets.values["secret://endpoint"] = {
         "stream_url": "rtsps://embedded:credential@camera.example/live"
     }
     with pytest.raises(VideoPipelineError) as caught:
-        resolve_camera_connection(source, secrets)
+        resolve_camera_connection(source, secrets, address_resolver=public_dns)
+    assert caught.value.code == "camera_endpoint_invalid"
+
+
+@pytest.mark.parametrize(
+    "stream_url,address",
+    [
+        ("rtsps://127.0.0.1/live", "127.0.0.1"),
+        ("rtsps://camera.example/live", "10.0.0.8"),
+        ("rtsps://camera.example/live", "169.254.169.254"),
+        ("rtsps://camera.example:8443/live", "8.8.8.8"),
+    ],
+)
+def test_camera_connection_rejects_ssrf_targets(stream_url: str, address: str) -> None:
+    class Secrets:
+        def resolve_json(self, ref: str) -> dict:
+            if ref == "secret://endpoint":
+                return {"stream_url": stream_url}
+            return {"username": "operator", "password": "safe-password"}
+
+    source = {
+        "connection": {
+            "transport": "rtsp",
+            "endpoint_ref": "secret://endpoint",
+            "credential_ref": "secret://credentials",
+        }
+    }
+    with pytest.raises(VideoPipelineError) as caught:
+        resolve_camera_connection(
+            source,
+            Secrets(),
+            address_resolver=lambda _host, _port: {address},
+        )
     assert caught.value.code == "camera_endpoint_invalid"
 
 
@@ -470,15 +555,40 @@ def test_platform_settings_repr_never_contains_secrets(
         "VIDEO_MEDIA_BUCKET": "restricted",
         "VIDEO_MEDIA_KMS_KEY_ID": "alias/video",
         "VIDEO_MEDIA_BUCKET_OWNER": "123456789012",
+        "VIDEO_MAX_UPLOAD_BYTES": "8388608",
         "LOCATION_SECRET_PREFIX": "crime/production/tenants",
         "AWS_REGION": "ap-south-1",
         "REKA_API_KEY": "reka-secret-value",
     }
     for name, value in values.items():
         monkeypatch.setenv(name, value)
-    rendered = repr(PlatformSettings.from_environment())
+    settings = PlatformSettings.from_environment()
+    assert settings.max_upload_bytes == 8 * 1024 * 1024
+    rendered = repr(settings)
     assert "database-secret" not in rendered
     assert "reka-secret-value" not in rendered
+
+
+@pytest.mark.parametrize("value", ["0", "10485761"])
+def test_platform_settings_reject_gateway_unsafe_upload_limit(
+    monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    required = {
+        "DATABASE_URL": "postgresql://crime_app:secret@db.example/crime",
+        "VIDEO_QUEUE_URL": "https://sqs.ap-south-1.amazonaws.com/123/jobs",
+        "VIDEO_QUEUE_DLQ_URL": "https://sqs.ap-south-1.amazonaws.com/123/jobs-dlq",
+        "VIDEO_MEDIA_BUCKET": "restricted",
+        "VIDEO_MEDIA_KMS_KEY_ID": "alias/video",
+        "VIDEO_MEDIA_BUCKET_OWNER": "123456789012",
+        "LOCATION_SECRET_PREFIX": "crime/production/tenants",
+        "AWS_REGION": "ap-south-1",
+        "REKA_API_KEY": "server-only-test-key",
+        "VIDEO_MAX_UPLOAD_BYTES": value,
+    }
+    for name, setting in required.items():
+        monkeypatch.setenv(name, setting)
+    with pytest.raises(ValueError, match="gateway-safe"):
+        PlatformSettings.from_environment()
 
 
 def test_coverage_is_measured_available_seconds_over_expected(tmp_path: Path) -> None:
@@ -561,6 +671,7 @@ def test_hls_live_capture_creates_bounded_segment_and_durable_upload_job(
         segmenter=Segmenter(),
         spool_root=tmp_path / "restricted",
         segment_seconds=30,
+        address_resolver=lambda _host, _port: {"8.8.8.8"},
     ).capture_once(TENANT, live_source["source_id"])
     assert result and result["status"] == "queued"
     assert store.get_asset(TENANT, result["asset_id"])["kind"] == "live_segment"

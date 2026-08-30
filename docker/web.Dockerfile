@@ -17,6 +17,7 @@ ENV VITE_API_BASE=$VITE_API_BASE \
 RUN pnpm build
 
 FROM nginx:1.31.4-alpine3.24
+RUN apk add --no-cache --upgrade 'libcrypto3>=3.5.8-r0' 'libssl3>=3.5.8-r0'
 COPY --from=build /web/dist /usr/share/nginx/html
 COPY docker/nginx.conf /etc/nginx/nginx.conf
 USER 101:101

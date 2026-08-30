@@ -80,6 +80,8 @@ class FfprobeMediaInspector:
                     "ffprobe",
                     "-v",
                     "error",
+                    "-protocol_whitelist",
+                    "file,pipe",
                     "-show_entries",
                     "format=duration,format_name",
                     "-of",
@@ -254,6 +256,11 @@ class VideoPipelineService:
             raise VideoPipelineError(
                 "video_corrupt", "MP4 container signature is invalid"
             )
+        # No media parser receives attacker-controlled bytes before the
+        # production malware boundary. WebM intake applies the same rule to
+        # the original container before transcoding, then reaches this scan
+        # again for the generated MP4.
+        self.media_scanner.scan(resolved)
         probed_duration = self.media_inspector.duration_seconds(resolved)
         if (
             not math.isfinite(probed_duration)
@@ -313,7 +320,6 @@ class VideoPipelineService:
         storage_ref: str | None = None
         metadata_persisted = False
         try:
-            self.media_scanner.scan(resolved)
             storage_ref = self.media_storage.store(
                 resolved,
                 tenant_id=authenticated_tenant_id,
@@ -605,6 +611,8 @@ class VideoPipelineService:
                         "-hide_banner",
                         "-loglevel",
                         "error",
+                        "-protocol_whitelist",
+                        "file,pipe",
                         "-ss",
                         str(start),
                         "-i",

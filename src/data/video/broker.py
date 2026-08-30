@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import UTC, datetime, timedelta
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 
 from .errors import VideoPipelineError
@@ -302,9 +302,10 @@ class DatabaseJobBroker:
 class PostgresJobBroker:
     """Restart-safe local broker used by the one-command deployment demo.
 
-    It deliberately stores only opaque tenant/job routing metadata outside the
-    tenant tables. Every actual job and media lookup still goes through a
-    transaction with ``SET LOCAL app.tenant_id``. AWS deployments use SQS.
+    It deliberately stores only opaque tenant/job routing metadata. Tenant-
+    specific mutations use transactions with ``SET LOCAL app.tenant_id``;
+    cross-tenant claim and depth operations use narrowly scoped database
+    functions. AWS deployments use SQS.
     """
 
     def __init__(self, database: object, *, visibility_seconds: int = 120) -> None:
@@ -314,7 +315,7 @@ class PostgresJobBroker:
     def publish(self, message: JobMessage, *, delay_seconds: int = 0) -> None:
         message.validate()
         available = datetime.now(UTC) + timedelta(seconds=max(0, delay_seconds))
-        with self.database.system_transaction() as cursor:
+        with self.database.transaction(message.tenant_id) as cursor:
             cursor.execute(
                 """INSERT INTO demo_job_messages
                    (tenant_id,job_id,operation,state,available_at,created_at,updated_at)
@@ -330,26 +331,13 @@ class PostgresJobBroker:
     def receive(self, *, operations: tuple[str, ...], limit: int = 1) -> list[Delivery]:
         if not operations or not set(operations) <= OPERATIONS - {"capture"}:
             raise ValueError("Worker operation set is invalid")
-        now = datetime.now(UTC)
-        lease = now + timedelta(seconds=self.visibility_seconds)
+        claim_limit = min(max(limit, 1), 10)
+        visibility_seconds = min(max(int(self.visibility_seconds), 1), 43200)
         with self.database.system_transaction() as cursor:
             cursor.execute(
-                """WITH selected AS (
-                     SELECT tenant_id,job_id FROM demo_job_messages
-                     WHERE operation=ANY(%s) AND state <> 'dead_letter'
-                       AND available_at <= %s
-                       AND (state='queued' OR lease_expires_at < %s)
-                     ORDER BY available_at,created_at
-                     FOR UPDATE SKIP LOCKED LIMIT %s
-                   )
-                   UPDATE demo_job_messages message SET state='leased',
-                     lease_expires_at=%s,receipt=gen_random_uuid(),
-                     receive_count=message.receive_count+1,updated_at=%s
-                   FROM selected
-                   WHERE message.tenant_id=selected.tenant_id
-                     AND message.job_id=selected.job_id
-                   RETURNING message.*""",
-                (list(operations), now, now, min(max(limit, 1), 10), lease, now),
+                """SELECT tenant_id,job_id,operation,receipt,receive_count
+                   FROM app.claim_demo_job_messages(%s,%s,%s)""",
+                (list(operations), claim_limit, visibility_seconds),
             )
             rows = cursor.fetchall()
         return [
@@ -362,7 +350,7 @@ class PostgresJobBroker:
         ]
 
     def acknowledge(self, delivery: Delivery) -> None:
-        with self.database.system_transaction() as cursor:
+        with self.database.transaction(delivery.message.tenant_id) as cursor:
             cursor.execute(
                 """DELETE FROM demo_job_messages
                    WHERE tenant_id=%s AND job_id=%s AND receipt=%s""",
@@ -371,7 +359,7 @@ class PostgresJobBroker:
 
     def retry(self, delivery: Delivery, *, delay_seconds: int) -> None:
         available = datetime.now(UTC) + timedelta(seconds=max(0, delay_seconds))
-        with self.database.system_transaction() as cursor:
+        with self.database.transaction(delivery.message.tenant_id) as cursor:
             cursor.execute(
                 """UPDATE demo_job_messages SET state='queued',available_at=%s,
                    lease_expires_at=NULL,receipt=NULL,updated_at=now()
@@ -381,7 +369,7 @@ class PostgresJobBroker:
 
     def heartbeat(self, delivery: Delivery, *, visibility_seconds: int) -> None:
         lease = datetime.now(UTC) + timedelta(seconds=max(1, visibility_seconds))
-        with self.database.system_transaction() as cursor:
+        with self.database.transaction(delivery.message.tenant_id) as cursor:
             cursor.execute(
                 """UPDATE demo_job_messages SET lease_expires_at=%s,updated_at=now()
                    WHERE tenant_id=%s AND job_id=%s AND receipt=%s AND state='leased'""",
@@ -389,18 +377,21 @@ class PostgresJobBroker:
             )
 
     def dead_letter(self, delivery: Delivery, *, error_code: str) -> None:
-        with self.database.system_transaction() as cursor:
+        with self.database.transaction(delivery.message.tenant_id) as cursor:
             cursor.execute(
                 """UPDATE demo_job_messages SET state='dead_letter',error_code=%s,
                    lease_expires_at=NULL,receipt=NULL,updated_at=now()
-                   WHERE tenant_id=%s AND job_id=%s""",
-                (error_code, delivery.message.tenant_id, delivery.message.job_id),
+                   WHERE tenant_id=%s AND job_id=%s AND receipt=%s
+                     AND state='leased'""",
+                (
+                    error_code,
+                    delivery.message.tenant_id,
+                    delivery.message.job_id,
+                    delivery.receipt,
+                ),
             )
 
     def depth(self) -> int:
         with self.database.system_transaction() as cursor:
-            cursor.execute(
-                """SELECT count(*) AS count FROM demo_job_messages
-                   WHERE state <> 'dead_letter'"""
-            )
+            cursor.execute("SELECT app.demo_job_queue_depth() AS count")
             return int(cursor.fetchone()["count"])

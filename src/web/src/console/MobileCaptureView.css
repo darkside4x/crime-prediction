@@ -1,0 +1,244 @@
+.mobile-capture-view {
+  max-width: 1100px;
+  margin: 0 auto;
+}
+
+.mobile-capture-heading {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.mobile-capture-heading .section-title {
+  margin-top: 4px;
+}
+
+.mobile-capture-back {
+  color: var(--cream-dim);
+  font-size: 13px;
+}
+
+.mobile-capture-boundary {
+  margin: 0 0 18px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: var(--cream-dim);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.mobile-capture-layout {
+  display: grid;
+  gap: 16px;
+}
+
+.mobile-camera-card,
+.mobile-capture-controls {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--bg-panel);
+  padding: 14px;
+}
+
+.mobile-camera-preview {
+  position: relative;
+  width: 100%;
+  min-height: 360px;
+  aspect-ratio: 9 / 16;
+  overflow: hidden;
+  border-radius: 10px;
+  background: #030303;
+}
+
+.mobile-camera-preview video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.mobile-camera-placeholder {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--cream-faint);
+  background:
+    linear-gradient(135deg, transparent 49.5%, rgba(255, 240, 235, 0.08) 50%, transparent 50.5%),
+    #050505;
+  font: 12px var(--font-mono);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.mobile-recording-indicator {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 9px;
+  border-radius: 999px;
+  color: #fff;
+  background: rgba(10, 5, 6, 0.86);
+  font: 12px var(--font-mono);
+}
+
+.mobile-recording-indicator i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--red);
+}
+
+.mobile-capture-state {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 12px 0;
+  padding: 10px 12px;
+  border-left: 3px solid rgba(72, 200, 120, 0.65);
+  color: var(--cream-dim);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.mobile-capture-state strong {
+  color: var(--cream);
+  font: 11px var(--font-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.mobile-capture-state.is-error {
+  border-left-color: var(--red);
+}
+
+.mobile-capture-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.mobile-capture-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+}
+
+.mobile-capture-controls > label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--cream-dim);
+  font-size: 12px;
+}
+
+.mobile-capture-controls select {
+  width: 100%;
+  min-height: 42px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--cream);
+  background: var(--bg-raised);
+  font: 14px var(--font-body);
+}
+
+.mobile-capture-controls fieldset {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.mobile-capture-controls legend {
+  padding: 0 5px;
+  color: var(--cream-dim);
+  font-size: 12px;
+}
+
+.mobile-duration-options {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.mobile-duration-options label {
+  display: flex;
+  min-height: 42px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--cream-dim);
+  font-size: 13px;
+}
+
+.mobile-duration-options label:has(input:checked) {
+  border-color: var(--red);
+  color: var(--cream);
+  background: var(--red-dim);
+}
+
+.mobile-clip-summary {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid rgba(72, 200, 120, 0.5);
+  border-radius: 8px;
+  font-size: 12px;
+}
+
+.mobile-consent-row {
+  flex-direction: row !important;
+  align-items: flex-start;
+  line-height: 1.45;
+}
+
+.mobile-consent-row input {
+  flex: 0 0 auto;
+  margin-top: 3px;
+}
+
+@media (min-width: 760px) {
+  .mobile-capture-layout {
+    grid-template-columns: minmax(300px, 0.9fr) minmax(340px, 1.1fr);
+    align-items: start;
+  }
+
+  .mobile-camera-preview {
+    min-height: 420px;
+    max-height: 620px;
+  }
+}
+
+@media (max-width: 480px) {
+  .mobile-capture-heading {
+    align-items: start;
+    flex-direction: column;
+  }
+
+  .mobile-camera-card,
+  .mobile-capture-controls {
+    padding: 10px;
+  }
+
+  .mobile-capture-actions button,
+  .mobile-capture-controls > button {
+    width: 100%;
+    min-height: 44px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mobile-recording-indicator i {
+    animation: none;
+  }
+}

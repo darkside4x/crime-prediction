@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import maplibregl, { Map as MLMap } from "maplibre-gl";
 import { cellToBoundary } from "h3-js";
+import "maplibre-gl/dist/maplibre-gl.css";
 import type { OperationalAggregateForecast } from "../api/client";
 
 const MAP_STYLE = "https://tiles.openfreemap.org/styles/dark";

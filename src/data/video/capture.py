@@ -12,11 +12,12 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Protocol
-from urllib.parse import quote, urlsplit, urlunsplit
+from urllib.parse import quote, urlunsplit
 
 from .broker import JobBroker, JobMessage
 from .coverage import CoverageObservation, CoverageTelemetry
 from .errors import VideoPipelineError
+from .network import AddressResolver, validate_public_media_url
 from .service import VideoPipelineService
 
 
@@ -25,7 +26,7 @@ class SecretResolver(Protocol):
 
 
 class AwsSecretsManagerResolver:
-    """Resolves only explicitly mapped secret references; secret values are never logged."""
+    """Resolve mapped secret references without logging secret values."""
 
     def __init__(
         self,
@@ -125,7 +126,10 @@ class CameraConnection:
 
 
 def resolve_camera_connection(
-    source: dict[str, Any], resolver: SecretResolver
+    source: dict[str, Any],
+    resolver: SecretResolver,
+    *,
+    address_resolver: AddressResolver | None = None,
 ) -> CameraConnection:
     connection = source["connection"]
     transport = connection["transport"]
@@ -146,22 +150,16 @@ def resolve_camera_connection(
         raise VideoPipelineError(
             "camera_endpoint_invalid", "Camera endpoint secret is invalid"
         )
-    parts = urlsplit(input_url)
     allowed_schemes = {
         "hls": {"https"},
         "rtsp": {"rtsp", "rtsps"},
         "onvif": {"rtsp", "rtsps"},
     }
-    if (
-        parts.scheme.lower() not in allowed_schemes[transport]
-        or not parts.hostname
-        or parts.username is not None
-        or parts.password is not None
-        or parts.fragment
-    ):
-        raise VideoPipelineError(
-            "camera_endpoint_invalid", "Camera endpoint secret is invalid"
-        )
+    parts = validate_public_media_url(
+        input_url,
+        allowed_schemes=allowed_schemes[transport],
+        resolver=address_resolver,
+    )
     username, password = credential.get("username"), credential.get("password")
     if username is not None or password is not None:
         if not isinstance(username, str) or not isinstance(password, str):
@@ -169,6 +167,8 @@ def resolve_camera_connection(
                 "camera_credentials_invalid", "Camera credentials are invalid"
             )
         hostname = parts.hostname or ""
+        if ":" in hostname:
+            hostname = f"[{hostname}]"
         port = f":{parts.port}" if parts.port else ""
         netloc = (
             f"{quote(username, safe='')}:{quote(password, safe='')}@{hostname}{port}"
@@ -182,16 +182,31 @@ def resolve_camera_connection(
 class FfmpegSegmenter:
     """Creates one bounded MP4 segment with transport-specific reconnect behavior."""
 
-    def __init__(self, executable: str = "ffmpeg") -> None:
+    def __init__(
+        self,
+        executable: str = "ffmpeg",
+        *,
+        max_output_bytes: int = 8 * 1024 * 1024,
+    ) -> None:
+        if max_output_bytes < 1024 * 1024:
+            raise ValueError("Camera segment limit must be at least 1 MiB")
         self.executable = executable
+        self.max_output_bytes = max_output_bytes
 
     def capture(
         self, connection: CameraConnection, output: Path, *, duration_seconds: int
     ) -> None:
+        if not 5 <= duration_seconds <= 60:
+            raise VideoPipelineError(
+                "camera_capture_duration_invalid",
+                "Camera capture duration must be between 5 and 60 seconds",
+            )
         output.parent.mkdir(parents=True, exist_ok=True)
         options = ["-nostdin", "-hide_banner", "-loglevel", "error"]
         if connection.input_url.startswith(("http://", "https://")):
             options += [
+                "-protocol_whitelist",
+                "https,tls,tcp",
                 "-reconnect",
                 "1",
                 "-reconnect_streamed",
@@ -200,7 +215,14 @@ class FfmpegSegmenter:
                 "5",
             ]
         else:
-            options += ["-rtsp_transport", "tcp", "-rw_timeout", "15000000"]
+            options += [
+                "-protocol_whitelist",
+                "rtsp,rtsps,rtp,tcp,udp,tls",
+                "-rtsp_transport",
+                "tcp",
+                "-rw_timeout",
+                "15000000",
+            ]
         command = [
             self.executable,
             *options,
@@ -215,6 +237,8 @@ class FfmpegSegmenter:
             "copy",
             "-movflags",
             "+faststart",
+            "-fs",
+            str(self.max_output_bytes),
             "-y",
             str(output),
         ]
@@ -232,7 +256,12 @@ class FfmpegSegmenter:
             raise VideoPipelineError(
                 "camera_capture_unavailable", "Camera capture failed", retryable=True
             ) from error
-        if result.returncode != 0 or not output.is_file():
+        if (
+            result.returncode != 0
+            or not output.is_file()
+            or output.stat().st_size <= 0
+            or output.stat().st_size > self.max_output_bytes
+        ):
             output.unlink(missing_ok=True)
             raise VideoPipelineError(
                 "camera_capture_failed",
@@ -242,7 +271,7 @@ class FfmpegSegmenter:
 
 
 class LiveCaptureWorker:
-    """Applies backpressure and emits short live segments into the durable upload queue."""
+    """Emit short live segments to the durable queue with backpressure."""
 
     def __init__(
         self,
@@ -257,7 +286,14 @@ class LiveCaptureWorker:
         segment_seconds: int = 30,
         max_pending_segments: int = 20,
         max_reconnect_attempts: int = 5,
+        address_resolver: AddressResolver | None = None,
     ) -> None:
+        if not 5 <= segment_seconds <= 60:
+            raise ValueError("segment_seconds must be between 5 and 60")
+        if not 1 <= max_pending_segments <= 10_000:
+            raise ValueError("max_pending_segments must be between 1 and 10000")
+        if not 1 <= max_reconnect_attempts <= 10:
+            raise ValueError("max_reconnect_attempts must be between 1 and 10")
         self.store = store
         self.service = service
         self.broker = broker
@@ -269,6 +305,7 @@ class LiveCaptureWorker:
         self.segment_seconds = segment_seconds
         self.max_pending_segments = max_pending_segments
         self.max_reconnect_attempts = max_reconnect_attempts
+        self.address_resolver = address_resolver
 
     def capture_once(self, tenant_id: str, source_id: str) -> dict[str, Any] | None:
         try:
@@ -291,7 +328,11 @@ class LiveCaptureWorker:
             )
             return None
         source = self.store.get_source(tenant_id, source_id)
-        connection = resolve_camera_connection(source, self.secrets)
+        connection = resolve_camera_connection(
+            source,
+            self.secrets,
+            address_resolver=self.address_resolver,
+        )
         segment = (
             self.spool_root / tenant_id / source_id / f"{started:%Y%m%dT%H%M%S%fZ}.mp4"
         )

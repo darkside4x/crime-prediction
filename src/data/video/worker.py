@@ -6,7 +6,8 @@ import socket
 import time
 import uuid
 from dataclasses import dataclass
-from typing import Any
+from threading import Event, Thread
+from typing import Any, Self
 
 from .broker import Delivery, JobBroker, JobMessage
 from .coverage import CoverageObservation, CoverageTelemetry
@@ -23,6 +24,75 @@ class WorkerResult:
     state: str
     operation: str
     error_code: str | None = None
+
+
+class _JobLeaseHeartbeat:
+    """Renew both the persisted job lease and broker visibility in flight."""
+
+    def __init__(
+        self,
+        *,
+        store: Any,
+        broker: JobBroker,
+        delivery: Delivery,
+        worker_id: str,
+        lease_seconds: int,
+    ) -> None:
+        self.store = store
+        self.broker = broker
+        self.delivery = delivery
+        self.worker_id = worker_id
+        self.lease_seconds = lease_seconds
+        self.interval_seconds = max(min(lease_seconds / 3, 30), 0.25)
+        self._stop = Event()
+        self._failure: VideoPipelineError | None = None
+        self._thread = Thread(
+            target=self._run,
+            name=f"video-job-heartbeat-{delivery.message.job_id[:8]}",
+            daemon=True,
+        )
+
+    def __enter__(self) -> Self:
+        self._renew()
+        self._thread.start()
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
+        del traceback
+        self._stop.set()
+        self._thread.join(timeout=min(max(self.interval_seconds * 2, 1), 5))
+        if exc_type is None and exc is None and self._failure is not None:
+            raise self._failure
+
+    def _renew(self) -> None:
+        message = self.delivery.message
+        try:
+            self.store.heartbeat(
+                message.tenant_id,
+                message.job_id,
+                worker_id=self.worker_id,
+                lease_seconds=self.lease_seconds,
+            )
+            self.broker.heartbeat(
+                self.delivery,
+                visibility_seconds=self.lease_seconds,
+            )
+        except VideoPipelineError:
+            raise
+        except Exception as error:
+            raise VideoPipelineError(
+                "job_lease_renewal_failed",
+                "Worker could not renew the durable job lease",
+                retryable=True,
+            ) from error
+
+    def _run(self) -> None:
+        while not self._stop.wait(self.interval_seconds):
+            try:
+                self._renew()
+            except VideoPipelineError as error:
+                self._failure = error
+                self._stop.set()
 
 
 class VideoJobWorker:
@@ -138,11 +208,17 @@ class VideoJobWorker:
                 worker_id=self.worker_id,
                 lease_seconds=self.lease_seconds,
             )
-            self.broker.heartbeat(delivery, visibility_seconds=self.lease_seconds)
             operation_started = time.monotonic()
-            result = self.service.execute_operation(
-                message.tenant_id, job["asset_id"], message.operation
-            )
+            with _JobLeaseHeartbeat(
+                store=self.store,
+                broker=self.broker,
+                delivery=delivery,
+                worker_id=self.worker_id,
+                lease_seconds=self.lease_seconds,
+            ):
+                result = self.service.execute_operation(
+                    message.tenant_id, job["asset_id"], message.operation
+                )
             if message.operation == "index" and result in {"pending", "indexing"}:
                 if int(job["attempts"]) >= int(job["max_attempts"]):
                     error_code = "reka_index_timeout"
@@ -293,7 +369,7 @@ class VideoJobWorker:
                 )
             self.broker.dead_letter(delivery, error_code=error.code)
             return WorkerResult(message.job_id, "failed", message.operation, error.code)
-        except Exception:
+        except Exception:  # noqa: BLE001 - unexpected defects are normalized
             # A packaging or programming defect must not leave a durable job in
             # ``running`` until its lease expires while the worker crash-loops.
             # Keep implementation details out of the queue and public status.

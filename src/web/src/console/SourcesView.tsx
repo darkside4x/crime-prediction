@@ -4,8 +4,10 @@ import { api, ApiError, newIdempotencyKey, type SourceMapLocation } from "../api
 import { useAuth } from "./AuthContext";
 import NearLiveReview from "../components/NearLiveReview";
 import SourceLocationMap from "./SourceLocationMap";
+import MobileCaptureShare from "./MobileCaptureShare";
 
-const MAX_UPLOAD_BYTES = 512 * 1024 * 1024;
+// Keep multipart requests below the AWS HTTP API 10 MB payload ceiling.
+const MAX_UPLOAD_BYTES = 8 * 1024 * 1024;
 
 export default function SourcesView() {
   const { session } = useAuth();
@@ -97,14 +99,17 @@ export default function SourcesView() {
       setDurationSeconds(null);
       return;
     }
-    if (!selected.type.startsWith("video/mp4") && !selected.name.endsWith(".mp4")) {
-      setFileError("Only MP4 recordings are accepted.");
+    const lowerName = selected.name.toLowerCase();
+    const supportedType = selected.type === "video/mp4" || selected.type === "video/webm";
+    const supportedExtension = lowerName.endsWith(".mp4") || lowerName.endsWith(".webm");
+    if (!supportedType && !supportedExtension) {
+      setFileError("Only MP4 or WebM recordings are accepted.");
       setFile(null);
       setDurationSeconds(null);
       return;
     }
     if (selected.size > MAX_UPLOAD_BYTES) {
-      setFileError("File exceeds the 512 MB upload bound.");
+      setFileError("File exceeds the secure 8 MB gateway upload bound.");
       setFile(null);
       setDurationSeconds(null);
       return;
@@ -127,7 +132,7 @@ export default function SourcesView() {
       setFile(selected);
       setDurationSeconds(duration);
     } catch {
-      setFileError("The browser could not read this MP4's duration.");
+      setFileError("The browser could not read this recording's duration.");
       setFile(null);
       setDurationSeconds(null);
     } finally {
@@ -150,6 +155,7 @@ export default function SourcesView() {
       </h2>
 
       <div className="sources-grid">
+        <MobileCaptureShare />
         <div className="panel">
           <h3>Registered sources</h3>
           {sources.isLoading && <p className="muted">Loading sources…</p>}
@@ -234,10 +240,12 @@ export default function SourcesView() {
           <label className="file-drop">
             <input
               type="file"
-              accept="video/mp4,.mp4"
+              accept="video/mp4,video/webm,.mp4,.webm"
               onChange={(event) => void onFileChange(event.target.files?.[0] ?? null)}
             />
-            {file ? `${file.name} · ${durationSeconds?.toFixed(1)}s · ${(file.size / 1_048_576).toFixed(1)} MB` : "Choose an MP4 recording"}
+            {file
+              ? `${file.name} · ${durationSeconds?.toFixed(1)}s · ${(file.size / 1_048_576).toFixed(1)} MB`
+              : "Choose an MP4 or WebM recording"}
           </label>
           <label>
             Recorded source

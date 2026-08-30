@@ -6,6 +6,7 @@ import argparse
 import os
 import time
 from pathlib import Path
+from typing import Any
 
 from .capture import AwsSecretsManagerResolver, FfmpegSegmenter, LiveCaptureWorker
 from .coverage import PostgresCoverageTelemetry
@@ -22,10 +23,62 @@ class WorkerLocationResolver:
         )
 
 
-def migrate() -> None:
-    database_url = _secret_value("DATABASE_URL")
+def _migration_database_url() -> str:
+    database_url = _secret_value("DATABASE_MIGRATOR_URL")
     if not database_url:
-        raise ValueError("DATABASE_URL is required")
+        raise ValueError("DATABASE_MIGRATOR_URL is required")
+    return database_url
+
+
+def _assert_migrator_connection(cursor: Any) -> None:
+    expected_role = os.getenv("DATABASE_MIGRATOR_ROLE", "crime_migrator").strip()
+    if expected_role != "crime_migrator":
+        raise ValueError("DATABASE_MIGRATOR_ROLE must be crime_migrator")
+    cursor.execute(
+        """SELECT rolname, session_user, rolsuper, rolcreatedb, rolcreaterole, rolinherit,
+                  rolbypassrls,
+                  has_database_privilege(rolname, current_database(), 'CREATE'),
+                  has_schema_privilege(rolname, 'public', 'CREATE'),
+                  NOT EXISTS (
+                    SELECT 1 FROM pg_auth_members WHERE member = pg_roles.oid
+                  )
+           FROM pg_roles WHERE rolname = current_user"""
+    )
+    row = cursor.fetchone()
+    if row is None:
+        raise RuntimeError("Migration database role could not be verified")
+    (
+        role_name,
+        session_role,
+        is_superuser,
+        can_create_database,
+        can_create_role,
+        inherits_roles,
+        bypasses_rls,
+        can_create_schema,
+        can_create_in_public,
+        has_no_memberships,
+    ) = row
+    if role_name != expected_role or session_role != expected_role:
+        raise RuntimeError("Migrations require the dedicated crime_migrator role")
+    if any(
+        (
+            is_superuser,
+            can_create_database,
+            can_create_role,
+            inherits_roles,
+            bypasses_rls,
+        )
+    ):
+        raise RuntimeError("The migration role has unsafe PostgreSQL attributes")
+    if not can_create_schema or not can_create_in_public:
+        raise RuntimeError("The migration role is missing required DDL privileges")
+    if not has_no_memberships:
+        raise RuntimeError("The migration role must not inherit or SET ROLE")
+
+
+def migrate() -> None:
+    database_url = _migration_database_url()
     try:
         import psycopg
     except ImportError as error:  # pragma: no cover
@@ -36,6 +89,7 @@ def migrate() -> None:
         psycopg.connect(database_url, autocommit=True) as connection,
         connection.cursor() as cursor,
     ):
+        _assert_migrator_connection(cursor)
         for migration in migrations:
             cursor.execute(migration.read_text(encoding="utf-8"))
 
@@ -91,7 +145,9 @@ def capture_worker() -> None:
             broker=runtime.broker,
             secrets=secrets,
             telemetry=PostgresCoverageTelemetry(runtime.database),
-            segmenter=FfmpegSegmenter(),
+            segmenter=FfmpegSegmenter(
+                max_output_bytes=settings.max_upload_bytes,
+            ),
             spool_root=settings.restricted_spool_root,
             segment_seconds=int(os.getenv("VIDEO_SEGMENT_SECONDS", "30")),
             max_pending_segments=int(os.getenv("VIDEO_MAX_PENDING_SEGMENTS", "20")),
@@ -112,8 +168,9 @@ def demo_worker() -> None:
     )
     parser.add_argument("--poll-seconds", type=float, default=0.5)
     args = parser.parse_args()
-    from .demo_runtime import create_demo_runtime
     from src.api.settings import Settings
+
+    from .demo_runtime import create_demo_runtime
 
     runtime = create_demo_runtime()
     api_settings = Settings.from_environment()
