@@ -9,6 +9,7 @@ _FORMAT_STAGES = frozenset(
     {
         "indexed_video_candidate",
         "short_video_candidate",
+        # Retained so persisted pre-1.1.0 job/DLQ diagnostics remain readable.
         "short_video_screen",
     }
 )
@@ -17,6 +18,7 @@ _FORMAT_REASONS = frozenset(
         "content_shape_invalid",
         "json_format_invalid",
         "response_shape_invalid",
+        # Retained so persisted pre-1.1.0 job/DLQ diagnostics remain readable.
         "token_format_invalid",
         "token_limit_reached",
     }

@@ -9,6 +9,7 @@ from threading import Event
 
 import pytest
 
+import src.data.video.runtime as video_runtime
 from src.data.store import IngestionStore
 from src.data.video import (
     DatabaseJobBroker,
@@ -559,14 +560,82 @@ def test_platform_settings_repr_never_contains_secrets(
         "LOCATION_SECRET_PREFIX": "crime/production/tenants",
         "AWS_REGION": "ap-south-1",
         "REKA_API_KEY": "reka-secret-value",
+        "REKA_PROMPT_VERSION": "1.1.0",
     }
     for name, value in values.items():
         monkeypatch.setenv(name, value)
     settings = PlatformSettings.from_environment()
     assert settings.max_upload_bytes == 8 * 1024 * 1024
+    assert settings.reka_prompt_version == "1.1.0"
     rendered = repr(settings)
     assert "database-secret" not in rendered
     assert "reka-secret-value" not in rendered
+
+
+def test_platform_video_prompt_version_alias_is_validated_and_forwarded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    values = {
+        "DATABASE_URL": "postgresql://crime_app:secret@db.example/crime",
+        "VIDEO_QUEUE_URL": "https://sqs.ap-south-1.amazonaws.com/123/jobs",
+        "VIDEO_QUEUE_DLQ_URL": "https://sqs.ap-south-1.amazonaws.com/123/jobs-dlq",
+        "VIDEO_MEDIA_BUCKET": "restricted",
+        "VIDEO_MEDIA_KMS_KEY_ID": "alias/video",
+        "VIDEO_MEDIA_BUCKET_OWNER": "123456789012",
+        "VIDEO_MAX_UPLOAD_BYTES": "8388608",
+        "LOCATION_SECRET_PREFIX": "crime/production/tenants",
+        "AWS_REGION": "ap-south-1",
+        "REKA_API_KEY": "server-only-test-key",
+        "REKA_PROMPT_VERSION": "legacy-v1",
+        "REKA_VIDEO_PROMPT_VERSION": "structural-hazards-v2",
+    }
+    for name, value in values.items():
+        monkeypatch.setenv(name, value)
+
+    settings = PlatformSettings.from_environment()
+    assert settings.reka_prompt_version == "structural-hazards-v2"
+
+    database = object()
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(video_runtime, "TenantPostgres", lambda *_: database)
+    monkeypatch.setattr(video_runtime, "PostgresIngestionStore", lambda *_: object())
+    monkeypatch.setattr(video_runtime, "PostgresVideoStore", lambda *_: object())
+    monkeypatch.setattr(video_runtime, "S3MediaStorage", lambda **_: object())
+    monkeypatch.setattr(video_runtime, "SqsJobBroker", lambda **_: object())
+    monkeypatch.setattr(video_runtime, "RekaVisionProvider", lambda *_, **__: object())
+    monkeypatch.setattr(video_runtime, "ClamAVCommandScanner", lambda: object())
+
+    def fake_service(*args, **kwargs):
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(video_runtime, "VideoPipelineService", fake_service)
+    video_runtime.create_platform_runtime(settings, location_resolver=object())
+    assert captured["prompt_version"] == "structural-hazards-v2"
+
+
+@pytest.mark.parametrize("value", ["", "contains spaces", "x" * 65])
+def test_platform_settings_reject_invalid_video_prompt_version(
+    monkeypatch: pytest.MonkeyPatch,
+    value: str,
+) -> None:
+    required = {
+        "DATABASE_URL": "postgresql://crime_app:secret@db.example/crime",
+        "VIDEO_QUEUE_URL": "https://sqs.ap-south-1.amazonaws.com/123/jobs",
+        "VIDEO_QUEUE_DLQ_URL": "https://sqs.ap-south-1.amazonaws.com/123/jobs-dlq",
+        "VIDEO_MEDIA_BUCKET": "restricted",
+        "VIDEO_MEDIA_KMS_KEY_ID": "alias/video",
+        "VIDEO_MEDIA_BUCKET_OWNER": "123456789012",
+        "LOCATION_SECRET_PREFIX": "crime/production/tenants",
+        "AWS_REGION": "ap-south-1",
+        "REKA_API_KEY": "server-only-test-key",
+        "VIDEO_MAX_UPLOAD_BYTES": "8388608",
+        "REKA_VIDEO_PROMPT_VERSION": value,
+    }
+    for name, setting in required.items():
+        monkeypatch.setenv(name, setting)
+    with pytest.raises(ValueError, match="bounded version label"):
+        PlatformSettings.from_environment()
 
 
 @pytest.mark.parametrize("value", ["0", "10485761"])
