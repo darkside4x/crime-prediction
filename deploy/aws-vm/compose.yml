@@ -71,6 +71,7 @@ services:
     volumes:
       - ${MODEL_REGISTRY_HOST_PATH:?Mount the EFS model registry on the host}:/app/data/models
       - api-runtime:/app/data/runtime
+      - video-spool:/var/lib/crime-video-spool
       - clamav-db:/var/lib/clamav:ro
     expose:
       - "8000"
@@ -182,3 +183,4 @@ secrets:
 volumes:
   api-runtime:
   clamav-db:
+  video-spool:
