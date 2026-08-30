@@ -164,6 +164,19 @@ class VideoJobWorker:
             self.store.mark_dead_lettered(message.tenant_id, message.job_id)
             self.broker.dead_letter(delivery, error_code=error.code)
             return WorkerResult(message.job_id, "failed", message.operation, error.code)
+        except Exception:
+            # A packaging or programming defect must not leave a durable job in
+            # ``running`` until its lease expires while the worker crash-loops.
+            # Keep implementation details out of the queue and public status.
+            error_code = "worker_unexpected_error"
+            try:
+                self.store.transition_job(
+                    message.tenant_id, message.job_id, "failed", error_code
+                )
+                self.store.mark_dead_lettered(message.tenant_id, message.job_id)
+            finally:
+                self.broker.dead_letter(delivery, error_code=error_code)
+            return WorkerResult(message.job_id, "failed", message.operation, error_code)
 
     def _record_detector(
         self,

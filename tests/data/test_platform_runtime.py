@@ -161,6 +161,33 @@ def test_retry_uses_persisted_exponential_backoff(tmp_path: Path) -> None:
     assert worker.poll_once() == []
 
 
+def test_unexpected_worker_error_is_safely_dead_lettered(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store, _, service, asset = _setup(tmp_path)
+    job = store.enqueue(TENANT, asset["asset_id"], "upload")
+
+    def fail_unexpectedly(*_args, **_kwargs):
+        raise FileNotFoundError("internal package path")
+
+    monkeypatch.setattr(service, "execute_operation", fail_unexpectedly)
+    worker = VideoJobWorker(
+        store=store,
+        broker=DatabaseJobBroker(store),
+        service=service,
+        operations=("upload",),
+        worker_id="upload-1",
+    )
+
+    result = worker.poll_once()[0]
+    persisted = store.get_job(TENANT, job["job_id"])
+    assert result.state == "failed"
+    assert result.error_code == "worker_unexpected_error"
+    assert persisted["state"] == "failed"
+    assert persisted["last_error_code"] == "worker_unexpected_error"
+    assert persisted["dead_lettered_at"] is not None
+
+
 def test_index_pending_has_longer_bound_and_finishes_as_failed(tmp_path: Path) -> None:
     store, provider, service, asset = _setup(tmp_path)
     provider.status = "pending"

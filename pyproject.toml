@@ -48,6 +48,9 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src"]
 
+[tool.hatch.build.targets.wheel.force-include]
+"contracts/schemas" = "src/data/schemas"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
