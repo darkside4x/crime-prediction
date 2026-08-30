@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 import threading
 import time
@@ -37,7 +38,10 @@ class FakeCapture:
         assert duration_seconds == 10
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes(b"\x00\x00\x00\x18ftypmp42" + b"bounded-live-segment" * 8)
-        return CapturedSegment(destination, "2026-08-30T00:00:00Z")
+        return CapturedSegment(
+            destination,
+            datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        )
 
 
 class BlockingCapture(FakeCapture):
@@ -184,6 +188,22 @@ def test_allowlisted_hls_capture_reaches_validated_human_review(tmp_path: Path) 
     )
     assert "evidence_ref" not in candidate
     assert candidate["record_type"] == "unconfirmed_candidate_detection"
+
+    evidence = client.get(
+        f"/v1/candidate-detections/{candidate['detection_id']}/evidence",
+        headers={"Authorization": "Bearer demo-token-one"},
+    )
+    assert evidence.status_code == 200, evidence.text
+    assert evidence.headers["content-type"] == "video/mp4"
+    assert "no-store" in evidence.headers["cache-control"]
+    assert evidence.content.startswith(b"\x00\x00\x00\x18ftypmp42")
+    assert b"secret://" not in evidence.content
+
+    viewer_denied = client.get(
+        f"/v1/candidate-detections/{candidate['detection_id']}/evidence",
+        headers={"Authorization": "Bearer demo-viewer-one"},
+    )
+    assert viewer_denied.status_code == 403
 
     reviewed = client.post(
         f"/v1/candidate-detections/{candidate['detection_id']}/review",

@@ -14,6 +14,7 @@ from .errors import VideoPipelineError
 from .service import VideoPipelineService
 
 NEXT_OPERATION = {"upload": "index", "index": "analyze"}
+OPERATION_MAX_ATTEMPTS = {"upload": 5, "index": 20, "analyze": 5, "delete": 5}
 
 
 @dataclass(frozen=True)
@@ -209,7 +210,7 @@ class VideoJobWorker:
                     max_attempts=(
                         self.index_max_attempts
                         if next_operation == "index"
-                        else 5
+                        else OPERATION_MAX_ATTEMPTS[next_operation]
                     ),
                 )
                 if next_job["state"] in {"queued", "retry"}:
@@ -292,6 +293,19 @@ class VideoJobWorker:
                 )
             self.broker.dead_letter(delivery, error_code=error.code)
             return WorkerResult(message.job_id, "failed", message.operation, error.code)
+        except Exception:
+            # A packaging or programming defect must not leave a durable job in
+            # ``running`` until its lease expires while the worker crash-loops.
+            # Keep implementation details out of the queue and public status.
+            error_code = "worker_unexpected_error"
+            try:
+                self.store.transition_job(
+                    message.tenant_id, message.job_id, "failed", error_code
+                )
+                self.store.mark_dead_lettered(message.tenant_id, message.job_id)
+            finally:
+                self.broker.dead_letter(delivery, error_code=error_code)
+            return WorkerResult(message.job_id, "failed", message.operation, error_code)
 
     def _record_detector(
         self,

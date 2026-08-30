@@ -2,8 +2,13 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ffmpeg clamav && rm -rf /var/lib/apt/lists/*
+# Signature updates run without a resident clamd process. Debian enables
+# NotifyClamd by default, which makes a successful update exit non-zero when
+# no clamd configuration is present.
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
+    ffmpeg clamav && \
+    sed -i '/^[[:space:]]*NotifyClamd[[:space:]]/d' /etc/clamav/freshclam.conf && \
+    rm -rf /var/lib/apt/lists/*
 
 RUN groupadd --gid 10001 crime && \
     useradd --uid 10001 --gid crime --no-create-home --shell /usr/sbin/nologin crime && \
@@ -17,6 +22,7 @@ RUN pip install --no-cache-dir \
     "psycopg[binary,pool]==3.2.10" "python-multipart==0.0.31" \
     "PyJWT[crypto]==2.13.0"
 
+COPY pyproject.toml ./
 COPY contracts/ contracts/
 COPY migrations/ migrations/
 COPY src/__init__.py src/__init__.py
@@ -24,6 +30,10 @@ COPY src/api/ src/api/
 COPY src/data/ src/data/
 COPY src/features/ src/features/
 COPY src/models/ src/models/
+
+RUN pip install --no-cache-dir --no-deps . && \
+    command -v crime-platform-migrate && \
+    command -v crime-video-worker
 
 USER 10001:10001
 

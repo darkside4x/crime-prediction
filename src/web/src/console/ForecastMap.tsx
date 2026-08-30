@@ -3,21 +3,7 @@ import maplibregl, { Map as MLMap } from "maplibre-gl";
 import { cellToBoundary } from "h3-js";
 import type { OperationalAggregateForecast } from "../api/client";
 
-const MAP_STYLE: maplibregl.StyleSpecification = {
-  version: 8,
-  sources: {
-    carto: {
-      type: "raster",
-      tiles: [
-        "https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png",
-        "https://b.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png",
-      ],
-      tileSize: 256,
-      attribution: "© OpenStreetMap contributors © CARTO",
-    },
-  },
-  layers: [{ id: "carto", type: "raster", source: "carto" }],
-};
+const MAP_STYLE = "https://tiles.openfreemap.org/styles/dark";
 
 const BAND_RISK: Record<string, number> = {
   low: 0.15,

@@ -148,6 +148,7 @@ POST   /v1/video-assets/uploads
 GET    /v1/ingestion/runs/{run_id}
 POST   /v1/ingestion/runs/{run_id}/reanalyze
 GET    /v1/candidate-detections
+GET    /v1/candidate-detections/{detection_id}/evidence
 POST   /v1/candidate-detections/{detection_id}/review
 GET    /v1/coverage
 GET    /v1/forecasts?window_start=...&category=...&bbox=...

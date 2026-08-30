@@ -5,9 +5,12 @@ x-platform-environment: &platform-environment
   REKA_API_KEY_FILE: /run/secrets/reka_api_key
   REKA_CHAT_BASE_URL: https://api.reka.ai/v1
   REKA_VISION_BASE_URL: https://vision-agent.api.reka.ai
-  REKA_MODEL: ${REKA_MODEL:-reka-flash}
+  REKA_MODEL: ${REKA_MODEL:-reka-flash-3}
   REKA_PROMPT_VERSION: ${REKA_PROMPT_VERSION:-1.0.0}
   REKA_TIMEOUT_SECONDS: ${REKA_TIMEOUT_SECONDS:-20}
+  REKA_PROVIDER_VERIFIED: ${REKA_PROVIDER_VERIFIED:-false}
+  SYNTHETIC_DEMO_FORECASTS: ${SYNTHETIC_DEMO_FORECASTS:-false}
+  PUBLIC_HLS_DEMO_ENABLED: ${PUBLIC_HLS_DEMO_ENABLED:-false}
   VIDEO_QUEUE_URL: ${VIDEO_QUEUE_URL:?Set VIDEO_QUEUE_URL}
   VIDEO_QUEUE_URL_UPLOAD: ${VIDEO_QUEUE_URL_UPLOAD:?Set VIDEO_QUEUE_URL_UPLOAD}
   VIDEO_QUEUE_URL_INDEX: ${VIDEO_QUEUE_URL_INDEX:?Set VIDEO_QUEUE_URL_INDEX}
@@ -71,6 +74,7 @@ services:
     volumes:
       - ${MODEL_REGISTRY_HOST_PATH:?Mount the EFS model registry on the host}:/app/data/models
       - api-runtime:/app/data/runtime
+      - video-spool:/var/lib/crime-video-spool
       - clamav-db:/var/lib/clamav:ro
     expose:
       - "8000"
@@ -90,10 +94,19 @@ services:
     build:
       context: ../..
       dockerfile: docker/api.Dockerfile
-    command: ["freshclam", "--foreground=true", "--checks=12", "--stdout"]
+    command:
+      - freshclam
+      - --daemon
+      - --foreground=true
+      - --checks=12
+      - --stdout
     read_only: true
     tmpfs:
       - /tmp:size=64m,mode=1777
+      # Debian's freshclam configuration writes a log even when --stdout is
+      # enabled. Keep the root filesystem immutable while giving the
+      # unprivileged updater an ephemeral log directory.
+      - /var/log/clamav:size=16m,mode=1777
     volumes:
       - clamav-db:/var/lib/clamav
     cap_drop:
@@ -116,6 +129,12 @@ services:
     build:
       context: ../..
       dockerfile: docker/web.Dockerfile
+      args:
+        VITE_API_BASE: ${VITE_API_BASE:-}
+        VITE_COGNITO_DOMAIN: ${COGNITO_DOMAIN:-}
+        VITE_COGNITO_CLIENT_ID: ${COGNITO_CLIENT_ID:-}
+        VITE_COGNITO_REDIRECT_URI: ${COGNITO_REDIRECT_URI:-}
+        VITE_COGNITO_LOGOUT_URI: ${COGNITO_LOGOUT_URI:-}
     ports:
       - "${WEB_BIND_ADDRESS:-127.0.0.1}:${WEB_PORT:-8080}:8080"
     read_only: true
@@ -167,3 +186,4 @@ secrets:
 volumes:
   api-runtime:
   clamav-db:
+  video-spool:

@@ -40,7 +40,7 @@ class PostgresVideoStore:
     def list_source_ids(self, tenant_id: str) -> tuple[str, ...]:
         with self.database.transaction(tenant_id) as cursor:
             cursor.execute(
-                "SELECT source_id FROM camera_sources WHERE tenant_id=%s AND definition->>'status'='active'",
+                "SELECT source_id FROM camera_sources WHERE tenant_id=%s ORDER BY created_at, source_id",
                 (tenant_id,),
             )
             return tuple(str(row["source_id"]) for row in cursor.fetchall())
@@ -195,6 +195,16 @@ class PostgresVideoStore:
                 """SELECT * FROM video_processing_jobs WHERE tenant_id=%s
                    ORDER BY created_at DESC LIMIT %s""",
                 (tenant_id, min(max(limit, 1), 100)),
+            )
+            return [self._job(row) for row in cursor.fetchall()]
+
+    def jobs_for_asset(self, tenant_id: str, asset_id: str) -> list[dict[str, Any]]:
+        with self.database.transaction(tenant_id) as cursor:
+            cursor.execute(
+                """SELECT * FROM video_processing_jobs
+                   WHERE tenant_id=%s AND asset_id=%s
+                   ORDER BY created_at, job_id""",
+                (tenant_id, asset_id),
             )
             return [self._job(row) for row in cursor.fetchall()]
 

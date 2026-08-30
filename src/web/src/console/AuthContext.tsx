@@ -16,6 +16,7 @@ import {
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { api, ApiError, type MeTenants, type Role, type TenantMembership } from "../api/client";
+import { cognitoLogoutUrl } from "./cognito";
 
 export interface Session {
   token: string;
@@ -97,6 +98,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setSession(null);
     setExpired(false);
     setAuthError(null);
+    const logoutUrl = cognitoLogoutUrl();
+    if (logoutUrl) window.location.assign(logoutUrl);
   }, [queryClient]);
 
   const switchTenant = useCallback(

@@ -110,7 +110,6 @@ export default function ConsoleShell() {
           <span className="operator-mark" aria-hidden="true">{initials || "OP"}</span>
           <span><strong>{tenantName}</strong><small>{session.principalLabel}</small></span>
         </div>
-
         <nav aria-label="Console">
           {allowed.map((item) => (
             <a

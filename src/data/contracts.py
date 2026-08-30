@@ -12,8 +12,13 @@ from jsonschema import Draft202012Validator, FormatChecker
 from .errors import ContractValidationError
 
 
-REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
-SCHEMA_DIRECTORY = REPOSITORY_ROOT / "contracts" / "schemas"
+PACKAGE_SCHEMA_DIRECTORY = Path(__file__).resolve().parent / "schemas"
+REPOSITORY_SCHEMA_DIRECTORY = Path(__file__).resolve().parents[2] / "contracts" / "schemas"
+SCHEMA_DIRECTORY = (
+    PACKAGE_SCHEMA_DIRECTORY
+    if PACKAGE_SCHEMA_DIRECTORY.is_dir()
+    else REPOSITORY_SCHEMA_DIRECTORY
+)
 
 
 @lru_cache(maxsize=None)

@@ -5,9 +5,11 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import shutil
 import subprocess
+import tempfile
 import uuid
-from contextlib import suppress
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -551,6 +553,95 @@ class VideoPipelineService:
             "success",
         )
         return job
+
+    @contextmanager
+    def candidate_evidence(
+        self,
+        tenant_id: str,
+        asset_id: str,
+        occurred_at: str,
+        *,
+        max_response_bytes: int = 8 * 1024 * 1024,
+    ):
+        """Materialize a bounded reviewer clip without exposing storage references."""
+        asset = self.store.get_asset(tenant_id, asset_id)
+        storage_ref = self._asset_storage_ref(tenant_id, asset_id)
+        with self.media_storage.materialize(
+            storage_ref, tenant_id=tenant_id, asset_id=asset_id
+        ) as original:
+            if original.stat().st_size <= max_response_bytes:
+                yield original
+                return
+
+            directory = Path(tempfile.mkdtemp(prefix="candidate-evidence-"))
+            clip = directory / "evidence.mp4"
+            start = max(
+                (_parse_utc(occurred_at, "occurred_at") - _parse_utc(
+                    asset["captured_start"], "captured_start"
+                )).total_seconds()
+                - 4,
+                0,
+            )
+            try:
+                completed = subprocess.run(
+                    [
+                        "ffmpeg",
+                        "-nostdin",
+                        "-hide_banner",
+                        "-loglevel",
+                        "error",
+                        "-ss",
+                        str(start),
+                        "-i",
+                        str(original),
+                        "-t",
+                        "12",
+                        "-map",
+                        "0:v:0",
+                        "-an",
+                        "-vf",
+                        "scale=854:-2:force_original_aspect_ratio=decrease",
+                        "-c:v",
+                        "libx264",
+                        "-preset",
+                        "veryfast",
+                        "-crf",
+                        "28",
+                        "-maxrate",
+                        "800k",
+                        "-bufsize",
+                        "1600k",
+                        "-movflags",
+                        "+faststart",
+                        "-y",
+                        str(clip),
+                    ],
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=90,
+                    check=False,
+                )
+                if (
+                    completed.returncode != 0
+                    or not clip.is_file()
+                    or clip.stat().st_size <= 0
+                    or clip.stat().st_size > max_response_bytes
+                ):
+                    raise VideoPipelineError(
+                        "evidence_transcode_failed",
+                        "Candidate evidence could not be prepared",
+                        retryable=True,
+                    )
+                yield clip
+            except (OSError, subprocess.TimeoutExpired) as error:
+                raise VideoPipelineError(
+                    "evidence_transcode_failed",
+                    "Candidate evidence could not be prepared",
+                    retryable=True,
+                ) from error
+            finally:
+                shutil.rmtree(directory, ignore_errors=True)
 
     def _asset_storage_ref(self, tenant_id: str, asset_id: str) -> str:
         getter = getattr(self.store, "asset_storage_ref", None)

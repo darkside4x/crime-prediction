@@ -24,16 +24,51 @@ test("viewer inspects the forecast map with suppression and limitations", async 
 });
 
 test("reviewer sees candidates labeled as unconfirmed", async ({ page }) => {
+  await page.route("**/v1/candidate-detections?limit=50", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        items: [
+          {
+            schema_version: "1.0.0",
+            tenant_id: "11111111-1111-4111-8111-111111111111",
+            detection_id: "90000000-0000-4000-8000-000000000001",
+            source_id: "91000000-0000-4000-8000-000000000001",
+            asset_id: "92000000-0000-4000-8000-000000000001",
+            occurred_at: "2026-08-30T12:00:04Z",
+            received_at: "2026-08-30T12:00:10Z",
+            proposed_category: "traffic_safety",
+            confidence: 0.81,
+            detector_version: "reka-vision:candidate-v2",
+            review_status: "awaiting_review",
+            expires_at: "2026-09-06T12:00:10Z",
+            evidence_available: true,
+            record_type: "unconfirmed_candidate_detection",
+          },
+        ],
+      }),
+    });
+  });
+  await page.route("**/v1/candidate-detections/*/evidence", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "video/mp4",
+      body: Buffer.from("bounded synthetic evidence video"),
+    });
+  });
   await page.goto("/#/console");
   await page.getByRole("button", { name: /Reviewer · Demo One/ }).click();
   await page.getByRole("link", { name: "Review" }).click();
   await expect(page.getByText("UNCONFIRMED CANDIDATE").first()).toBeVisible();
   await expect(page.getByText(/Decisions are final and immutable/)).toBeVisible();
+  await page.getByRole("button", { name: "Load evidence video" }).first().click();
+  await expect(page.getByLabel(/Evidence video for candidate/).first()).toBeVisible();
 });
 
 test("landing page demonstrates the complete product before sign-in", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: /Hotspot risk, forecast ahead/i })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /City signals, forecast ahead/i })).toBeVisible();
   await expect(page.getByText("H3 CELLS").first()).toBeVisible();
   await expect(page.getByRole("heading", { name: /From events to evidence/i })).toBeVisible();
   await expect(page.getByRole("link", { name: "Open the console" })).toBeVisible();

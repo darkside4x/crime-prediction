@@ -1,11 +1,31 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { DEV_PERSONAS, useAuth } from "./AuthContext";
+import {
+  beginCognitoSignIn,
+  cognitoConfig,
+  consumeCognitoCallback,
+} from "./cognito";
 
 /** Development sign-in: opaque bearer token, resolved entirely server-side. */
 export default function SignIn() {
   const { signIn, authError, expired } = useAuth();
   const [token, setToken] = useState("");
   const [busy, setBusy] = useState(false);
+  const [oauthError, setOauthError] = useState<string | null>(null);
+  const consumedCallback = useRef(false);
+  const hostedLogin = cognitoConfig() !== null;
+
+  useEffect(() => {
+    if (!hostedLogin || consumedCallback.current) return;
+    consumedCallback.current = true;
+    setBusy(true);
+    void consumeCognitoCallback()
+      .then(async (callback) => {
+        if (callback) await signIn(callback.token, "Cognito account");
+      })
+      .catch(() => setOauthError("Secure sign-in could not be completed. Please try again."))
+      .finally(() => setBusy(false));
+  }, [hostedLogin, signIn]);
 
   const submit = async (event: FormEvent, value: string, label: string) => {
     event.preventDefault();
@@ -22,12 +42,14 @@ export default function SignIn() {
 
   return (
     <div className="console-signin">
+      <p className="eyebrow">CivicHalo secure console</p>
       <h1 className="section-title">
         SIGN <span className="accent">IN</span>
       </h1>
       <p className="muted">
-        Development authentication. Pick a persona or paste a bearer token; roles and
-        tenant access are resolved by the server, never the browser.
+        {hostedLogin
+          ? "Continue through the managed sign-in page. Roles and tenant access come from signed server-validated claims."
+          : "Development authentication. Pick a persona or paste a bearer token; roles and tenant access are resolved by the server, never the browser."}
       </p>
       {expired && (
         <p role="alert" className="error-banner">
@@ -39,7 +61,29 @@ export default function SignIn() {
           {authError}
         </p>
       )}
-      <div className="persona-grid">
+      {oauthError && (
+        <p role="alert" className="error-banner">
+          {oauthError}
+        </p>
+      )}
+      {hostedLogin ? (
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => {
+            setBusy(true);
+            setOauthError(null);
+            void beginCognitoSignIn().catch(() => {
+              setBusy(false);
+              setOauthError("Secure sign-in is temporarily unavailable.");
+            });
+          }}
+        >
+          {busy ? "Opening secure sign-in…" : "Continue with secure sign-in"}
+        </button>
+      ) : (
+        <>
+          <div className="persona-grid">
         {DEV_PERSONAS.map((persona) => (
           <button
             key={persona.token}
@@ -51,8 +95,8 @@ export default function SignIn() {
             {persona.label}
           </button>
         ))}
-      </div>
-      <form onSubmit={(event) => submit(event, token, "Custom token")} className="token-form">
+          </div>
+          <form onSubmit={(event) => submit(event, token, "Custom token")} className="token-form">
         <label htmlFor="token-input">Bearer token</label>
         <input
           id="token-input"
@@ -65,7 +109,9 @@ export default function SignIn() {
         <button type="submit" disabled={busy || token.length === 0}>
           {busy ? "Signing in…" : "Sign in"}
         </button>
-      </form>
+          </form>
+        </>
+      )}
     </div>
   );
 }

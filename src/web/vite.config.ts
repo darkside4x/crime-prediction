@@ -1,6 +1,9 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
+const developmentApiTarget =
+  process.env.VITE_DEV_API_TARGET ?? "http://localhost:8000";
+
 export default defineConfig({
   plugins: [react()],
   build: {
@@ -20,9 +23,9 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      "/v1": "http://localhost:8000",
-      "/health": "http://localhost:8000",
-      "/ready": "http://localhost:8000",
+      "/v1": developmentApiTarget,
+      "/health": developmentApiTarget,
+      "/ready": developmentApiTarget,
     },
   },
 });

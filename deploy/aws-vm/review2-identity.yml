@@ -6,6 +6,27 @@ Parameters:
     Type: String
     Default: review2
     AllowedPattern: "[a-z0-9-]+"
+  DomainPrefix:
+    Type: String
+    AllowedPattern: "[a-z0-9-]+"
+  CallbackUrl:
+    Type: String
+    AllowedPattern: "https://.*"
+  AdditionalCallbackUrl:
+    Type: String
+    Default: ""
+    AllowedPattern: "^$|https://.*"
+  LogoutUrl:
+    Type: String
+    AllowedPattern: "https://.*"
+  AdditionalLogoutUrl:
+    Type: String
+    Default: ""
+    AllowedPattern: "^$|https://.*"
+
+Conditions:
+  HasAdditionalCallbackUrl: !Not [!Equals [!Ref AdditionalCallbackUrl, ""]]
+  HasAdditionalLogoutUrl: !Not [!Equals [!Ref AdditionalLogoutUrl, ""]]
 
 Resources:
   TokenClaimsRole:
@@ -152,6 +173,19 @@ Resources:
         - ALLOW_ADMIN_USER_PASSWORD_AUTH
         - ALLOW_REFRESH_TOKEN_AUTH
         - ALLOW_USER_SRP_AUTH
+      AllowedOAuthFlows:
+        - code
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthScopes:
+        - openid
+      CallbackURLs:
+        - !Ref CallbackUrl
+        - !If [HasAdditionalCallbackUrl, !Ref AdditionalCallbackUrl, !Ref "AWS::NoValue"]
+      LogoutURLs:
+        - !Ref LogoutUrl
+        - !If [HasAdditionalLogoutUrl, !Ref AdditionalLogoutUrl, !Ref "AWS::NoValue"]
+      SupportedIdentityProviders:
+        - COGNITO
       AccessTokenValidity: 60
       IdTokenValidity: 60
       RefreshTokenValidity: 1
@@ -159,6 +193,12 @@ Resources:
         AccessToken: minutes
         IdToken: minutes
         RefreshToken: days
+
+  UserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      Domain: !Ref DomainPrefix
+      UserPoolId: !Ref UserPool
 
 Outputs:
   UserPoolId:
@@ -171,3 +211,5 @@ Outputs:
     Value: !Sub "https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}/.well-known/jwks.json"
   OidcAudience:
     Value: !Ref UserPoolClient
+  CognitoDomain:
+    Value: !Sub "https://${DomainPrefix}.auth.${AWS::Region}.amazoncognito.com"
