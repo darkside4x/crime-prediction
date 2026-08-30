@@ -12,6 +12,9 @@ import json
 import mimetypes
 import re
 import secrets
+import shutil
+import subprocess
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
@@ -54,7 +57,11 @@ _MAX_CHAT_TEXT_BLOCKS = 16
 _MAX_CHAT_TEXT_CHARS = 16_384
 _MAX_HTTP_RESPONSE_BYTES = 1024 * 1024
 _MAX_PROVIDER_CANDIDATES = 25
+_MAX_NORMALIZED_VIDEO_BYTES = 8 * 1024 * 1024
 _ASSISTANT_CONTINUATION_PREFIX = "assistant:"
+_FRAME_MISMATCH_PATTERN = re.compile(
+    r"^Expected [1-9][0-9]{0,3} frames, got [0-9]{1,4} None$"
+)
 _JSON_FENCE_PATTERN = re.compile(
     r"```(?:json)?\s*(?P<payload>.*?)\s*```",
     flags=re.DOTALL | re.IGNORECASE,
@@ -255,6 +262,22 @@ def _reject_nonfinite_json_number(_: str) -> None:
     raise ValueError("non-finite JSON number")
 
 
+def _is_reka_frame_mismatch(raw: bytes) -> bool:
+    """Recognize Reka's bounded frame-extraction error envelope."""
+    try:
+        value = json.loads(raw)
+        error = value["error"]
+        return (
+            isinstance(error, dict)
+            and error.get("type") == "BadRequestError"
+            and error.get("code") == "invalid_request"
+            and isinstance(error.get("message"), str)
+            and _FRAME_MISMATCH_PATTERN.fullmatch(error["message"]) is not None
+        )
+    except (json.JSONDecodeError, KeyError, RecursionError, TypeError, ValueError):
+        return False
+
+
 class VisionProvider(Protocol):
     def upload(self, path: Path, *, video_name: str, captured_start: str) -> str: ...
     def indexing_status(self, video_id: str) -> str: ...
@@ -431,9 +454,21 @@ class RekaVisionProvider:
     ) -> list[dict[str, Any]]:
         if media_path is not None:
             media_content = self._short_video_content(media_path)
-            responder = lambda prompt: self._short_video_candidate_response(
-                media_content, prompt
-            )
+            normalized = False
+
+            def responder(prompt: str) -> Any:
+                nonlocal media_content, normalized
+                try:
+                    return self._short_video_candidate_response(media_content, prompt)
+                except VideoPipelineError as error:
+                    if error.code != "reka_media_frame_mismatch" or normalized:
+                        raise
+                    # Some otherwise valid MP4 files contain inconsistent
+                    # duration/frame metadata. Preserve the encrypted original,
+                    # but retry once with a bounded CFR H.264 derivative.
+                    media_content = self._normalized_short_video_content(media_path)
+                    normalized = True
+                    return self._short_video_candidate_response(media_content, prompt)
         else:
             responder = lambda prompt: self._candidate_response(video_id, prompt)
         try:
@@ -480,6 +515,73 @@ class RekaVisionProvider:
                 "Short video could not be prepared for Reka Chat",
                 retryable=True,
             ) from error
+
+    @staticmethod
+    def _normalized_short_video_content(media_path: Path) -> list[dict[str, Any]]:
+        """Create a bounded CFR derivative for Reka without replacing evidence."""
+        directory = Path(tempfile.mkdtemp(prefix="reka-video-normalize-"))
+        target = directory / "normalized.mp4"
+        try:
+            subprocess.run(
+                [
+                    "ffmpeg",
+                    "-nostdin",
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-i",
+                    str(media_path),
+                    "-map",
+                    "0:v:0",
+                    "-an",
+                    "-sn",
+                    "-dn",
+                    "-vf",
+                    (
+                        "scale=640:640:force_original_aspect_ratio=decrease:"
+                        "force_divisible_by=2,fps=12"
+                    ),
+                    "-c:v",
+                    "libx264",
+                    "-preset",
+                    "veryfast",
+                    "-crf",
+                    "25",
+                    "-pix_fmt",
+                    "yuv420p",
+                    "-movflags",
+                    "+faststart",
+                    "-fps_mode",
+                    "cfr",
+                    "-map_metadata",
+                    "-1",
+                    "-threads",
+                    "1",
+                    "-y",
+                    str(target),
+                ],
+                check=True,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                timeout=120,
+            )
+            size = target.stat().st_size
+            if size <= 0 or size > _MAX_NORMALIZED_VIDEO_BYTES:
+                raise VideoPipelineError(
+                    "reka_media_prepare_failed",
+                    "Normalized short video exceeded the bounded media contract",
+                )
+            return RekaVisionProvider._short_video_content(target)
+        except VideoPipelineError:
+            raise
+        except (OSError, subprocess.SubprocessError):
+            raise VideoPipelineError(
+                "reka_media_prepare_failed",
+                "Short video could not be normalized for Reka Chat",
+            ) from None
+        finally:
+            shutil.rmtree(directory, ignore_errors=True)
 
     def _short_video_candidate_response(
         self, media_content: list[dict[str, Any]], prompt: str
@@ -541,6 +643,12 @@ class RekaVisionProvider:
                     "reka_unavailable", "Reka Chat is temporarily unavailable", retryable=True
                 )
             if response.status >= 400:
+                raw = _read_bounded_http_response(response)
+                if response.status == 400 and _is_reka_frame_mismatch(raw):
+                    raise VideoPipelineError(
+                        "reka_media_frame_mismatch",
+                        "Reka Chat could not extract a consistent frame set",
+                    )
                 raise VideoPipelineError(
                     "reka_request_failed", "Reka Chat rejected the request"
                 )
@@ -626,6 +734,14 @@ class RekaVisionProvider:
                         len(_ASSISTANT_CONTINUATION_PREFIX) :
                     ].lstrip()
                 try:
+                    if continuation.startswith("```"):
+                        fenced = _JSON_FENCE_PATTERN.fullmatch(continuation)
+                        if fenced is None:
+                            raise ValueError("invalid JSON fence")
+                        return json.loads(
+                            fenced.group("payload").strip(),
+                            parse_constant=_reject_nonfinite_json_number,
+                        )
                     return json.loads(
                         "[" + continuation,
                         parse_constant=_reject_nonfinite_json_number,

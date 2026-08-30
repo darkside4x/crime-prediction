@@ -480,15 +480,41 @@ class VideoPipelineService:
                     "reka_output_invalid",
                     "Reka returned malformed or excessive candidate proposals",
                 )
-            candidates = [
-                self._candidate(
-                    asset,
-                    mapping["reka_video_id"],
-                    proposal,
-                    proposal_index=proposal_index,
-                )
-                for proposal_index, proposal in enumerate(proposals)
-            ]
+            candidates: list[tuple[dict[str, Any], str]] = []
+            out_of_range_errors: list[VideoPipelineError] = []
+            for proposal_index, proposal in enumerate(proposals):
+                try:
+                    candidates.append(
+                        self._candidate(
+                            asset,
+                            mapping["reka_video_id"],
+                            proposal,
+                            proposal_index=proposal_index,
+                        )
+                    )
+                except VideoPipelineError as error:
+                    offset = (
+                        proposal.get("offset_seconds")
+                        if isinstance(proposal, dict)
+                        else None
+                    )
+                    is_out_of_range = (
+                        error.code == "reka_output_invalid"
+                        and error.safe_diagnostics.get("invalid_fields")
+                        == ["offset_seconds"]
+                        and not isinstance(offset, bool)
+                        and isinstance(offset, (int, float))
+                        and math.isfinite(offset)
+                        and offset > duration_seconds
+                    )
+                    if not is_out_of_range:
+                        raise
+                    out_of_range_errors.append(error)
+            # A malformed sibling timestamp must not erase an independently
+            # valid proposal, but an entirely out-of-range response remains a
+            # fail-closed provider error rather than a false clear result.
+            if not candidates and out_of_range_errors:
+                raise out_of_range_errors[0]
             for candidate, semantic_key in candidates:
                 self.store.put_candidate(candidate, semantic_key)
             self.store.update_asset_status(tenant_id, asset_id, "processed")
