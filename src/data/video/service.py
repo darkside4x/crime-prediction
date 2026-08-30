@@ -841,12 +841,20 @@ class VideoPipelineService:
                 raise VideoPipelineError(
                     "confirmed_category_invalid", "Confirmed category is invalid"
                 )
+            source = self.store.get_source(
+                authenticated_tenant_id, candidate["source_id"]
+            )
+            if (
+                source.get("connection", {}).get("endpoint_ref")
+                == "secret://demo-simulated-road/renderer"
+            ):
+                raise VideoPipelineError(
+                    "simulated_candidate_confirmation_prohibited",
+                    "Simulated candidates cannot be promoted to incident history",
+                )
             review.update(
                 confirmed_category=confirmed_category,
                 promoted_external_event_id=external_id,
-            )
-            source = self.store.get_source(
-                authenticated_tenant_id, candidate["source_id"]
             )
             location = self.location_resolver.resolve(
                 authenticated_tenant_id, source["location_ref"]

@@ -88,6 +88,11 @@ The canonical integration semantics are in `docs/PHASE1_CONTRACTS.md`; JSON Sche
 
 Recorded and live sources use the same Reka Vision analysis path and candidate-detection contract. Candidate promotion and forecasting logic never live inside Reka or transport adapters.
 
+The non-production console also provides a deterministic simulated-road input.
+Its server-generated MP4 is explicitly labeled synthetic and enters the same
+restricted live-segment pipeline; it is a workflow test, never evidence of
+detector accuracy or real-world performance.
+
 ## Trust boundaries
 
 | Boundary | Permitted data | Prohibited output |

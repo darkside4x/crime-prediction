@@ -127,6 +127,34 @@ def test_source_mutations_require_idempotency_and_reject_client_tenant(client):
     assert smuggled.json()["code"] == "request_validation_failed"
 
 
+def test_live_source_accepts_only_secret_references_and_hides_connection(client):
+    body = {
+        "name": "North gate camera",
+        "timezone": "UTC",
+        "registered_location_id": "30000000-0000-4000-8000-000000000001",
+        "retention_policy_days": 7,
+        "connection_secret_id": "40000000-0000-4000-8000-000000000001",
+        "transport": "rtsp",
+    }
+    response = client.post(
+        "/v1/sources/live-camera",
+        json=body,
+        headers={**ONE, "Idempotency-Key": "live-source-0001"},
+    )
+    assert response.status_code == 201, response.text
+    assert response.json()["mode"] == "live_camera"
+    assert "connection" not in response.json()
+    assert "secret" not in response.text
+
+    raw_url = client.post(
+        "/v1/sources/live-camera",
+        json={**body, "url": "rtsp://camera.invalid/private"},
+        headers={**ONE, "Idempotency-Key": "live-source-0002"},
+    )
+    assert raw_url.status_code == 422
+    assert raw_url.json()["code"] == "request_validation_failed"
+
+
 def test_source_map_location_returns_h3_area_without_raw_coordinates(client):
     response = client.get(
         "/v1/sources/20000000-0000-4000-8000-000000000001/map-location",
@@ -229,6 +257,7 @@ def test_secret_configuration_never_appears_in_repr_or_openapi():
     assert "/v1/video-assets/uploads" in app.openapi()["paths"]
     assert "/v1/ingestion/runs/{run_id}" in app.openapi()["paths"]
     assert "/v1/ingestion/runs/{run_id}/reanalyze" in app.openapi()["paths"]
+    assert "/v1/demo/simulated-cctv/captures" in app.openapi()["paths"]
     assert "/v1/candidate-detections/{detection_id}/evidence" in app.openapi()["paths"]
     assert secret not in serialized
     assert "REKA_API_KEY" not in serialized

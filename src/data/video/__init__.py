@@ -9,7 +9,12 @@ from .coverage import (
 )
 from .postgres import PostgresVideoStore
 from .reka import FakeRekaVisionProvider, RekaVisionProvider
-from .live import DEFAULT_HLS_SOURCES, FfmpegHlsCapture, HlsSourceDefinition
+from .live import (
+    DEFAULT_HLS_SOURCES,
+    FfmpegHlsCapture,
+    HlsSourceDefinition,
+    SimulatedVideoCapture,
+)
 from .service import DictLocationResolver, VideoPipelineService
 from .storage import ClamAVCommandScanner, LocalMediaStorage, S3MediaStorage
 from .store import VideoStore
@@ -29,6 +34,7 @@ __all__ = [
     "PostgresVideoStore",
     "FfmpegHlsCapture",
     "HlsSourceDefinition",
+    "SimulatedVideoCapture",
     "DEFAULT_HLS_SOURCES",
     "RekaVisionProvider",
     "S3MediaStorage",

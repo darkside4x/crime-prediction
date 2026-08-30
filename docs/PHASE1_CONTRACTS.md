@@ -147,6 +147,7 @@ POST   /v1/sources/live-camera
 POST   /v1/video-assets/uploads
 GET    /v1/ingestion/runs/{run_id}
 POST   /v1/ingestion/runs/{run_id}/reanalyze
+POST   /v1/demo/simulated-cctv/captures
 GET    /v1/candidate-detections
 GET    /v1/candidate-detections/{detection_id}/evidence
 POST   /v1/candidate-detections/{detection_id}/review
@@ -182,6 +183,11 @@ Services and tests must enforce:
   unreviewed `awaiting_review` candidates from earlier demo sessions. Immutable
   confirmed/rejected reviews and promoted incident events are never deleted by
   session cleanup. The active Review Queue displays only `awaiting_review` rows.
+- Simulated capture is non-production, visibly labeled, and creates a bounded
+  synthetic `live_segment`; it follows the same restricted media, Reka,
+  candidate, evidence, and human-review boundaries as approved real footage.
+  A simulated candidate can be rejected but can never be confirmed or promoted
+  into incident history.
 
 ## Change procedure
 

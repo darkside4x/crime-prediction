@@ -130,6 +130,55 @@ def test_recorded_video_to_confirmed_event_is_idempotent(tmp_path: Path) -> None
         )
 
 
+def test_simulated_candidate_cannot_enter_incident_history(tmp_path: Path) -> None:
+    restricted, ingestion, _, provider, service = setup(
+        tmp_path,
+        proposals=[
+            {"offset_seconds": 4, "category": "traffic_safety", "confidence": 0.7}
+        ],
+    )
+    simulated_source_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa98"
+    simulated = source(TENANT_A, simulated_source_id)
+    simulated.update(
+        name="Synthetic road simulation",
+        mode="live_camera",
+        connection={
+            "transport": "hls",
+            "endpoint_ref": "secret://demo-simulated-road/renderer",
+        },
+    )
+    service.register_source(simulated, authenticated_tenant_id=TENANT_A)
+    asset = accept(
+        service,
+        mp4(restricted / "simulated.mp4"),
+        source_id=simulated_source_id,
+    )
+    candidate = service.process_asset(TENANT_A, asset["asset_id"])[0]
+
+    with pytest.raises(VideoPipelineError) as caught:
+        service.review_candidate(
+            authenticated_tenant_id=TENANT_A,
+            detection_id=candidate["detection_id"],
+            decision="confirmed",
+            confirmed_category="traffic_safety",
+            reviewed_by="reviewer-1",
+            role="reviewer",
+        )
+    assert caught.value.code == "simulated_candidate_confirmation_prohibited"
+    assert ingestion.event_count(TENANT_A) == 0
+
+    rejected = service.review_candidate(
+        authenticated_tenant_id=TENANT_A,
+        detection_id=candidate["detection_id"],
+        decision="rejected",
+        rejection_reason="outside_scope",
+        reviewed_by="reviewer-1",
+        role="reviewer",
+    )
+    assert rejected["decision"] == "rejected"
+    assert ingestion.event_count(TENANT_A) == 0
+
+
 def test_demo_session_cleanup_deletes_only_tenant_pending_candidates(
     tmp_path: Path,
 ) -> None:

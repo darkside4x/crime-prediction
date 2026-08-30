@@ -118,6 +118,7 @@ def install_error_handlers(app: FastAPI) -> None:
             "job_not_found": 404,
             "candidate_expired": 409,
             "review_already_final": 409,
+            "simulated_candidate_confirmation_prohibited": 409,
             "review_forbidden": 403,
             "reanalysis_not_allowed": 409,
             "reanalysis_in_progress": 409,

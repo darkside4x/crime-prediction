@@ -269,6 +269,20 @@
         "title": "ReviewRequest",
         "type": "object"
       },
+      "SimulatedCaptureRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "duration_seconds": {
+            "default": 8,
+            "maximum": 30.0,
+            "minimum": 5.0,
+            "title": "Duration Seconds",
+            "type": "integer"
+          }
+        },
+        "title": "SimulatedCaptureRequest",
+        "type": "object"
+      },
       "ValidationError": {
         "properties": {
           "ctx": {
@@ -469,6 +483,7 @@
             "name": "detection_id",
             "required": true,
             "schema": {
+              "format": "uuid",
               "title": "Detection Id",
               "type": "string"
             }
@@ -791,6 +806,69 @@
           }
         ],
         "summary": "Start Demo Session"
+      }
+    },
+    "/v1/demo/simulated-cctv/captures": {
+      "post": {
+        "operationId": "start_simulated_capture_v1_demo_simulated_cctv_captures_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SimulatedCaptureRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Start Simulated Capture V1 Demo Simulated Cctv Captures Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Start Simulated Capture"
       }
     },
     "/v1/forecasts": {
@@ -1530,6 +1608,53 @@
           }
         ],
         "summary": "Create Recorded Source"
+      }
+    },
+    "/v1/sources/{source_id}/map-location": {
+      "get": {
+        "operationId": "source_map_location_v1_sources__source_id__map_location_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "source_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Source Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Source Map Location V1 Sources  Source Id  Map Location Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Source Map Location"
       }
     },
     "/v1/video-assets/uploads": {

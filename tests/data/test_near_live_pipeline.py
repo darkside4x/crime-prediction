@@ -56,6 +56,19 @@ class BlockingCapture(FakeCapture):
         return super().capture(key, destination, duration_seconds=duration_seconds)
 
 
+class FakeSimulatedCapture:
+    def capture(self, destination: Path, *, duration_seconds: int) -> CapturedSegment:
+        assert duration_seconds == 8
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(
+            b"\x00\x00\x00\x18ftypmp42" + b"bounded-synthetic-segment" * 8
+        )
+        return CapturedSegment(
+            destination,
+            datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        )
+
+
 def test_default_live_feed_uses_the_official_catalog_video_url() -> None:
     source = DEFAULT_HLS_SOURCES["louisiana-dot-i20"]
     assert source.url == (
@@ -221,3 +234,70 @@ def test_allowlisted_hls_capture_reaches_validated_human_review(tmp_path: Path) 
         headers={"Authorization": "Bearer demo-token-two"},
     )
     assert denied.status_code == 404
+
+
+def test_simulated_capture_uses_the_same_reviewable_pipeline(tmp_path: Path) -> None:
+    ingestion = IngestionStore(tmp_path / "restricted.sqlite3")
+    video_store = VideoStore(ingestion)
+    video_service = VideoPipelineService(
+        video_store,
+        FakeRekaVisionProvider(),
+        DictLocationResolver(
+            {
+                (DEMO_TENANT_ONE, DEMO_HLS_LOCATION_REF): {
+                    "latitude": 32.46,
+                    "longitude": -93.83,
+                }
+            }
+        ),
+        media_root=tmp_path / "media",
+        media_inspector=Inspector(),
+    )
+    client = TestClient(
+        create_app(
+            provider=reka.FakeRekaProvider(),
+            settings=Settings(
+                app_environment="test",
+                runtime_dir=tmp_path / "runtime",
+                reka_index_poll_seconds=0,
+                reka_index_max_polls=2,
+            ),
+            video_service=video_service,
+            simulated_capture=FakeSimulatedCapture(),  # type: ignore[arg-type]
+        )
+    )
+    started = client.post(
+        "/v1/demo/simulated-cctv/captures",
+        json={"duration_seconds": 8},
+        headers={
+            "Authorization": "Bearer demo-token-one",
+            "Idempotency-Key": "simulated-capture-0001",
+        },
+    )
+    assert started.status_code == 202, started.text
+    assert started.json()["label"] == "simulated live segment"
+    assert started.json()["source_attribution"].startswith("Generated locally")
+
+    for _ in range(50):
+        run = client.get(
+            f"/v1/ingestion/runs/{started.json()['run_id']}",
+            headers={"Authorization": "Bearer demo-token-one"},
+        )
+        if run.json()["state"] in {"completed", "failed"}:
+            break
+        time.sleep(0.02)
+    assert run.status_code == 200
+    assert run.json()["state"] == "completed"
+    assert run.json()["label"] == "simulated live segment"
+    assert run.json()["candidate_count"] == 0
+
+    source_listing = client.get(
+        "/v1/sources", headers={"Authorization": "Bearer demo-token-one"}
+    )
+    simulated = next(
+        item
+        for item in source_listing.json()["items"]
+        if item["name"] == "Synthetic road simulation"
+    )
+    assert simulated["mode"] == "live_camera"
+    assert "connection" not in simulated

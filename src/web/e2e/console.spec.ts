@@ -67,6 +67,7 @@ test("reviewer sees candidates labeled as unconfirmed", async ({ page }) => {
 });
 
 test("landing page demonstrates the complete product before sign-in", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
   await page.goto("/");
   await expect(page.getByRole("heading", { name: /Xecrex — forecasts/i })).toBeVisible();
   await expect(page.getByText("H3 CELLS").first()).toBeVisible();

@@ -78,6 +78,11 @@ Reka Vision manages video files or addressable video content; live RTSP/ONVIF cr
 
 Recorded uploads and live segments produce the same candidate-detection contract.
 
+The non-production simulated-live option generates a bounded local road clip
+without real people or events. It is uploaded and validated through the same
+Reka boundary as other clips, remains visibly labeled synthetic, and must not
+be presented as evidence of model accuracy.
+
 ## Video analysis prompt contract
 
 The backend sends a versioned prompt that asks for candidate safety incidents, not legal conclusions or identity analysis. A representative policy is:

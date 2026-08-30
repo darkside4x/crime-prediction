@@ -135,3 +135,83 @@ class FfmpegHlsCapture:
         if not destination.is_file():
             raise VideoPipelineError("live_capture_failed", "No media segment was produced", retryable=True)
         return CapturedSegment(path=destination, captured_start=_utc(started))
+
+
+class SimulatedVideoCapture:
+    """Generate a bounded, clearly synthetic road segment for demo validation."""
+
+    def __init__(self, *, timeout_margin_seconds: int = 20) -> None:
+        self.timeout_margin_seconds = timeout_margin_seconds
+
+    def capture(self, destination: Path, *, duration_seconds: int) -> CapturedSegment:
+        if not 5 <= duration_seconds <= 30:
+            raise VideoPipelineError(
+                "simulated_capture_duration_invalid",
+                "Simulated capture duration must be between 5 and 30 seconds",
+            )
+        ffmpeg = shutil.which("ffmpeg")
+        if ffmpeg is None:
+            raise VideoPipelineError(
+                "ffmpeg_unavailable", "ffmpeg is required for simulated capture"
+            )
+        destination = destination.resolve()
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        started = datetime.now(timezone.utc)
+        road_filter = (
+            "drawbox=x=0:y=350:w=1280:h=4:color=0xd9c9bd:t=fill,"
+            "drawbox=x=0:y=230:w=1280:h=2:color=0x6c6264:t=fill,"
+            "drawbox=x=0:y=470:w=1280:h=2:color=0x6c6264:t=fill,"
+            "drawbox=x=80*t:y=275:w=126:h=54:color=0x8aa0ad:t=fill,"
+            "drawbox=x=1100-62*t:y=385:w=118:h=52:color=0xb4795d:t=fill"
+        )
+        try:
+            subprocess.run(
+                [
+                    ffmpeg,
+                    "-nostdin",
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-y",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    f"color=c=0x171719:s=1280x720:r=12:d={duration_seconds}",
+                    "-vf",
+                    road_filter,
+                    "-an",
+                    "-c:v",
+                    "libx264",
+                    "-preset",
+                    "veryfast",
+                    "-pix_fmt",
+                    "yuv420p",
+                    "-movflags",
+                    "+faststart",
+                    str(destination),
+                ],
+                check=True,
+                capture_output=True,
+                timeout=duration_seconds + self.timeout_margin_seconds,
+            )
+        except subprocess.TimeoutExpired as error:
+            destination.unlink(missing_ok=True)
+            raise VideoPipelineError(
+                "simulated_capture_timeout",
+                "The simulated segment was not produced in time",
+                retryable=True,
+            ) from error
+        except subprocess.CalledProcessError as error:
+            destination.unlink(missing_ok=True)
+            raise VideoPipelineError(
+                "simulated_capture_failed",
+                "The simulated segment could not be generated",
+                retryable=True,
+            ) from error
+        if not destination.is_file():
+            raise VideoPipelineError(
+                "simulated_capture_failed",
+                "No simulated media segment was produced",
+                retryable=True,
+            )
+        return CapturedSegment(path=destination, captured_start=_utc(started))

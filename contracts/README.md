@@ -58,6 +58,14 @@ Every schema has a synthetic fixture with the same basename under `contracts/fix
 
 ## Changelog
 
+### 2026-08-30 — unified video input controls
+
+- Added a non-production, tenant-scoped simulated capture mutation whose
+  bounded synthetic MP4 enters the existing restricted live-segment pipeline.
+- The console now exposes recorded upload, secret-referenced live connector,
+  and simulated-live inputs without accepting raw camera credentials or URLs.
+- Shared endpoint-contract review is required before this addition is frozen.
+
 ### 2026-08-30 — fail-closed video re-analysis
 
 - Missing candidate fields now have a distinct safe error classification; only

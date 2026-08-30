@@ -30,6 +30,7 @@ from src.data.video import (
     FakeRekaVisionProvider,
     FfmpegHlsCapture,
     RekaVisionProvider,
+    SimulatedVideoCapture,
     VideoPipelineService,
     VideoStore,
 )
@@ -64,6 +65,7 @@ LIMITATIONS = [
 ]
 CATEGORIES = ("property", "violence", "public_order", "traffic_safety")
 DEMO_HLS_SOURCE_ID = "20000000-0000-4000-8000-000000000099"
+DEMO_SIMULATED_SOURCE_ID = "20000000-0000-4000-8000-000000000098"
 DEMO_HLS_LOCATION_ID = "30000000-0000-4000-8000-000000000099"
 DEMO_HLS_LOCATION_REF = (
     "secret://tenant/00000000-0000-4000-8000-000000000001/locations/"
@@ -113,6 +115,12 @@ class NearLiveCaptureRequest(BaseModel):
 
     source_key: Literal["louisiana-dot-i20"] = "louisiana-dot-i20"
     duration_seconds: int | None = Field(default=None, ge=5, le=60)
+
+
+class SimulatedCaptureRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    duration_seconds: int = Field(default=8, ge=5, le=30)
 
 
 class ModelPromotionRequest(BaseModel):
@@ -315,6 +323,7 @@ def create_app(
     coverage_provider: Callable[[str, str], float] | None = None,
     video_service: VideoPipelineService | None = None,
     hls_capture: FfmpegHlsCapture | None = None,
+    simulated_capture: SimulatedVideoCapture | None = None,
     rate_limiter: RateLimiter | None = None,
     forecast_orchestrator: ForecastOrchestrator | None = None,
     model_registry: FilesystemApprovedModelRegistry | None = None,
@@ -463,6 +472,7 @@ def create_app(
     app.state.video_service = video_service
     app.state.video_broker = video_broker
     app.state.hls_capture = hls_capture or FfmpegHlsCapture()
+    app.state.simulated_capture = simulated_capture or SimulatedVideoCapture()
     app.state.video_runs = {}
     app.state.vision_mode = "reka_vision" if active_settings.reka_configured else "deterministic_fake"
     if first_source is not None:
@@ -908,6 +918,36 @@ def create_app(
             app.state.sources.setdefault(tenant_id, []).append(source)
             return source
 
+    def ensure_demo_simulated_source(tenant_id: str) -> dict[str, Any]:
+        try:
+            return app.state.video_service.store.get_source(
+                tenant_id, DEMO_SIMULATED_SOURCE_ID
+            )
+        except VideoPipelineError:
+            now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            source = {
+                "schema_version": "1.0.0",
+                "tenant_id": tenant_id,
+                "source_id": DEMO_SIMULATED_SOURCE_ID,
+                "name": "Synthetic road simulation",
+                "mode": "live_camera",
+                "status": "active",
+                "timezone": "UTC",
+                "location_ref": _demo_hls_location_ref(tenant_id),
+                "connection": {
+                    "transport": "hls",
+                    "endpoint_ref": "secret://demo-simulated-road/renderer",
+                },
+                "retention_policy_days": 1,
+                "created_at": now,
+                "updated_at": now,
+            }
+            app.state.video_service.register_source(
+                source, authenticated_tenant_id=tenant_id
+            )
+            app.state.sources.setdefault(tenant_id, []).append(source)
+            return source
+
     def capture_near_live_run(run_id: str, tenant_id: str, source_key: str) -> None:
         run = app.state.video_runs[run_id]
         try:
@@ -935,6 +975,62 @@ def create_app(
             if app.state.video_broker is not None:
                 durable = enqueue_asset_run(
                     tenant_id, asset["asset_id"], "near-live CCTV segment"
+                )
+                run.update(
+                    state="running",
+                    stage="reka_upload_queued",
+                    durable_run_id=durable["run_id"],
+                    updated_at=datetime.now(timezone.utc)
+                    .isoformat()
+                    .replace("+00:00", "Z"),
+                )
+            else:
+                process_asset_run(run_id, tenant_id, asset["asset_id"])
+        except VideoPipelineError as error:
+            run.update(
+                state="failed",
+                stage="failed",
+                error_code=error.code,
+                updated_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            )
+
+    def capture_simulated_run(run_id: str, tenant_id: str) -> None:
+        run = app.state.video_runs[run_id]
+        try:
+            run.update(
+                state="running",
+                stage="generating_simulated_segment",
+                updated_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            )
+            source = ensure_demo_simulated_source(tenant_id)
+            destination = (
+                app.state.video_service.media_root / tenant_id / f"{run_id}.mp4"
+            )
+            segment = app.state.simulated_capture.capture(
+                destination, duration_seconds=run["capture_seconds"]
+            )
+            duration = app.state.video_service.media_inspector.duration_seconds(
+                segment.path
+            )
+            start = datetime.fromisoformat(
+                segment.captured_start.replace("Z", "+00:00")
+            )
+            end = start + timedelta(seconds=duration)
+            asset = app.state.video_service.accept_upload(
+                authenticated_tenant_id=tenant_id,
+                source_id=source["source_id"],
+                path=segment.path,
+                content_type="video/mp4",
+                captured_start=segment.captured_start,
+                captured_end=end.isoformat().replace("+00:00", "Z"),
+                duration_seconds=duration,
+                consent_confirmed=True,
+                kind="live_segment",
+            )
+            run.update(asset_id=asset["asset_id"], stage="segment_validated")
+            if app.state.video_broker is not None:
+                durable = enqueue_asset_run(
+                    tenant_id, asset["asset_id"], "simulated live segment"
                 )
                 run.update(
                     state="running",
@@ -1012,6 +1108,62 @@ def create_app(
             action=start,
         )
 
+    @app.post("/v1/demo/simulated-cctv/captures", status_code=202)
+    def start_simulated_capture(
+        body: SimulatedCaptureRequest,
+        idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+        ctx: TenantContext = Depends(require_owner),
+    ) -> dict[str, Any]:
+        if not public_hls_enabled:
+            raise problem(
+                404,
+                "demo_capture_disabled",
+                "Simulated capture is disabled in production",
+            )
+
+        def start() -> dict[str, Any]:
+            now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            run_id = str(uuid.uuid4())
+            run = {
+                "run_id": run_id,
+                "tenant_id": ctx.tenant_id,
+                "state": "queued",
+                "stage": "generating_simulated_segment",
+                "label": "simulated live segment",
+                "source_name": "Synthetic road simulation",
+                "source_attribution": "Generated locally · no real people or events",
+                "capture_seconds": body.duration_seconds,
+                "candidate_count": 0,
+                "analysis_mode": app.state.vision_mode,
+                "created_at": now,
+                "updated_at": now,
+            }
+            app.state.video_runs[run_id] = run
+            response = _public_run(run)
+            threading.Thread(
+                target=capture_simulated_run,
+                args=(run_id, ctx.tenant_id),
+                name=f"simulated-capture-{run_id[:8]}",
+                daemon=True,
+            ).start()
+            app.state.audit.record(
+                tenant_id=ctx.tenant_id,
+                principal_id=ctx.principal_id,
+                request_id=ctx.request_id,
+                action="simulated_capture_started",
+                resource_type="ingestion_run",
+                resource_id=run_id,
+            )
+            return response
+
+        return app.state.idempotency.execute(
+            tenant_id=ctx.tenant_id,
+            operation="simulated_cctv_capture",
+            key=idempotency_key,
+            payload=body.model_dump(),
+            action=start,
+        )
+
     @app.get("/v1/ingestion/runs")
     def ingestion_runs(
         limit: int = Query(default=25, ge=1, le=100),
@@ -1066,7 +1218,7 @@ def create_app(
                 )
                 return durable | {
                     "run_id": str(run_id),
-                    "label": "near-live CCTV segment",
+                    "label": run.get("label", "near-live CCTV segment"),
                     "source_name": run.get("source_name"),
                     "source_attribution": run.get("source_attribution"),
                     "capture_seconds": run.get("capture_seconds"),
