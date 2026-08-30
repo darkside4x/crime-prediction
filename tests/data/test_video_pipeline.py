@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import http.client
+import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -470,6 +471,40 @@ def test_reka_http_protocol_failure_is_safe_and_retryable(
     assert caught.value.__cause__ is None
 
 
+def test_reka_chat_classifies_bounded_frame_mismatch_envelope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FrameMismatchResponse:
+        status = 400
+
+        def read(self, amount: int) -> bytes:
+            del amount
+            return (
+                b'{"error":{"message":"Expected 6 frames, got 5 None",'
+                b'"type":"BadRequestError","code":"invalid_request","param":null}}'
+            )
+
+    class FakeConnection:
+        def request(self, *args: object, **kwargs: object) -> None:
+            return None
+
+        def getresponse(self) -> FrameMismatchResponse:
+            return FrameMismatchResponse()
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        "src.data.video.reka.http.client.HTTPSConnection",
+        lambda *args, **kwargs: FakeConnection(),
+    )
+    client = RekaVisionProvider("rk-test-only")
+    with pytest.raises(VideoPipelineError) as caught:
+        client._chat_json_request({"model": "reka-edge-2603", "messages": []})
+    assert caught.value.code == "reka_media_frame_mismatch"
+    assert caught.value.safe_diagnostics == {}
+
+
 def test_reka_http_object_envelope_is_required(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -696,6 +731,79 @@ def test_short_video_structural_collapse_reaches_candidate_review(
         {"offset_seconds": 0.5, "category": "other", "confidence": 0.91}
     ]
     assert len(requests) == 1
+
+
+def test_short_video_retries_frame_mismatch_with_normalized_media(
+    tmp_path: Path,
+) -> None:
+    client = RekaVisionProvider("rk-test-only")
+    video = tmp_path / "collapse.mp4"
+    video.write_bytes(b"bounded-collapse-video")
+    normalized = [
+        {
+            "type": "video_url",
+            "video_url": "data:video/mp4;base64,bm9ybWFsaXplZA==",
+        }
+    ]
+    requests: list[dict] = []
+
+    def fake_normalize(media_path: Path) -> list[dict]:
+        assert media_path == video
+        return normalized
+
+    def fake_chat_request(payload: dict) -> dict:
+        requests.append(payload)
+        if len(requests) == 1:
+            raise VideoPipelineError(
+                "reka_media_frame_mismatch",
+                "bounded provider frame mismatch",
+            )
+        return {
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "message": {
+                        "role": "assistant",
+                        "content": (
+                            'assistant: {"offset_seconds":0,"category":"other",'
+                            '"confidence":0.95}]'
+                        ),
+                    },
+                }
+            ]
+        }
+
+    client._normalized_short_video_content = fake_normalize  # type: ignore[method-assign]
+    client._chat_json_request = fake_chat_request  # type: ignore[method-assign]
+    assert client.propose_candidates(
+        "unused-indexed-id",
+        prompt_version="candidate-v2",
+        media_path=video,
+    ) == [{"offset_seconds": 0, "category": "other", "confidence": 0.95}]
+    assert len(requests) == 2
+    assert requests[1]["messages"][0]["content"][0] == normalized[0]
+
+
+def test_short_video_normalization_failure_is_sanitized(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    video = tmp_path / "collapse.mp4"
+    video.write_bytes(b"bounded-collapse-video")
+
+    def fail_normalization(*args: object, **kwargs: object) -> None:
+        raise subprocess.CalledProcessError(
+            1,
+            "ffmpeg",
+            stderr=b"provider-controlled-media-value",
+        )
+
+    monkeypatch.setattr("src.data.video.reka.subprocess.run", fail_normalization)
+    with pytest.raises(VideoPipelineError) as caught:
+        RekaVisionProvider._normalized_short_video_content(video)
+    assert caught.value.code == "reka_media_prepare_failed"
+    assert caught.value.__cause__ is None
+    assert "provider-controlled-media-value" not in str(caught.value)
 
 
 def test_short_video_empty_candidate_array_needs_no_binary_screen(
@@ -953,6 +1061,38 @@ def test_short_video_prefill_accepts_exact_reka_assistant_role_marker(
         prompt_version="candidate-v2",
         media_path=video,
     ) == [{"offset_seconds": 0, "category": "other", "confidence": 0.94}]
+
+
+def test_short_video_prefill_accepts_exact_role_marker_then_full_json_fence(
+    tmp_path: Path,
+) -> None:
+    client = RekaVisionProvider("rk-test-only")
+    video = tmp_path / "short.mp4"
+    video.write_bytes(b"bounded-test-video")
+
+    def fake_chat_request(payload: dict) -> dict:
+        return {
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "message": {
+                        "role": "assistant",
+                        "content": (
+                            "assistant: ```json\n"
+                            '[{"offset_seconds":0,"category":"other",'
+                            '"confidence":0.92}]\n```'
+                        ),
+                    },
+                }
+            ]
+        }
+
+    client._chat_json_request = fake_chat_request  # type: ignore[method-assign]
+    assert client.propose_candidates(
+        "unused-indexed-id",
+        prompt_version="candidate-v2",
+        media_path=video,
+    ) == [{"offset_seconds": 0, "category": "other", "confidence": 0.92}]
 
 
 @pytest.mark.parametrize(
