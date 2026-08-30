@@ -720,7 +720,8 @@ def test_short_video_uses_multimodal_chat_instead_of_indexed_qa(
     assert content[0]["video_url"].startswith("data:video/mp4;base64,")
     assert "bounded-test-video" not in content[0]["video_url"]
     assert requests[0]["temperature"] == 0
-    assert requests[0]["max_tokens"] == 4096
+    assert requests[0]["max_tokens"] == 1024
+    assert requests[0]["seed"] == 17
     assert len(requests[0]["messages"]) == 1
     assert requests[0]["messages"][0]["role"] == "user"
     candidate_prompt = content[-1]["text"]
@@ -870,9 +871,10 @@ def test_short_video_empty_candidate_array_needs_no_binary_screen(
     assert len(requests) == 1
     assert len(requests[0]["messages"]) == 1
     assert requests[0]["messages"][0]["role"] == "user"
-    assert requests[0]["max_tokens"] == 4096
+    assert requests[0]["max_tokens"] == 1024
+    assert requests[0]["seed"] == 17
     prompt = requests[0]["messages"][0]["content"][-1]["text"]
-    assert "at most 25 candidate objects" in prompt
+    assert "Return at most 25\ncandidate objects" in prompt
 
 
 @pytest.mark.parametrize(
@@ -1064,6 +1066,75 @@ def test_short_video_accepts_a_complete_candidate_array(
     ) == [
         {"offset_seconds": 2, "category": "traffic_safety", "confidence": 0.8}
     ]
+
+
+def test_short_video_wraps_one_complete_candidate_object(
+    tmp_path: Path,
+) -> None:
+    client = RekaVisionProvider("rk-test-only")
+    video = tmp_path / "short.mp4"
+    video.write_bytes(b"bounded-test-video")
+
+    def fake_chat_request(payload: dict) -> dict:
+        return {
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "message": {
+                        "role": "assistant",
+                        "content": (
+                            '{"offset_seconds":0,"category":"other",'
+                            '"confidence":0.85}'
+                        ),
+                    },
+                }
+            ]
+        }
+
+    client._chat_json_request = fake_chat_request  # type: ignore[method-assign]
+    assert client.propose_candidates(
+        "unused-indexed-id",
+        prompt_version="candidate-v2",
+        media_path=video,
+    ) == [{"offset_seconds": 0, "category": "other", "confidence": 0.85}]
+
+
+def test_short_video_repairs_single_object_missing_offset(
+    tmp_path: Path,
+) -> None:
+    client = RekaVisionProvider("rk-test-only")
+    video = tmp_path / "short.mp4"
+    video.write_bytes(b"bounded-test-video")
+    requests: list[dict] = []
+    responses = iter(
+        [
+            '{"confidence":0.85,"category":"other"}',
+            '[{"offset_seconds":0,"category":"other","confidence":0.95}]',
+        ]
+    )
+
+    def fake_chat_request(payload: dict) -> dict:
+        requests.append(payload)
+        return {
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "message": {"role": "assistant", "content": next(responses)},
+                }
+            ]
+        }
+
+    client._chat_json_request = fake_chat_request  # type: ignore[method-assign]
+    assert client.propose_candidates(
+        "unused-indexed-id",
+        prompt_version="candidate-v2",
+        media_path=video,
+    ) == [{"offset_seconds": 0, "category": "other", "confidence": 0.95}]
+    assert len(requests) == 2
+    assert all(request["seed"] == 17 for request in requests)
+    repair_prompt = requests[1]["messages"][0]["content"][-1]["text"]
+    assert "within the video duration" in repair_prompt
+    assert "never generate repeated timeline samples" in repair_prompt
 
 
 def test_short_video_rejects_reka_assistant_role_marker(
