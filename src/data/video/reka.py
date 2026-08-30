@@ -63,6 +63,7 @@ class RekaVisionProvider:
         path: str,
         payload: dict[str, Any] | None = None,
         *,
+        ignored_statuses: frozenset[int] = frozenset(),
         retryable_statuses: frozenset[int] = frozenset(),
     ) -> dict[str, Any]:
         body = json.dumps(payload, separators=(",", ":")).encode() if payload is not None else None
@@ -74,6 +75,8 @@ class RekaVisionProvider:
             connection.request(method, self._base_path + path, body=body, headers=headers)
             response = connection.getresponse()
             raw = response.read()
+            if response.status in ignored_statuses:
+                return {}
             if response.status == 429:
                 raise VideoPipelineError("reka_rate_limited", "Reka Vision rate limit reached", retryable=True)
             if response.status in {401, 403}:
@@ -181,7 +184,11 @@ class RekaVisionProvider:
         return value
 
     def delete(self, video_id: str) -> None:
-        self._json_request("DELETE", f"/v1/videos/{video_id}")
+        self._json_request(
+            "DELETE",
+            f"/v1/videos/{video_id}",
+            ignored_statuses=frozenset({404}),
+        )
 
 
 @dataclass

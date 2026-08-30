@@ -274,6 +274,7 @@ def test_reka_index_lookup_retries_eventual_consistency_responses() -> None:
 
     assert caught.value.code == "reka_index_pending"
     assert caught.value.retryable is True
+    client.delete("already-absent-video-id")
 
 
 @pytest.mark.parametrize(
