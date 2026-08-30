@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import uuid
 from pathlib import Path
@@ -15,6 +16,16 @@ pytestmark = pytest.mark.skipif(
         "direct PostgreSQL RLS integration tests"
     ),
 )
+
+
+def _key_that_triggers_cleanup(prefix: str, current: int) -> str:
+    suffix = 0
+    while True:
+        key = f"{prefix}-{suffix}"
+        key_hash = hashlib.sha256(key.encode()).hexdigest()
+        if (int(key_hash[:4], 16) + current) % 128 == 0:
+            return key
+        suffix += 1
 
 
 def test_database_rls_denies_known_cross_tenant_id() -> None:
@@ -171,9 +182,16 @@ def test_database_rate_limit_is_atomic_and_stores_no_raw_key() -> None:
     database = TenantPostgres(RUNTIME_DSN)
     try:
         limiter = PostgresRateLimiter(database, requests=2, window_seconds=60)
-        raw_key = f"token:raw-credential-must-not-be-stored-{uuid.uuid4()}"
+        raw_key = _key_that_triggers_cleanup(
+            f"token:raw-credential-must-not-be-stored-{uuid.uuid4()}", 122
+        )
+        key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
+        assert (int(key_hash[:4], 16) + 122) % 128 == 0
         assert limiter.allow(raw_key, now=120.0) == (True, 0)
         assert limiter.allow(raw_key, now=121.0) == (True, 0)
+        # The key deliberately selects the periodic cleanup branch here. Cleanup
+        # must use the injected clock, not the database wall clock, or it deletes
+        # this active simulated-time bucket before enforcing its request limit.
         assert limiter.allow(raw_key, now=122.0) == (False, 58)
         with database.system_transaction() as cursor:
             cursor.execute(
