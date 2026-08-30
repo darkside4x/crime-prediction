@@ -4,8 +4,23 @@ from __future__ import annotations
 
 from typing import Any
 
-
 _CANDIDATE_FIELDS = frozenset({"offset_seconds", "category", "confidence"})
+_FORMAT_STAGES = frozenset(
+    {
+        "indexed_video_candidate",
+        "short_video_candidate",
+        "short_video_screen",
+    }
+)
+_FORMAT_REASONS = frozenset(
+    {
+        "content_shape_invalid",
+        "json_format_invalid",
+        "response_shape_invalid",
+        "token_format_invalid",
+        "token_limit_reached",
+    }
+)
 
 
 def _validated_safe_diagnostics(value: dict[str, Any] | None) -> dict[str, Any]:
@@ -17,9 +32,13 @@ def _validated_safe_diagnostics(value: dict[str, Any] | None) -> dict[str, Any]:
         "missing_fields",
         "invalid_fields",
         "unexpected_field_count",
+        "format_stage",
+        "format_reason",
     }:
         raise ValueError("Unsupported safe diagnostic field")
     result: dict[str, Any] = {}
+    if ("format_stage" in value) != ("format_reason" in value):
+        raise ValueError("format_stage and format_reason must be provided together")
     if "proposal_index" in value:
         proposal_index = value["proposal_index"]
         if isinstance(proposal_index, bool) or not isinstance(proposal_index, int):
@@ -48,6 +67,16 @@ def _validated_safe_diagnostics(value: dict[str, Any] | None) -> dict[str, Any]:
         if isinstance(count, bool) or not isinstance(count, int) or not 0 <= count <= 100:
             raise ValueError("unexpected_field_count must be a bounded integer")
         result["unexpected_field_count"] = count
+    if "format_stage" in value:
+        stage = value["format_stage"]
+        if not isinstance(stage, str) or stage not in _FORMAT_STAGES:
+            raise ValueError("format_stage must be an allowlisted stage")
+        result["format_stage"] = stage
+    if "format_reason" in value:
+        reason = value["format_reason"]
+        if not isinstance(reason, str) or reason not in _FORMAT_REASONS:
+            raise ValueError("format_reason must be an allowlisted reason")
+        result["format_reason"] = reason
     return result
 
 

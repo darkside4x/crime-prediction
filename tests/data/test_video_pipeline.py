@@ -1,17 +1,24 @@
 from __future__ import annotations
 
-import hashlib
+import http.client
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
 from src.data.store import IngestionStore
-from src.data.video import DictLocationResolver, FakeRekaVisionProvider, VideoPipelineService, VideoStore
+from src.data.video import (
+    DictLocationResolver,
+    FakeRekaVisionProvider,
+    VideoPipelineService,
+    VideoStore,
+)
 from src.data.video.errors import VideoPipelineError
-from src.data.video.reka import RekaVisionProvider
-from src.data.video.reka import _allowlisted_candidate_output
-
+from src.data.video.reka import (
+    RekaVisionProvider,
+    _allowlisted_candidate_output,
+    _read_bounded_http_response,
+)
 
 TENANT_A = "11111111-1111-4111-8111-111111111111"
 TENANT_B = "22222222-2222-4222-8222-222222222222"
@@ -325,6 +332,21 @@ def test_video_errors_reject_unbounded_or_value_bearing_diagnostics() -> None:
             "invalid",
             safe_diagnostics={"raw_output": "must never be retained"},
         )
+    with pytest.raises(ValueError, match="allowlisted stage"):
+        VideoPipelineError(
+            "reka_output_invalid",
+            "invalid",
+            safe_diagnostics={
+                "format_stage": "provider-controlled-stage",
+                "format_reason": "json_format_invalid",
+            },
+        )
+    with pytest.raises(ValueError, match="provided together"):
+        VideoPipelineError(
+            "reka_output_invalid",
+            "invalid",
+            safe_diagnostics={"format_stage": "short_video_screen"},
+        )
 
 
 def test_expired_candidate_creates_no_event(tmp_path: Path) -> None:
@@ -362,6 +384,7 @@ def test_retry_state_and_key_errors_are_safe(tmp_path: Path) -> None:
     secret = "rk-secret-never-log"
     client = RekaVisionProvider(secret)
     assert secret not in repr(client)
+    assert client.chat_model == "reka-edge-2603"
     with pytest.raises(VideoPipelineError) as missing:
         RekaVisionProvider("")
     assert missing.value.code == "reka_key_missing"
@@ -382,6 +405,142 @@ def test_reka_candidate_boundary_discards_provider_extras() -> None:
     assert projected == [
         {"offset_seconds": 2, "category": "property", "confidence": 0.7}
     ]
+
+
+def test_reka_candidate_boundary_classifies_unhashable_category() -> None:
+    with pytest.raises(VideoPipelineError) as caught:
+        _allowlisted_candidate_output(
+            [{"offset_seconds": 2, "category": ["property"], "confidence": 0.7}]
+        )
+    assert caught.value.code == "reka_output_invalid"
+    assert caught.value.safe_diagnostics == {
+        "proposal_index": 0,
+        "invalid_fields": ["category"],
+    }
+
+
+def test_reka_candidate_boundary_rejects_more_than_twenty_five_proposals() -> None:
+    proposal = {"offset_seconds": 2, "category": "property", "confidence": 0.7}
+    with pytest.raises(VideoPipelineError) as caught:
+        _allowlisted_candidate_output([proposal] * 26)
+    assert caught.value.code == "reka_output_invalid"
+    assert caught.value.safe_diagnostics == {}
+
+
+def test_reka_http_response_body_is_bounded() -> None:
+    class OversizedResponse:
+        def read(self, amount: int) -> bytes:
+            return b"x" * amount
+
+    with pytest.raises(VideoPipelineError) as caught:
+        _read_bounded_http_response(OversizedResponse())  # type: ignore[arg-type]
+    assert caught.value.code == "reka_response_invalid"
+
+
+def test_reka_http_protocol_failure_is_safe_and_retryable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class TruncatedResponse:
+        status = 200
+
+        def read(self, amount: int) -> bytes:
+            del amount
+            raise http.client.IncompleteRead(b"provider-value-must-not-escape")
+
+    class FakeConnection:
+        def request(self, *args: object, **kwargs: object) -> None:
+            return None
+
+        def getresponse(self) -> TruncatedResponse:
+            return TruncatedResponse()
+
+        def close(self) -> None:
+            return None
+
+    connection = FakeConnection()
+    monkeypatch.setattr(
+        "src.data.video.reka.http.client.HTTPSConnection",
+        lambda *args, **kwargs: connection,
+    )
+    client = RekaVisionProvider("rk-test-only")
+    with pytest.raises(VideoPipelineError) as caught:
+        client._chat_json_request({"model": "reka-edge-2603", "messages": []})
+    assert caught.value.code == "reka_timeout"
+    assert caught.value.retryable
+    assert caught.value.__cause__ is None
+
+
+def test_reka_http_object_envelope_is_required(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class ArrayResponse:
+        status = 200
+
+        def read(self, amount: int) -> bytes:
+            return b"[]"
+
+    class FakeConnection:
+        def request(self, *args: object, **kwargs: object) -> None:
+            return None
+
+        def getresponse(self) -> ArrayResponse:
+            return ArrayResponse()
+
+        def close(self) -> None:
+            return None
+
+    client = RekaVisionProvider("rk-test-only")
+    connection = FakeConnection()
+    monkeypatch.setattr(client, "_connection", lambda: connection)
+    with pytest.raises(VideoPipelineError) as vision_error:
+        client._json_request("GET", "/v1/videos/test")
+    assert vision_error.value.code == "reka_response_invalid"
+
+    monkeypatch.setattr(
+        "src.data.video.reka.http.client.HTTPSConnection",
+        lambda *args, **kwargs: connection,
+    )
+    with pytest.raises(VideoPipelineError) as chat_error:
+        client._chat_json_request({"model": "reka-edge-2603", "messages": []})
+    assert chat_error.value.code == "reka_response_invalid"
+    assert chat_error.value.__cause__ is None
+
+
+def test_reka_candidate_json_parse_failure_does_not_retain_provider_value() -> None:
+    provider_value = "provider-value-must-not-escape"
+    with pytest.raises(VideoPipelineError) as caught:
+        RekaVisionProvider._decode_candidate_json(
+            provider_value,
+            stage="short_video_candidate",
+            assistant_prefilled=True,
+        )
+    assert caught.value.code == "reka_output_invalid"
+    assert caught.value.__cause__ is None
+    assert provider_value not in str(caught.value)
+
+
+def test_reka_candidate_json_recursion_error_is_sanitized(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider_value = "provider-recursion-value-must-not-escape"
+
+    def recursive_loads(*args: object, **kwargs: object) -> object:
+        raise RecursionError(provider_value)
+
+    monkeypatch.setattr("src.data.video.reka.json.loads", recursive_loads)
+    with pytest.raises(VideoPipelineError) as caught:
+        RekaVisionProvider._decode_candidate_json(
+            "[]",
+            stage="short_video_candidate",
+            assistant_prefilled=True,
+        )
+    assert caught.value.code == "reka_output_invalid"
+    assert caught.value.safe_diagnostics == {
+        "format_stage": "short_video_candidate",
+        "format_reason": "json_format_invalid",
+    }
+    assert caught.value.__cause__ is None
+    assert provider_value not in str(caught.value)
 
 
 def test_reka_repairs_explanatory_no_incident_shape_to_empty_result() -> None:
@@ -476,7 +635,10 @@ def test_short_video_uses_multimodal_chat_instead_of_indexed_qa(
         requests.append(payload)
         return {
             "choices": [
-                {"message": {"content": "CLEAR"}}
+                {
+                    "finish_reason": "stop",
+                    "message": {"role": "assistant", "content": "CLEAR"},
+                }
             ]
         }
 
@@ -488,8 +650,8 @@ def test_short_video_uses_multimodal_chat_instead_of_indexed_qa(
     ) == []
     content = requests[0]["messages"][0]["content"]
     assert content[0]["type"] == "video_url"
-    assert content[0]["video_url"]["url"].startswith("data:video/mp4;base64,")
-    assert "bounded-test-video" not in content[0]["video_url"]["url"]
+    assert content[0]["video_url"].startswith("data:video/mp4;base64,")
+    assert "bounded-test-video" not in content[0]["video_url"]
     assert requests[0]["temperature"] == 0
     assert requests[0]["max_tokens"] == 8
 
@@ -505,7 +667,17 @@ def test_short_video_extracts_candidates_only_after_incident_screen(
 
     def fake_chat_request(payload: dict) -> dict:
         requests.append(payload)
-        return {"choices": [{"message": {"content": next(responses)}}]}
+        return {
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "message": {
+                        "role": "assistant",
+                        "content": next(responses),
+                    },
+                }
+            ]
+        }
 
     client._chat_json_request = fake_chat_request  # type: ignore[method-assign]
     assert client.propose_candidates(
@@ -515,7 +687,358 @@ def test_short_video_extracts_candidates_only_after_incident_screen(
     ) == []
     assert len(requests) == 2
     assert requests[1]["messages"][1] == {"role": "assistant", "content": "["}
-    assert requests[1]["max_tokens"] == 256
+    assert requests[1]["max_tokens"] == 4096
+    prompt = requests[1]["messages"][0]["content"][-1]["text"]
+    assert "at most 25 candidate objects" in prompt
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        [{"type": "text", "text": "CLEAR"}],
+        {"type": "output_text", "text": "CLEAR"},
+        [
+            {"type": "output_text", "text": "CL"},
+            {"type": "text", "text": "EAR"},
+        ],
+    ],
+)
+def test_short_video_accepts_safe_openai_text_content_blocks(
+    tmp_path: Path,
+    content: object,
+) -> None:
+    client = RekaVisionProvider("rk-test-only")
+    video = tmp_path / "short.mp4"
+    video.write_bytes(b"bounded-test-video")
+
+    def fake_chat_request(payload: dict) -> dict:
+        return {
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "message": {"role": "assistant", "content": content},
+                }
+            ]
+        }
+
+    client._chat_json_request = fake_chat_request  # type: ignore[method-assign]
+    assert client.propose_candidates(
+        "unused-indexed-id",
+        prompt_version="candidate-v2",
+        media_path=video,
+    ) == []
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        '"CLEAR"',
+        "`CLEAR`",
+        "**CLEAR**",
+        "```text\nCLEAR\n```",
+    ],
+)
+def test_short_video_accepts_only_fixed_token_formatting_variants(
+    tmp_path: Path,
+    content: str,
+) -> None:
+    client = RekaVisionProvider("rk-test-only")
+    video = tmp_path / "short.mp4"
+    video.write_bytes(b"bounded-test-video")
+
+    def fake_chat_request(payload: dict) -> dict:
+        return {
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "message": {"role": "assistant", "content": content},
+                }
+            ]
+        }
+
+    client._chat_json_request = fake_chat_request  # type: ignore[method-assign]
+    assert client.propose_candidates(
+        "unused-indexed-id",
+        prompt_version="candidate-v2",
+        media_path=video,
+    ) == []
+
+
+def test_short_video_rejects_prose_even_when_it_contains_a_valid_token(
+    tmp_path: Path,
+) -> None:
+    client = RekaVisionProvider("rk-test-only")
+    video = tmp_path / "short.mp4"
+    video.write_bytes(b"bounded-test-video")
+    contents = iter(["Classification: CLEAR", "CLEAR because the road is routine"])
+
+    def fake_chat_request(payload: dict) -> dict:
+        return {
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "message": {
+                        "role": "assistant",
+                        "content": next(contents),
+                    },
+                }
+            ]
+        }
+
+    client._chat_json_request = fake_chat_request  # type: ignore[method-assign]
+    with pytest.raises(VideoPipelineError) as caught:
+        client.propose_candidates(
+            "unused-indexed-id",
+            prompt_version="candidate-v2",
+            media_path=video,
+        )
+    assert caught.value.code == "reka_output_invalid"
+    assert caught.value.safe_diagnostics == {
+        "format_stage": "short_video_screen",
+        "format_reason": "token_format_invalid",
+    }
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        [
+            {"type": "text", "text": "CLEAR"},
+            {"type": "tool_call", "id": "tool-call"},
+        ],
+        [{"type": "refusal", "refusal": "not returned to callers"}],
+        [{"type": "unknown", "text": "CLEAR"}],
+    ],
+)
+def test_short_video_rejects_mixed_or_non_text_content_blocks(
+    tmp_path: Path,
+    content: object,
+) -> None:
+    client = RekaVisionProvider("rk-test-only")
+    video = tmp_path / "short.mp4"
+    video.write_bytes(b"bounded-test-video")
+
+    def fake_chat_request(payload: dict) -> dict:
+        return {
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "message": {"role": "assistant", "content": content},
+                }
+            ]
+        }
+
+    client._chat_json_request = fake_chat_request  # type: ignore[method-assign]
+    with pytest.raises(VideoPipelineError) as caught:
+        client.propose_candidates(
+            "unused-indexed-id",
+            prompt_version="candidate-v2",
+            media_path=video,
+        )
+    assert caught.value.code == "reka_response_invalid"
+    assert caught.value.safe_diagnostics == {
+        "format_stage": "short_video_screen",
+        "format_reason": "content_shape_invalid",
+    }
+
+
+@pytest.mark.parametrize(
+    ("role", "finish_reason"),
+    [("user", "stop"), ("assistant", "tool_calls"), (None, "stop")],
+)
+def test_short_video_rejects_non_assistant_or_non_stop_completions(
+    tmp_path: Path,
+    role: str | None,
+    finish_reason: str,
+) -> None:
+    client = RekaVisionProvider("rk-test-only")
+    video = tmp_path / "short.mp4"
+    video.write_bytes(b"bounded-test-video")
+
+    def fake_chat_request(payload: dict) -> dict:
+        return {
+            "choices": [
+                {
+                    "finish_reason": finish_reason,
+                    "message": {"role": role, "content": "CLEAR"},
+                }
+            ]
+        }
+
+    client._chat_json_request = fake_chat_request  # type: ignore[method-assign]
+    with pytest.raises(VideoPipelineError) as caught:
+        client.propose_candidates(
+            "unused-indexed-id",
+            prompt_version="candidate-v2",
+            media_path=video,
+        )
+    assert caught.value.code == "reka_response_invalid"
+    assert caught.value.safe_diagnostics == {
+        "format_stage": "short_video_screen",
+        "format_reason": "response_shape_invalid",
+    }
+
+
+def test_short_video_prefill_accepts_a_complete_candidate_array(
+    tmp_path: Path,
+) -> None:
+    client = RekaVisionProvider("rk-test-only")
+    video = tmp_path / "short.mp4"
+    video.write_bytes(b"bounded-test-video")
+    responses = iter(
+        [
+            "INCIDENT",
+            [
+                {
+                    "type": "output_text",
+                    "text": (
+                        '[{"offset_seconds":2,"category":"traffic_safety",'
+                        '"confidence":0.8}]'
+                    ),
+                }
+            ],
+        ]
+    )
+
+    def fake_chat_request(payload: dict) -> dict:
+        return {
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "message": {
+                        "role": "assistant",
+                        "content": next(responses),
+                    },
+                }
+            ]
+        }
+
+    client._chat_json_request = fake_chat_request  # type: ignore[method-assign]
+    assert client.propose_candidates(
+        "unused-indexed-id",
+        prompt_version="candidate-v2",
+        media_path=video,
+    ) == [
+        {"offset_seconds": 2, "category": "traffic_safety", "confidence": 0.8}
+    ]
+
+
+def test_short_video_prefill_accepts_a_complete_wrapped_candidate_array(
+    tmp_path: Path,
+) -> None:
+    client = RekaVisionProvider("rk-test-only")
+    video = tmp_path / "short.mp4"
+    video.write_bytes(b"bounded-test-video")
+    responses = iter(["INCIDENT", '{"result":[]}'])
+
+    def fake_chat_request(payload: dict) -> dict:
+        return {
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "message": {
+                        "role": "assistant",
+                        "content": next(responses),
+                    },
+                }
+            ]
+        }
+
+    client._chat_json_request = fake_chat_request  # type: ignore[method-assign]
+    assert client.propose_candidates(
+        "unused-indexed-id",
+        prompt_version="candidate-v2",
+        media_path=video,
+    ) == []
+
+
+@pytest.mark.parametrize("constant", ["NaN", "Infinity", "-Infinity"])
+def test_short_video_candidate_json_rejects_nonfinite_numbers(
+    tmp_path: Path,
+    constant: str,
+) -> None:
+    client = RekaVisionProvider("rk-test-only")
+    video = tmp_path / "short.mp4"
+    video.write_bytes(b"bounded-test-video")
+    responses = iter(
+        [
+            "INCIDENT",
+            (
+                '[{"offset_seconds":0,"category":"traffic_safety",'
+                f'"confidence":{constant}}}]'
+            ),
+            (
+                '[{"offset_seconds":0,"category":"traffic_safety",'
+                f'"confidence":{constant}}}]'
+            ),
+        ]
+    )
+
+    def fake_chat_request(payload: dict) -> dict:
+        return {
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "message": {
+                        "role": "assistant",
+                        "content": next(responses),
+                    },
+                }
+            ]
+        }
+
+    client._chat_json_request = fake_chat_request  # type: ignore[method-assign]
+    with pytest.raises(VideoPipelineError) as caught:
+        client.propose_candidates(
+            "unused-indexed-id",
+            prompt_version="candidate-v2",
+            media_path=video,
+        )
+    assert caught.value.code == "reka_output_invalid"
+    assert caught.value.safe_diagnostics == {
+        "format_stage": "short_video_candidate",
+        "format_reason": "json_format_invalid",
+    }
+
+
+def test_short_video_candidate_truncation_is_repaired_then_classified(
+    tmp_path: Path,
+) -> None:
+    client = RekaVisionProvider("rk-test-only")
+    video = tmp_path / "short.mp4"
+    video.write_bytes(b"bounded-test-video")
+    requests: list[dict] = []
+
+    def fake_chat_request(payload: dict) -> dict:
+        requests.append(payload)
+        if len(requests) == 1:
+            finish_reason = "stop"
+            content = "INCIDENT"
+        else:
+            finish_reason = "length"
+            content = '[{"offset_seconds":2'
+        return {
+            "choices": [
+                {
+                    "finish_reason": finish_reason,
+                    "message": {"role": "assistant", "content": content},
+                }
+            ]
+        }
+
+    client._chat_json_request = fake_chat_request  # type: ignore[method-assign]
+    with pytest.raises(VideoPipelineError) as caught:
+        client.propose_candidates(
+            "unused-indexed-id",
+            prompt_version="candidate-v2",
+            media_path=video,
+        )
+    assert len(requests) == 3
+    assert caught.value.code == "reka_output_truncated"
+    assert caught.value.safe_diagnostics == {
+        "format_stage": "short_video_candidate",
+        "format_reason": "token_limit_reached",
+    }
 
 
 @pytest.mark.parametrize(
