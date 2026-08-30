@@ -16,7 +16,9 @@ import uuid
 from fastapi import Depends, FastAPI, File, Form, Header, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field
+from starlette.background import BackgroundTask
 from starlette.middleware.trustedhost import TrustedHostMiddleware
+from starlette.responses import FileResponse
 
 from src.models.contracts import validate_contract
 from src.models.data import parse_utc
@@ -61,8 +63,16 @@ LIMITATIONS = [
 ]
 CATEGORIES = ("property", "violence", "public_order", "traffic_safety")
 DEMO_HLS_SOURCE_ID = "20000000-0000-4000-8000-000000000099"
-DEMO_HLS_LOCATION_REF = "secret://demo-public-hls/louisiana-dot-i20/location"
+DEMO_HLS_LOCATION_ID = "30000000-0000-4000-8000-000000000099"
+DEMO_HLS_LOCATION_REF = (
+    "secret://tenant/00000000-0000-4000-8000-000000000001/locations/"
+    f"{DEMO_HLS_LOCATION_ID}"
+)
 DEMO_RECORDED_LOCATION_REF = "secret://tenant/demo-one/cameras/entrance/location"
+
+
+def _demo_hls_location_ref(tenant_id: str) -> str:
+    return f"secret://tenant/{tenant_id}/locations/{DEMO_HLS_LOCATION_ID}"
 
 
 class RecordedSourceCreate(BaseModel):
@@ -121,7 +131,7 @@ class _DemoLocationResolver:
     """Restricted demo coordinates; values never cross the public API boundary."""
 
     def resolve(self, tenant_id: str, location_ref: str) -> dict[str, float]:
-        if location_ref == DEMO_HLS_LOCATION_REF:
+        if location_ref == _demo_hls_location_ref(tenant_id):
             return {"latitude": 32.46091, "longitude": -93.831}
         if location_ref == DEMO_RECORDED_LOCATION_REF:
             return {"latitude": 12.9716, "longitude": 77.5946}
@@ -306,6 +316,7 @@ def create_app(
 ) -> FastAPI:
     active_settings = settings or Settings.from_environment()
     production = active_settings.app_environment == "production"
+    public_hls_enabled = not production or active_settings.public_hls_demo_enabled
     if auth_provider is None and production:
         if not all(
             (
@@ -477,7 +488,7 @@ def create_app(
             ),
             "video_service": "connected",
             "near_live_capture": (
-                "disabled" if production else "allowlisted_hls"
+                "allowlisted_hls" if public_hls_enabled else "disabled"
             ),
             "forecast_models": "historical_fallback_only",
             "forecast_data": (
@@ -808,7 +819,7 @@ def create_app(
                 "mode": "live_camera",
                 "status": "active",
                 "timezone": "UTC",
-                "location_ref": DEMO_HLS_LOCATION_REF,
+                "location_ref": _demo_hls_location_ref(tenant_id),
                 "connection": {
                     "transport": "hls",
                     "endpoint_ref": "secret://demo-public-hls/louisiana-dot-i20/endpoint",
@@ -844,9 +855,21 @@ def create_app(
                 consent_confirmed=True,
                 kind="live_segment",
             )
-            run["asset_id"] = asset["asset_id"]
-            run["stage"] = "segment_validated"
-            process_asset_run(run_id, tenant_id, asset["asset_id"])
+            run.update(asset_id=asset["asset_id"], stage="segment_validated")
+            if app.state.video_broker is not None:
+                durable = enqueue_asset_run(
+                    tenant_id, asset["asset_id"], "near-live CCTV segment"
+                )
+                run.update(
+                    state="running",
+                    stage="reka_upload_queued",
+                    durable_run_id=durable["run_id"],
+                    updated_at=datetime.now(timezone.utc)
+                    .isoformat()
+                    .replace("+00:00", "Z"),
+                )
+            else:
+                process_asset_run(run_id, tenant_id, asset["asset_id"])
         except VideoPipelineError as error:
             run.update(
                 state="failed",
@@ -861,7 +884,7 @@ def create_app(
         idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
         ctx: TenantContext = Depends(require_owner),
     ) -> dict[str, Any]:
-        if production:
+        if not public_hls_enabled:
             raise problem(
                 404,
                 "demo_capture_disabled",
@@ -918,6 +941,29 @@ def create_app(
     ) -> dict[str, Any]:
         run = app.state.video_runs.get(str(run_id))
         if run is not None and run["tenant_id"] == ctx.tenant_id:
+            durable_run_id = run.get("durable_run_id")
+            if durable_run_id:
+                try:
+                    job = app.state.video_service.store.get_job(
+                        ctx.tenant_id, durable_run_id
+                    )
+                except VideoPipelineError:
+                    raise problem(
+                        404, "ingestion_run_not_found", "Ingestion run was not found"
+                    )
+                durable = _durable_run(
+                    app.state.video_service.store,
+                    ctx.tenant_id,
+                    job,
+                    app.state.vision_mode,
+                )
+                return durable | {
+                    "run_id": str(run_id),
+                    "label": "near-live CCTV segment",
+                    "source_name": run.get("source_name"),
+                    "source_attribution": run.get("source_attribution"),
+                    "capture_seconds": run.get("capture_seconds"),
+                }
             return _public_run(run)
         if app.state.video_broker is not None:
             try:
@@ -961,6 +1007,44 @@ def create_app(
                 "Human review is required before any candidate can enter aggregate incident history.",
             ],
         }
+
+    @app.get("/v1/candidate-detections/{detection_id}/evidence")
+    def candidate_evidence(
+        detection_id: uuid.UUID,
+        ctx: TenantContext = Depends(require_reviewer),
+    ) -> FileResponse:
+        try:
+            candidate = app.state.video_service.store.get_candidate(
+                ctx.tenant_id, str(detection_id)
+            )
+        except VideoPipelineError:
+            raise problem(404, "candidate_not_found", "Candidate was not found")
+        if parse_utc(candidate["expires_at"]) <= datetime.now(timezone.utc):
+            raise problem(410, "evidence_expired", "Candidate evidence has expired")
+        materialized = app.state.video_service.candidate_evidence(
+            ctx.tenant_id,
+            candidate["asset_id"],
+            candidate["occurred_at"],
+        )
+        path = materialized.__enter__()
+        app.state.audit.record(
+            tenant_id=ctx.tenant_id,
+            principal_id=ctx.principal_id,
+            request_id=ctx.request_id,
+            action="candidate_evidence_viewed",
+            resource_type="candidate_detection",
+            resource_id=str(detection_id),
+        )
+        return FileResponse(
+            path,
+            media_type="video/mp4",
+            headers={
+                "Cache-Control": "private, no-store, max-age=0",
+                "Content-Disposition": f'inline; filename="candidate-{detection_id}.mp4"',
+                "X-Content-Type-Options": "nosniff",
+            },
+            background=BackgroundTask(materialized.__exit__, None, None, None),
+        )
 
     @app.post("/v1/candidate-detections/{detection_id}/review", status_code=201)
     def review_candidate(

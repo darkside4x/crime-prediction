@@ -193,9 +193,16 @@ def test_secret_configuration_never_appears_in_repr_or_openapi():
     serialized = json.dumps(app.openapi())
     assert "/v1/video-assets/uploads" in app.openapi()["paths"]
     assert "/v1/ingestion/runs/{run_id}" in app.openapi()["paths"]
+    assert "/v1/candidate-detections/{detection_id}/evidence" in app.openapi()["paths"]
     assert secret not in serialized
     assert "REKA_API_KEY" not in serialized
     assert "secret_ref" not in serialized
+
+
+def test_public_hls_demo_flag_is_explicit(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("APP_ENVIRONMENT", "test")
+    monkeypatch.setenv("PUBLIC_HLS_DEMO_ENABLED", "true")
+    assert Settings.from_environment().public_hls_demo_enabled is True
 
 
 def test_durable_run_reports_the_whole_worker_chain_and_candidate_count():

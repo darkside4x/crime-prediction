@@ -3,6 +3,7 @@ import { motion } from "motion/react";
 import { useQuery } from "@tanstack/react-query";
 import { api, newIdempotencyKey, type NearLiveRun, type PublicCandidate } from "../api/client";
 import { useAuth } from "../console/AuthContext";
+import CandidateEvidence from "../console/CandidateEvidence";
 
 type CandidateDetection = PublicCandidate;
 
@@ -233,6 +234,11 @@ export default function NearLiveReview() {
                   </span>
                 )}
               </div>
+              <CandidateEvidence
+                token={token}
+                detectionId={candidate.detection_id}
+                available={candidate.evidence_available}
+              />
             </article>
           ))}
         </div>

@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, ApiError, newIdempotencyKey, type ReviewRequest } from "../api/client";
 import { useAuth } from "./AuthContext";
+import CandidateEvidence from "./CandidateEvidence";
 
 const CATEGORIES = ["property", "violence", "public_order", "traffic_safety", "other"] as const;
 const REASONS = [
@@ -113,6 +114,12 @@ export default function ReviewView() {
                     : "Unavailable"}
                 </dd>
               </dl>
+
+              <CandidateEvidence
+                token={token}
+                detectionId={candidate.detection_id}
+                available={candidate.evidence_available}
+              />
 
               {decided ? (
                 <p className="muted small">

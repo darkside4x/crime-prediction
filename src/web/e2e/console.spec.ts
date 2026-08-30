@@ -32,11 +32,20 @@ test("viewer inspects the forecast map with suppression and limitations", async 
 });
 
 test("reviewer sees candidates labeled as unconfirmed", async ({ page }) => {
+  await page.route("**/v1/candidate-detections/*/evidence", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "video/mp4",
+      body: Buffer.from("bounded synthetic evidence video"),
+    });
+  });
   await page.goto("/#/console");
   await page.getByRole("button", { name: /Reviewer · Demo One/ }).click();
   await page.getByRole("link", { name: "Review queue" }).click();
   await expect(page.getByText("UNCONFIRMED CANDIDATE").first()).toBeVisible();
   await expect(page.getByText(/Decisions are final and immutable/)).toBeVisible();
+  await page.getByRole("button", { name: "Load evidence video" }).first().click();
+  await expect(page.getByLabel(/Evidence video for candidate/).first()).toBeVisible();
 });
 
 test("admin upload flow surfaces the degraded media-intake state honestly", async ({ page }) => {
