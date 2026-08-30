@@ -14,6 +14,7 @@ from .errors import VideoPipelineError
 from .service import VideoPipelineService
 
 NEXT_OPERATION = {"upload": "index", "index": "analyze"}
+OPERATION_MAX_ATTEMPTS = {"upload": 5, "index": 20, "analyze": 5, "delete": 5}
 
 
 @dataclass(frozen=True)
@@ -82,6 +83,23 @@ class VideoJobWorker:
                 message.tenant_id, job["asset_id"], message.operation
             )
             if message.operation == "index" and result in {"pending", "indexing"}:
+                if int(job["attempts"]) >= int(job["max_attempts"]):
+                    self.store.transition_job(
+                        message.tenant_id,
+                        message.job_id,
+                        "failed",
+                        "reka_index_timeout",
+                    )
+                    self.store.mark_dead_lettered(message.tenant_id, message.job_id)
+                    self.broker.dead_letter(
+                        delivery, error_code="reka_index_timeout"
+                    )
+                    return WorkerResult(
+                        message.job_id,
+                        "failed",
+                        message.operation,
+                        "reka_index_timeout",
+                    )
                 delay = _backoff(int(job["attempts"]))
                 self.store.transition_job(
                     message.tenant_id,
@@ -103,7 +121,12 @@ class VideoJobWorker:
             self.broker.acknowledge(delivery)
             next_operation = NEXT_OPERATION.get(message.operation)
             if next_operation:
-                next_job = self.store.enqueue(message.tenant_id, job["asset_id"], next_operation)
+                next_job = self.store.enqueue(
+                    message.tenant_id,
+                    job["asset_id"],
+                    next_operation,
+                    max_attempts=OPERATION_MAX_ATTEMPTS[next_operation],
+                )
                 if next_job["state"] in {"queued", "retry"}:
                     self.broker.publish(
                         JobMessage(message.tenant_id, next_job["job_id"], next_operation)

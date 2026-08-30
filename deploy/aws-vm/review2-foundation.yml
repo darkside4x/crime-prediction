@@ -373,7 +373,9 @@ Resources:
       MessageRetentionPeriod: 345600
       RedrivePolicy:
         deadLetterTargetArn: !GetAtt VideoIndexDlq.Arn
-        maxReceiveCount: 5
+        # Reka indexing can legitimately take several minutes for larger clips.
+        # Keep this aligned with OPERATION_MAX_ATTEMPTS["index"].
+        maxReceiveCount: 20
       VisibilityTimeout: 180
 
   VideoAnalyzeQueue:
