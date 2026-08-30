@@ -1,0 +1,131 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: MFA-gated non-root operator access for the crime prediction AWS deployment.
+
+Parameters:
+  OperatorUserName:
+    Type: String
+    Default: eris-cli-operator
+    AllowedPattern: "[A-Za-z0-9+=,.@_-]+"
+
+Resources:
+  DeploymentRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: CrimePredictionDeploymentRole
+      Description: Short-lived, MFA-gated deployment role; cannot administer account identities.
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:user/${OperatorUserName}"
+            Action: sts:AssumeRole
+            Condition:
+              Bool:
+                aws:MultiFactorAuthPresent: "true"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/PowerUserAccess
+      Policies:
+        - PolicyName: ProjectIamResources
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - iam:AddRoleToInstanceProfile
+                  - iam:AttachRolePolicy
+                  - iam:CreateInstanceProfile
+                  - iam:CreateRole
+                  - iam:DeleteInstanceProfile
+                  - iam:DeleteRole
+                  - iam:DeleteRolePolicy
+                  - iam:DetachRolePolicy
+                  - iam:GetInstanceProfile
+                  - iam:GetRole
+                  - iam:GetRolePolicy
+                  - iam:ListAttachedRolePolicies
+                  - iam:ListInstanceProfilesForRole
+                  - iam:PassRole
+                  - iam:PutRolePolicy
+                  - iam:RemoveRoleFromInstanceProfile
+                  - iam:TagInstanceProfile
+                  - iam:TagRole
+                  - iam:UntagInstanceProfile
+                  - iam:UntagRole
+                  - iam:UpdateAssumeRolePolicy
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/crime-prediction-*"
+                  - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:instance-profile/crime-prediction-*"
+
+  OperatorGroup:
+    Type: AWS::IAM::Group
+    Properties:
+      GroupName: crime-prediction-review2-operators
+      Policies:
+        - PolicyName: SelfServiceMfaAndDeploymentRole
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ViewAccountAndOwnIdentity
+                Effect: Allow
+                Action:
+                  - iam:GetAccountPasswordPolicy
+                  - iam:GetAccountSummary
+                  - iam:GetUser
+                  - iam:ListAccountAliases
+                  - iam:ListMFADevices
+                  - iam:ListVirtualMFADevices
+                Resource: "*"
+              - Sid: ManageOwnPassword
+                Effect: Allow
+                Action: iam:ChangePassword
+                Resource: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:user/${OperatorUserName}"
+              - Sid: ManageOwnMfa
+                Effect: Allow
+                Action:
+                  - iam:CreateVirtualMFADevice
+                  - iam:DeactivateMFADevice
+                  - iam:DeleteVirtualMFADevice
+                  - iam:EnableMFADevice
+                  - iam:ResyncMFADevice
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:user/${OperatorUserName}"
+                  - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:mfa/${OperatorUserName}"
+              - Sid: AssumeDeploymentRole
+                Effect: Allow
+                Action: sts:AssumeRole
+                Resource: !GetAtt DeploymentRole.Arn
+              - Sid: RequireMfaForOtherActions
+                Effect: Deny
+                NotAction:
+                  - iam:ChangePassword
+                  - iam:CreateVirtualMFADevice
+                  - iam:DeleteVirtualMFADevice
+                  - iam:EnableMFADevice
+                  - iam:GetAccountPasswordPolicy
+                  - iam:GetAccountSummary
+                  - iam:GetUser
+                  - iam:ListAccountAliases
+                  - iam:ListMFADevices
+                  - iam:ListVirtualMFADevices
+                  - iam:ResyncMFADevice
+                  - sts:GetCallerIdentity
+                Resource: "*"
+                Condition:
+                  BoolIfExists:
+                    aws:MultiFactorAuthPresent: "false"
+
+  AddExistingOperatorToGroup:
+    Type: AWS::IAM::UserToGroupAddition
+    Properties:
+      GroupName: !Ref OperatorGroup
+      Users:
+        - !Ref OperatorUserName
+
+Outputs:
+  DeploymentRoleArn:
+    Value: !GetAtt DeploymentRole.Arn
+  OperatorGroupName:
+    Value: !Ref OperatorGroup
+

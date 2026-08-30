@@ -26,6 +26,10 @@ those definitions read-only and fail closed while scanning uploads.
 - The SQS source queue has a redrive policy to the configured DLQ. The DLQ
   retention is longer than the source queue retention. Alarm on visible DLQ
   messages, oldest-message age, and in-flight saturation.
+- CloudWatch alarms publish through SNS to an encrypted, fourteen-day SQS alarm
+  inbox. Add an email, chat, or incident-management subscription when the team
+  has an approved destination; the queue prevents alerts from being discarded
+  in the meantime.
 - The instance role—not static AWS keys—has only `s3:GetObject/PutObject/DeleteObject`
   on `tenants/*`, required KMS operations, SQS operations on these two queues,
   and `secretsmanager:GetSecretValue` under `LOCATION_SECRET_PREFIX`.
@@ -60,14 +64,32 @@ temporary master-secret read and app-secret write permissions; normal runtime
 can read only the sealed application DSN.
 
 The host template defaults to a private SSM-managed EC2 host with no inbound
-rule. Set `CreateReviewEndpoint=true` only after the AWS account is permitted to
-create CloudFront distributions. That endpoint uses the CloudFront default TLS
-certificate and an origin-verification header; the ALB rejects direct requests.
-For a custom domain, use an ACM certificate and HTTPS listener instead.
+rule. Set `ReviewEndpointMode=cloudfront` after the AWS account is permitted to
+create CloudFront distributions. CloudFront uses its default TLS certificate
+and an origin-verification header; the internet-facing ALB rejects direct
+requests. If CloudFront account verification is unavailable, set
+`ReviewEndpointMode=apigateway`. That mode uses the API Gateway default HTTPS
+endpoint, a VPC link, and an internal ALB. The VM remains unreachable directly
+in both modes. For a custom domain, use an ACM certificate and HTTPS listener.
 
 The generated Reka secret is deliberately a placeholder. Replace it with a
 newly rotated key before writing the container secret file. Never reuse a key
 that has appeared in chat or shell history.
+
+Provision `review2-identity.yml` to create the Cognito issuer used by the API.
+The pre-token hook validates the user's immutable JSON membership document
+stored in `custom:tenant_memberships` and copies it into the signed
+`tenant_memberships` claim. Use the stack outputs for `OIDC_ISSUER`,
+`OIDC_AUDIENCE`, and `OIDC_JWKS_URL`. Demo users may be created only with
+synthetic tenant identifiers; do not store email addresses, camera credentials,
+or other personal information in membership claims.
+
+Provision `review2-operator.yml` before routine CLI work. It adds the existing
+operator user to a self-service MFA group and permits only MFA-authenticated,
+one-hour assumption of `CrimePredictionDeploymentRole`. The role has
+`PowerUserAccess` plus IAM access limited to project-prefixed runtime roles; it
+cannot administer account users. Do not create a long-lived access key for the
+operator.
 
 After the host is online and EFS is mounted:
 
