@@ -79,6 +79,15 @@ export default function SourcesView() {
       uploadKey.current = newIdempotencyKey();
     },
   });
+  const processing = useQuery({
+    queryKey: ["ingestion-run", upload.data?.run_id],
+    queryFn: () => api.ingestionRun(token, upload.data!.run_id),
+    enabled: Boolean(upload.data?.run_id),
+    refetchInterval: (query) => {
+      const state = query.state.data?.state;
+      return state === "completed" || state === "failed" ? false : 3_000;
+    },
+  });
 
   const onFileChange = (selected: File | null) => {
     setFileError(null);
@@ -266,9 +275,26 @@ export default function SourcesView() {
             </div>
           )}
           {upload.isSuccess && (
-            <p className="ok-banner">
-              Upload accepted. Processing run {upload.data.run_id.slice(0, 8)} is {upload.data.state}.
-            </p>
+            <div className="ok-banner" aria-live="polite">
+              <p>
+                Upload accepted. Processing run {upload.data.run_id.slice(0, 8)}.
+              </p>
+              {processing.isLoading && <p>Checking the durable worker queue…</p>}
+              {processing.data?.state === "completed" && (
+                <p>
+                  Analysis complete · {processing.data.candidate_count ?? 0} unconfirmed
+                  candidate(s) ready for human review.
+                </p>
+              )}
+              {processing.data && processing.data.state !== "completed" && (
+                <p>
+                  {processing.data.state === "failed" ? "Processing failed" : "Processing"}
+                  {` · ${processing.data.stage.replaceAll("_", " ")}`}
+                  {processing.data.error_code ? ` · ${processing.data.error_code}` : ""}
+                </p>
+              )}
+              {processing.error && <p>Could not refresh processing status.</p>}
+            </div>
           )}
         </div>
       </div>

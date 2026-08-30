@@ -9,7 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src.api import reka
-from src.api.app import create_app
+from src.api.app import _durable_run, create_app
 from src.api.settings import Settings
 from src.models.contracts import validate_contract
 
@@ -196,6 +196,50 @@ def test_secret_configuration_never_appears_in_repr_or_openapi():
     assert secret not in serialized
     assert "REKA_API_KEY" not in serialized
     assert "secret_ref" not in serialized
+
+
+def test_durable_run_reports_the_whole_worker_chain_and_candidate_count():
+    root = {
+        "job_id": "70000000-0000-4000-8000-000000000001",
+        "asset_id": "71000000-0000-4000-8000-000000000001",
+        "operation": "upload",
+        "state": "completed",
+        "created_at": "2026-08-30T00:00:00Z",
+        "updated_at": "2026-08-30T00:01:00Z",
+    }
+
+    class Store:
+        def jobs_for_asset(self, tenant_id, asset_id):
+            assert tenant_id == "tenant-one"
+            assert asset_id == root["asset_id"]
+            return [
+                root,
+                {
+                    **root,
+                    "job_id": "70000000-0000-4000-8000-000000000002",
+                    "operation": "index",
+                    "updated_at": "2026-08-30T00:02:00Z",
+                },
+                {
+                    **root,
+                    "job_id": "70000000-0000-4000-8000-000000000003",
+                    "operation": "analyze",
+                    "updated_at": "2026-08-30T00:03:00Z",
+                },
+            ]
+
+        def list_candidates(self, tenant_id):
+            assert tenant_id == "tenant-one"
+            return [
+                {"asset_id": root["asset_id"]},
+                {"asset_id": "another-tenant-scoped-asset"},
+            ]
+
+    run = _durable_run(Store(), "tenant-one", root, "reka_vision")
+    assert run["state"] == "completed"
+    assert run["stage"] == "awaiting_human_review"
+    assert run["candidate_count"] == 1
+    assert run["run_id"] == root["job_id"]
 
 
 def test_readiness_does_not_treat_an_unverified_reka_key_as_ready():

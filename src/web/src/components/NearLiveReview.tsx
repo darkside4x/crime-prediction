@@ -102,13 +102,18 @@ export default function NearLiveReview() {
   return (
     <section className="review-workbench" id="near-live">
       <div className="container">
-        <p className="eyebrow">Real public feed · restricted review workflow</p>
+        <p className="eyebrow">
+          {captureEnabled
+            ? "Real public feed · restricted review workflow"
+            : "Licensed India recordings · restricted review workflow"}
+        </p>
         <div className="review-heading">
           <div>
             <h2>NEAR-LIVE <span>CCTV</span> SEGMENT</h2>
             <p>
-              Captures one bounded segment from an allowlisted Louisiana DOT HLS feed.
-              This is not continuous live monitoring.
+              {captureEnabled
+                ? "Captures one bounded segment from an allowlisted Louisiana DOT HLS feed. This is not continuous live monitoring."
+                : "Public-camera capture is disabled in production. Upload a licensed India MP4 above to exercise the same bounded Reka workflow."}
             </p>
           </div>
           <motion.button
@@ -141,10 +146,16 @@ export default function NearLiveReview() {
         <div className="review-status" aria-live="polite">
           <div>
             <span className={`status-lamp ${run?.state ?? "idle"}`} />
-            <strong>{run ? run.stage.replaceAll("_", " ") : "Ready to capture"}</strong>
+            <strong>
+              {run
+                ? run.stage.replaceAll("_", " ")
+                : captureEnabled
+                  ? "Ready to capture"
+                  : "Ready for India MP4 upload"}
+            </strong>
           </div>
           <div className="status-meta">
-            {run?.source_attribution ?? "LADOTD / 511 Louisiana"}
+            {run?.source_attribution ?? (captureEnabled ? "LADOTD / 511 Louisiana" : "Licensed India demo media")}
             {run && ` · ${run.analysis_mode === "reka_vision" ? "Reka Vision" : "offline test analyzer"}`}
           </div>
         </div>
@@ -179,7 +190,9 @@ export default function NearLiveReview() {
           )}
           {!run && (
             <div className="candidate-empty">
-              Start a capture to create a bounded MP4, send it through Reka, and populate this queue.
+              {captureEnabled
+                ? "Start a capture to create a bounded MP4, send it through Reka, and populate this queue."
+                : "Upload an India MP4 above, then open the Review queue for any unconfirmed Reka proposals."}
             </div>
           )}
           {candidates.map((candidate) => (
@@ -225,7 +238,9 @@ export default function NearLiveReview() {
         </div>
 
         <p className="review-limitation">
-          “Near-live CCTV segment” means a short clip captured from a live public traffic feed.
+          {captureEnabled
+            ? "“Near-live CCTV segment” means a short clip captured from a live public traffic feed. "
+            : "The production demo uses uploaded, licensed recordings rather than an open live feed. "}
           Reka proposes candidates only; it does not confirm crime or calculate future area risk.
         </p>
       </div>

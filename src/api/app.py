@@ -152,6 +152,47 @@ def _public_run(run: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _durable_run(
+    store: Any, tenant_id: str, root_job: dict[str, Any], analysis_mode: str
+) -> dict[str, Any]:
+    """Collapse a durable upload/index/analyze chain into one public run."""
+    operation_order = {"upload": 0, "index": 1, "analyze": 2, "delete": 3}
+    jobs = store.jobs_for_asset(tenant_id, root_job["asset_id"])
+    selected = max(jobs or [root_job], key=lambda item: operation_order[item["operation"]])
+    state = selected["state"]
+    if state == "retry":
+        state = "queued"
+    elif state == "cancelled":
+        state = "failed"
+    elif state == "completed" and selected["operation"] in {"upload", "index"}:
+        # The next worker stage is dispatched immediately after completion. Do
+        # not tell the browser the entire processing run is already finished.
+        state = "running"
+
+    candidate_count = sum(
+        candidate.get("asset_id") == root_job["asset_id"]
+        for candidate in store.list_candidates(tenant_id)
+    )
+    stage = selected["operation"]
+    if state == "completed" and stage == "analyze":
+        stage = "awaiting_human_review"
+    elif state == "completed" and stage == "delete":
+        stage = "deleted"
+
+    return {
+        "run_id": root_job["job_id"],
+        "state": state,
+        "stage": stage,
+        "label": "recorded video upload",
+        "asset_id": root_job["asset_id"],
+        "candidate_count": candidate_count,
+        "analysis_mode": analysis_mode,
+        "error_code": selected.get("last_error_code"),
+        "created_at": root_job["created_at"],
+        "updated_at": selected["updated_at"],
+    }
+
+
 def _load_fixture(name: str) -> dict[str, Any]:
     return json.loads((REPO_ROOT / "contracts" / "fixtures" / f"{name}.json").read_text())
 
@@ -883,18 +924,12 @@ def create_app(
                 job = app.state.video_service.store.get_job(ctx.tenant_id, str(run_id))
             except VideoPipelineError:
                 raise problem(404, "ingestion_run_not_found", "Ingestion run was not found")
-            return {
-                "run_id": job["job_id"],
-                "state": job["state"],
-                "stage": job["operation"],
-                "label": "recorded video upload",
-                "asset_id": job["asset_id"],
-                "candidate_count": 0,
-                "analysis_mode": app.state.vision_mode,
-                "error_code": job.get("last_error_code"),
-                "created_at": job["created_at"],
-                "updated_at": job["updated_at"],
-            }
+            return _durable_run(
+                app.state.video_service.store,
+                ctx.tenant_id,
+                job,
+                app.state.vision_mode,
+            )
         raise problem(404, "ingestion_run_not_found", "Ingestion run was not found")
 
     @app.get("/v1/candidate-detections")

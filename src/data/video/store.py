@@ -286,6 +286,16 @@ class VideoStore:
             raise VideoPipelineError("job_not_found", "Processing job was not found")
         return dict(row)
 
+    def jobs_for_asset(self, tenant_id: str, asset_id: str) -> list[dict[str, Any]]:
+        with self.ingestion_store.connect() as connection:
+            rows = connection.execute(
+                """SELECT * FROM video_processing_jobs
+                   WHERE tenant_id=? AND asset_id=?
+                   ORDER BY created_at, job_id""",
+                (tenant_id, asset_id),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     def transition_job(
         self,
         tenant_id: str,

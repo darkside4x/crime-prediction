@@ -139,6 +139,10 @@ def test_separate_workers_resume_persisted_chain_after_restart(tmp_path: Path) -
     assert index_worker.poll_once()[0].state == "completed"
     assert analyze_worker.poll_once()[0].state == "completed"
     assert len(restarted_store.list_candidates(TENANT)) == 1
+    assert [
+        job["operation"]
+        for job in restarted_store.jobs_for_asset(TENANT, asset["asset_id"])
+    ] == ["upload", "index", "analyze"]
     assert restarted_store.job_metrics(TENANT) == {"completed": 3}
     assert telemetry.observations[0].detector_available is True
 
