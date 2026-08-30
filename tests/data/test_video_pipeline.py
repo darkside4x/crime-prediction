@@ -326,6 +326,40 @@ def test_missing_reka_fields_have_value_free_diagnostics(tmp_path: Path) -> None
     assert store.list_candidates(TENANT_A) == []
 
 
+def test_valid_candidate_survives_out_of_range_sibling(tmp_path: Path) -> None:
+    restricted, _, store, _, service = setup(
+        tmp_path,
+        proposals=[
+            {"offset_seconds": 1, "category": "other", "confidence": 0.95},
+            {"offset_seconds": 100, "category": "other", "confidence": 0.8},
+        ],
+    )
+    asset = accept(service, mp4(restricted / "clip.mp4"))
+    candidates = service.process_asset(TENANT_A, asset["asset_id"])
+    assert len(candidates) == 1
+    assert candidates[0]["proposed_category"] == "other"
+    assert candidates[0]["confidence"] == 0.95
+    assert store.get_asset(TENANT_A, asset["asset_id"])["status"] == "processed"
+
+
+def test_only_out_of_range_candidates_remain_fail_closed(tmp_path: Path) -> None:
+    restricted, _, store, _, service = setup(
+        tmp_path,
+        proposals=[
+            {"offset_seconds": 100, "category": "other", "confidence": 0.8}
+        ],
+    )
+    asset = accept(service, mp4(restricted / "clip.mp4"))
+    with pytest.raises(VideoPipelineError) as caught:
+        service.process_asset(TENANT_A, asset["asset_id"])
+    assert caught.value.code == "reka_output_invalid"
+    assert caught.value.safe_diagnostics == {
+        "proposal_index": 0,
+        "invalid_fields": ["offset_seconds"],
+    }
+    assert store.list_candidates(TENANT_A) == []
+
+
 def test_video_errors_reject_unbounded_or_value_bearing_diagnostics() -> None:
     with pytest.raises(ValueError, match="Unsupported safe diagnostic"):
         VideoPipelineError(
