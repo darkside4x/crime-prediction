@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import ScrollStack, { ScrollStackItem } from "../components/bits/ScrollStack";
 import { api, ApiError } from "../api/client";
 import { useAuth } from "./AuthContext";
 
@@ -66,8 +67,9 @@ export default function ModelCardView() {
       <h2 className="section-title">
         Model <span className="accent">card</span>
       </h2>
-      <div className="panel-flow">
-      <div className="panel">
+      <div className="model-stack">
+        <ScrollStack itemDistance={72} itemStackDistance={22} baseScale={0.9} itemScale={0.035} stackPosition="10%" scaleEndPosition="5%">
+      <ScrollStackItem>
         <h3>{sentenceCase(data.model_name)}</h3>
         <dl className="provenance">
           <dt>Target</dt>
@@ -91,9 +93,9 @@ export default function ModelCardView() {
           <dt>Suppression policy</dt>
           <dd>{data.suppression_policy}</dd>
         </dl>
-      </div>
+      </ScrollStackItem>
 
-      <div className="panel">
+      <ScrollStackItem>
         <h3>Baseline comparison</h3>
         <table className="compare-table">
           <thead>
@@ -121,9 +123,9 @@ export default function ModelCardView() {
         <p className="muted small">
           {data.primary_metric.definition} (split: {data.primary_metric.split})
         </p>
-      </div>
+      </ScrollStackItem>
 
-      <div className="panel">
+      <ScrollStackItem>
         <h3>Intended uses</h3>
         <ul className="limitations">
           {data.intended_uses.map((line) => (
@@ -146,7 +148,8 @@ export default function ModelCardView() {
           Feature interpretation: {data.feature_interpretation}. Human review required:{" "}
           {data.human_review_required ? "yes" : "no"}.
         </p>
-      </div>
+      </ScrollStackItem>
+        </ScrollStack>
       </div>
     </section>
   );

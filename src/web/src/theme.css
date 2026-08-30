@@ -514,165 +514,23 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
    Console shell
    ========================================================================== */
 .console {
-  display: grid;
-  grid-template-columns: 264px minmax(0, 1fr);
+  display: block;
   min-height: 100dvh;
   background: var(--bg);
   color: var(--cream);
 }
 
-.console-sidebar {
-  position: sticky;
-  top: 0;
-  z-index: 50;
-  display: flex;
-  flex-direction: column;
-  height: 100dvh;
-  overflow: hidden;
-  background: var(--bg-2);
-  border-right: 1px solid var(--line);
-}
-
-.console-brand {
-  display: flex;
-  flex-direction: column;
-  padding: var(--s-6);
-  border-bottom: 1px solid var(--line);
-}
-
-.console-brand a {
+.bar-brand {
+  flex: 0 0 auto;
+  margin-right: var(--s-2);
   color: var(--cream);
-  font: 400 21px/1.1 var(--font-display);
-  letter-spacing: -0.02em;
-  text-decoration: none;
-}
-
-.console-brand a::after { content: "."; color: var(--red); }
-
-.console-brand span, .console-brand small {
-  margin-top: 8px;
-  color: var(--cream-faint);
-  font: 400 11px/1 var(--font-body);
-  letter-spacing: 0.04em;
+  font: 400 21px/1 var(--font-display);
+  letter-spacing: -0.01em;
   text-transform: uppercase;
-}
-
-.console-brand small { margin-top: 5px; color: var(--red-bright); }
-
-.console-operator {
-  display: grid;
-  grid-template-columns: 40px minmax(0, 1fr);
-  gap: var(--s-3);
-  align-items: center;
-  padding: var(--s-4) var(--s-6);
-  border-bottom: 1px solid var(--line);
-}
-
-.operator-mark {
-  display: grid;
-  place-items: center;
-  width: 40px;
-  height: 40px;
-  border-radius: 14px;
-  background: var(--red);
-  color: #fff;
-  font: 400 11px/1 var(--font-body);
-  letter-spacing: 0.04em;
-}
-
-.console-operator > span:last-child { min-width: 0; }
-
-.console-operator strong, .console-operator small {
-  display: block;
-  overflow: hidden;
-  font: 400 11px/1.4 var(--font-body);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.console-operator small { margin-top: 2px; color: var(--cream-faint); font-weight: 400; }
-
-.console-sidebar nav {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  gap: 4px;
-  min-height: 0;
-  padding: var(--s-4) var(--s-3);
-  overflow-y: auto;
-}
-
-.console-sidebar nav a {
-  display: flex;
-  gap: var(--s-3);
-  align-items: center;
-  min-height: 44px;
-  padding: 10px 16px;
-  border-radius: var(--radius-pill);
-  color: var(--cream-dim);
-  font: 400 15px/1 var(--font-body);
   text-decoration: none;
-  transition: background-color 0.18s, color 0.18s;
 }
 
-.console-sidebar nav a:hover { background: rgba(255, 241, 234, 0.06); color: var(--cream); }
-
-.console-sidebar nav a.active {
-  background: var(--red);
-  color: #fff;
-}
-
-.console-nav-icon { display: grid; place-items: center; width: 20px; height: 20px; flex: 0 0 20px; }
-
-.console-nav-icon svg {
-  width: 19px;
-  height: 19px;
-  fill: none;
-  stroke: currentColor;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: 1.7;
-}
-
-.console-sidebar-foot {
-  padding: var(--s-4) var(--s-6) var(--s-5);
-  border-top: 1px solid var(--line);
-}
-
-.console .console-sidebar-foot button {
-  width: 100%;
-  min-height: 42px;
-  padding: 10px 14px;
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius-pill);
-  background: transparent;
-  color: var(--cream);
-  font: 400 15px/1 var(--font-body);
-  transition: border-color 0.2s, background-color 0.2s;
-}
-
-.console .console-sidebar-foot button:hover { border-color: var(--red); background: var(--red-dim); }
-
-.console-sidebar-foot p {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: var(--s-3) 0 0;
-  color: var(--cream-faint);
-  font: 400 11px/1 var(--font-body);
-  letter-spacing: 0.04em;
-}
-
-.console-sidebar-foot p + p { margin-top: var(--s-2); }
-
-.console-sidebar-foot i, .console-sidebar-foot b {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--green);
-}
-
-.console-sidebar-foot b { background: var(--amber); }
+.bar-brand::after { content: "."; color: var(--red); }
 
 .console-canvas {
   display: flex;
@@ -1890,6 +1748,10 @@ code {
   display: flex;
   flex-direction: column;
   gap: var(--s-3);
+  max-height: 480px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: var(--s-2);
 }
 
 .source-list li {
@@ -2015,8 +1877,6 @@ code {
    Responsive
    ========================================================================== */
 @media (max-width: 1080px) {
-  .console { grid-template-columns: 224px minmax(0, 1fr); }
-  .console-sidebar { width: auto; }
   .dash-shell { grid-template-columns: minmax(0, 1fr) 320px; }
   .operations-grid { grid-template-columns: minmax(0, 1.4fr) minmax(280px, 1fr); }
 }
@@ -2036,35 +1896,8 @@ code {
   .step-panel:last-child { border-bottom: 0; }
   .step-index { font-size: 62px; }
 
-  .console { display: flex; flex-direction: column; }
-
-  .console-sidebar {
-    position: sticky;
-    top: 0;
-    flex-direction: row;
-    align-items: center;
-    gap: var(--s-2);
-    width: 100%;
-    height: auto;
-    padding-right: var(--s-3);
-    border-right: 0;
-    border-bottom: 1px solid var(--line);
-  }
-
-  .console-brand { flex: 0 0 auto; padding: var(--s-3) var(--s-4); border-bottom: 0; }
-  .console-brand a { font-size: 21px; }
-  .console-brand span, .console-brand small, .console-operator, .console-sidebar-foot { display: none; }
-
-  .console-sidebar nav {
-    flex-direction: row;
-    gap: 4px;
-    padding: var(--s-2) 0;
-    overflow-x: auto;
-  }
-
-  .console-sidebar nav a { flex: 0 0 auto; min-height: 40px; padding: 9px 14px; font-size: 15px; }
-
   .console .console-bar { position: static; flex-wrap: wrap; min-height: 0; padding: var(--s-3) var(--s-4); }
+  .bar-brand { display: none; }
   .console-identity { width: 100%; margin-left: 0; }
   .console-identity select { flex: 1; max-width: none; min-width: 0; }
 
@@ -2154,4 +1987,96 @@ code {
   }
 
   .scroll-progress { display: none; }
+}
+
+/* ==========================================================================
+   Showcase components (bits) integration
+   ========================================================================== */
+.console-dock {
+  position: fixed;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 60;
+}
+
+.console-main { padding-bottom: 128px; }
+
+@media (max-width: 880px) {
+  .console-dock {
+    bottom: 10px;
+    width: calc(100vw - 12px);
+    display: flex;
+    justify-content: center;
+  }
+
+  .console-dock .dock-panel {
+    max-width: 100%;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+  }
+}
+
+/* sign-in identity badge */
+.signin-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+  gap: var(--s-8);
+  align-items: center;
+  max-width: 1140px;
+  margin: 8vh auto;
+  padding: 0 var(--gutter);
+}
+
+.signin-layout .console-signin { margin: 0; max-width: none; }
+.signin-badge { display: flex; justify-content: center; }
+
+@media (max-width: 980px) {
+  .signin-layout { grid-template-columns: 1fr; margin: var(--s-6) auto; }
+  .signin-badge { display: none; }
+}
+
+/* landing screens gallery */
+.gallery-section { padding: var(--section) 0 0; }
+.gallery-section .section-title { margin-bottom: 0; }
+
+.gallery-wrap {
+  height: clamp(380px, 56vh, 580px);
+  margin-top: var(--s-5);
+}
+
+/* CTA card hosts the swap deck */
+.cta-card { position: relative; overflow: hidden; min-height: 420px; }
+.cta-copy { position: relative; z-index: 2; max-width: 520px; }
+
+@media (max-width: 960px) {
+  .cta-card { min-height: 0; }
+  .cta-card .card-swap-container { display: none; }
+}
+
+/* model dossier stack */
+.model-stack {
+  height: calc(100dvh - 240px);
+  min-height: 520px;
+  max-width: 860px;
+}
+
+.scroll-stack-card h3 {
+  margin: 0 0 var(--s-4);
+  font-size: 21px;
+  letter-spacing: -0.01em;
+}
+
+.scroll-stack-card h3 + .limitations + h3 { margin-top: var(--s-5); }
+
+/* response directory zone visual */
+.response-zone-visual {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--s-3);
+}
+
+@media (max-width: 1100px) {
+  .response-zone-visual .tilted-card-figure { display: none; }
 }

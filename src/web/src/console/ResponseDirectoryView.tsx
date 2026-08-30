@@ -11,6 +11,8 @@ import {
   type TestCallResult,
 } from "../api/client";
 import { useAuth } from "./AuthContext";
+import TiltedCard from "../components/bits/TiltedCard";
+import zoneMapShot from "../assets/screens/map.webp";
 
 interface ContactFormState {
   zoneId: string;
@@ -215,14 +217,28 @@ export default function ResponseDirectoryView() {
       <div className="row spread response-heading">
         <div>
           <h2 className="section-title">
-            RESPONSE <span className="accent">DIRECTORY</span>
+            Response <span className="accent">directory</span>
           </h2>
           <p className="muted">
             Tenant-administered, opted-in notification contacts. Destinations are masked
             after entry and resolved only by the server during a human-authorized dispatch.
           </p>
         </div>
-        <span className="chip chip-warn">DEMO CONTACTS ONLY</span>
+        <div className="response-zone-visual" aria-hidden="true">
+          <span className="chip chip-warn">DEMO CONTACTS ONLY</span>
+          <TiltedCard
+            imageSrc={zoneMapShot}
+            altText="Zone coverage on the H3 prediction grid"
+            captionText="Zone coverage · H3 grid"
+            containerHeight="200px"
+            containerWidth="320px"
+            imageHeight="200px"
+            imageWidth="320px"
+            rotateAmplitude={10}
+            scaleOnHover={1.06}
+            showMobileWarning={false}
+          />
+        </div>
       </div>
 
       <div className="response-grid">
