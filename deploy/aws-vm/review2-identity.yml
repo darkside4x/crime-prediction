@@ -6,6 +6,15 @@ Parameters:
     Type: String
     Default: review2
     AllowedPattern: "[a-z0-9-]+"
+  DomainPrefix:
+    Type: String
+    AllowedPattern: "[a-z0-9-]+"
+  CallbackUrl:
+    Type: String
+    AllowedPattern: "https://.*"
+  LogoutUrl:
+    Type: String
+    AllowedPattern: "https://.*"
 
 Resources:
   TokenClaimsRole:
@@ -152,6 +161,17 @@ Resources:
         - ALLOW_ADMIN_USER_PASSWORD_AUTH
         - ALLOW_REFRESH_TOKEN_AUTH
         - ALLOW_USER_SRP_AUTH
+      AllowedOAuthFlows:
+        - code
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthScopes:
+        - openid
+      CallbackURLs:
+        - !Ref CallbackUrl
+      LogoutURLs:
+        - !Ref LogoutUrl
+      SupportedIdentityProviders:
+        - COGNITO
       AccessTokenValidity: 60
       IdTokenValidity: 60
       RefreshTokenValidity: 1
@@ -159,6 +179,12 @@ Resources:
         AccessToken: minutes
         IdToken: minutes
         RefreshToken: days
+
+  UserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      Domain: !Ref DomainPrefix
+      UserPoolId: !Ref UserPool
 
 Outputs:
   UserPoolId:
@@ -171,3 +197,5 @@ Outputs:
     Value: !Sub "https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}/.well-known/jwks.json"
   OidcAudience:
     Value: !Ref UserPoolClient
+  CognitoDomain:
+    Value: !Sub "https://${DomainPrefix}.auth.${AWS::Region}.amazoncognito.com"

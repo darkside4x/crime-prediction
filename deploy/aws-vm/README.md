@@ -83,6 +83,11 @@ stored in `custom:tenant_memberships` and copies it into the signed
 `OIDC_AUDIENCE`, and `OIDC_JWKS_URL`. Demo users may be created only with
 synthetic tenant identifiers; do not store email addresses, camera credentials,
 or other personal information in membership claims.
+The same stack provisions a Cognito managed-login domain with authorization
+code plus PKCE. Pass the public review URL as both `CallbackUrl` and
+`LogoutUrl`, then inject the `CognitoDomain` and `UserPoolClientId` outputs as
+the web image build arguments. Teammates receive individual application
+accounts; they never receive `REKA_API_KEY` or AWS credentials.
 
 Provision `review2-operator.yml` before routine CLI work. It adds the existing
 operator user to a self-service MFA group and permits only MFA-authenticated,
@@ -101,6 +106,9 @@ docker compose --env-file deploy/aws-vm/.env.production \
 docker compose --env-file deploy/aws-vm/.env.production \
   -f deploy/aws-vm/compose.yml up -d --build
 ```
+
+The host bootstrap installs checksum-pinned Docker Compose and Buildx plugins.
+Both are required before the production multi-stage image build.
 
 Scale expensive stages independently:
 

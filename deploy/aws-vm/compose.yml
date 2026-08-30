@@ -116,6 +116,12 @@ services:
     build:
       context: ../..
       dockerfile: docker/web.Dockerfile
+      args:
+        VITE_API_BASE: ${VITE_API_BASE:-}
+        VITE_COGNITO_DOMAIN: ${COGNITO_DOMAIN:-}
+        VITE_COGNITO_CLIENT_ID: ${COGNITO_CLIENT_ID:-}
+        VITE_COGNITO_REDIRECT_URI: ${COGNITO_REDIRECT_URI:-}
+        VITE_COGNITO_LOGOUT_URI: ${COGNITO_LOGOUT_URI:-}
     ports:
       - "${WEB_BIND_ADDRESS:-127.0.0.1}:${WEB_PORT:-8080}:8080"
     read_only: true
