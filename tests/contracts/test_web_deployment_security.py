@@ -66,6 +66,9 @@ def test_aws_proxy_allows_same_origin_camera_and_bounds_uploads() -> None:
     assert 'Permissions-Policy "camera=(self), microphone=(), geolocation=()"' in nginx
     assert "client_max_body_size 9m;" in nginx
     assert "proxy_set_header Host localhost;" in nginx
+    assert "resolver 127.0.0.11 ipv6=off valid=10s;" in nginx
+    assert "server api:8000 resolve;" in nginx
+    assert "proxy_pass http://api_backend;" in nginx
     assert "MAX_REQUEST_BYTES: ${MAX_REQUEST_BYTES:-9437184}" in compose
     assert (
         "TRUSTED_HOSTS: localhost,127.0.0.1,${TRUSTED_HOSTS:?Set TRUSTED_HOSTS}"
