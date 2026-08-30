@@ -3,18 +3,7 @@ import maplibregl, { type Map as MLMap } from "maplibre-gl";
 import { cellToBoundary } from "h3-js";
 import type { SourceMapLocation } from "../api/client";
 
-const STYLE: maplibregl.StyleSpecification = {
-  version: 8,
-  sources: {
-    carto: {
-      type: "raster",
-      tiles: ["https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png"],
-      tileSize: 256,
-      attribution: "© OpenStreetMap contributors © CARTO",
-    },
-  },
-  layers: [{ id: "carto", type: "raster", source: "carto" }],
-};
+const STYLE = "https://tiles.openfreemap.org/styles/dark";
 
 export default function SourceLocationMap({ location }: { location: SourceMapLocation }) {
   const container = useRef<HTMLDivElement>(null);
