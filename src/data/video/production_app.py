@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 import os
 from pathlib import Path
+from typing import AsyncIterator
+
+from fastapi import FastAPI
 
 from src.api.app import create_app
 from src.api.forecasting import ForecastOrchestrator, PostgresForecastRepository
@@ -51,7 +55,16 @@ def build_production_app():
         memberships_claim=api_settings.oidc_memberships_claim,
         active_tenant_store=PostgresActiveTenantStore(runtime.database),
     )
+
+    @asynccontextmanager
+    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        try:
+            yield
+        finally:
+            runtime.close()
+
     app = create_app(
+        lifespan=lifespan,
         settings=api_settings,
         auth_provider=auth_provider,
         forecast_service=forecast_service,
@@ -69,7 +82,6 @@ def build_production_app():
         video_broker=runtime.broker,
     )
     app.state.platform_runtime = runtime
-    app.add_event_handler("shutdown", runtime.close)
     return app
 
 

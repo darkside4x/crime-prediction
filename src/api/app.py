@@ -244,6 +244,7 @@ def _new_source(
 def create_app(
     provider: reka.RekaProvider | None = None,
     *,
+    lifespan: Any | None = None,
     settings: Settings | None = None,
     auth_provider: AuthenticationProvider | None = None,
     forecast_service: ForecastService | None = None,
@@ -307,6 +308,7 @@ def create_app(
         title="Aggregate Incident Forecasting API",
         version="0.2.0",
         description="Tenant-isolated aggregate forecasts. No identity analysis or automated enforcement.",
+        lifespan=lifespan,
     )
     install_error_handlers(app)
     app.add_middleware(
