@@ -10,7 +10,10 @@ x-platform-environment: &platform-environment
   REKA_TIMEOUT_SECONDS: ${REKA_TIMEOUT_SECONDS:-20}
   REKA_PROVIDER_VERIFIED: ${REKA_PROVIDER_VERIFIED:-false}
   SYNTHETIC_DEMO_FORECASTS: ${SYNTHETIC_DEMO_FORECASTS:-false}
-  PUBLIC_HLS_DEMO_ENABLED: ${PUBLIC_HLS_DEMO_ENABLED:-false}
+  # This dedicated hackathon composition enables only the built-in LADOTD HLS
+  # source. The API request schema and capture adapter still reject every
+  # client-supplied URL and unknown source key.
+  PUBLIC_HLS_DEMO_ENABLED: ${PUBLIC_HLS_DEMO_ENABLED:-true}
   VIDEO_QUEUE_URL: ${VIDEO_QUEUE_URL:?Set VIDEO_QUEUE_URL}
   VIDEO_QUEUE_URL_UPLOAD: ${VIDEO_QUEUE_URL_UPLOAD:?Set VIDEO_QUEUE_URL_UPLOAD}
   VIDEO_QUEUE_URL_INDEX: ${VIDEO_QUEUE_URL_INDEX:?Set VIDEO_QUEUE_URL_INDEX}
