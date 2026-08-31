@@ -36,7 +36,7 @@ test("reviewer sees candidates labeled as unconfirmed", async ({ page }) => {
       body: JSON.stringify({
         items: [
           {
-            schema_version: "1.0.0",
+            schema_version: "1.1.0",
             tenant_id: "11111111-1111-4111-8111-111111111111",
             detection_id: "90000000-0000-4000-8000-000000000001",
             source_id: "91000000-0000-4000-8000-000000000001",
@@ -44,6 +44,8 @@ test("reviewer sees candidates labeled as unconfirmed", async ({ page }) => {
             occurred_at: "2026-08-30T12:00:04Z",
             received_at: "2026-08-30T12:00:10Z",
             proposed_category: "traffic_safety",
+            event_type: "vehicle_collision",
+            description: "Two vehicles visibly collide.",
             confidence: 0.81,
             detector_version: "reka-vision:candidate-v2",
             review_status: "awaiting_review",

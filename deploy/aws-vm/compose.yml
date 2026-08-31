@@ -6,8 +6,9 @@ x-platform-environment: &platform-environment
   REKA_CHAT_BASE_URL: https://api.reka.ai/v1
   REKA_VISION_BASE_URL: https://vision-agent.api.reka.ai
   REKA_MODEL: ${REKA_MODEL:-reka-flash-3}
-  REKA_PROMPT_VERSION: ${REKA_PROMPT_VERSION:-1.0.0}
-  REKA_TIMEOUT_SECONDS: ${REKA_TIMEOUT_SECONDS:-20}
+  REKA_VIDEO_MODEL: ${REKA_VIDEO_MODEL:-reka-edge-2603}
+  REKA_VIDEO_PROMPT_VERSION: ${REKA_VIDEO_PROMPT_VERSION:-1.2.0}
+  REKA_TIMEOUT_SECONDS: ${REKA_TIMEOUT_SECONDS:-120}
   REKA_PROVIDER_VERIFIED: ${REKA_PROVIDER_VERIFIED:-false}
   SYNTHETIC_DEMO_FORECASTS: ${SYNTHETIC_DEMO_FORECASTS:-false}
   # This dedicated hackathon composition enables only the built-in LADOTD HLS

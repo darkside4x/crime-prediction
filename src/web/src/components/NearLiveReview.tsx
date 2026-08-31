@@ -600,7 +600,36 @@ export default function NearLiveReview() {
       <div className="candidate-list">
         {stage >= 4 && candidates.length === 0 && <div className="candidate-empty">Analysis complete. Reka proposed no qualifying incident in this segment.</div>}
         {stage < 4 && <div className="candidate-empty">Candidates appear after analysis.</div>}
-        {candidates.map((candidate) => <motion.article className="candidate-row" key={candidate.detection_id} layout><div className="candidate-primary"><span className="candidate-flag">Unconfirmed · human decision required</span><h3>{candidate.proposed_category.replaceAll("_", " ")}</h3><p>{new Date(candidate.occurred_at).toUTCString()}</p></div><div className="candidate-confidence"><span>Model confidence</span><strong>{Math.round(candidate.confidence * 100)}%</strong><small>Not probability of crime</small></div><div className="candidate-actions"><button type="button" className="review-action evidence" onClick={() => playEvidence(candidate)}>{evidenceFor === candidate.detection_id ? "Replay evidence" : "View evidence"}</button>{candidate.review_status === "awaiting_review" ? <><button type="button" className="review-action reject" disabled={Boolean(busyCandidate)} onClick={() => decide(candidate, "rejected")}>Reject</button><button type="button" className="review-action confirm" disabled={Boolean(busyCandidate)} onClick={() => decide(candidate, "confirmed")}>Confirm &amp; predict</button></> : <span className={`decision ${candidate.review_status}`}>Final: {candidate.review_status}</span>}</div></motion.article>)}
+        {candidates.map((candidate) => (
+          <motion.article className="candidate-row" key={candidate.detection_id} layout>
+            <div className="candidate-primary">
+              <span className="candidate-flag">Unconfirmed · human decision required</span>
+              <h3>{candidate.event_type.replaceAll("_", " ")}</h3>
+              <p>{candidate.description}</p>
+              <small>
+                {candidate.proposed_category.replaceAll("_", " ")} · {new Date(candidate.occurred_at).toUTCString()}
+              </small>
+            </div>
+            <div className="candidate-confidence">
+              <span>Reka observation confidence</span>
+              <strong>{Math.round(candidate.confidence * 100)}%</strong>
+              <small>Not probability of crime</small>
+            </div>
+            <div className="candidate-actions">
+              <button type="button" className="review-action evidence" onClick={() => playEvidence(candidate)}>
+                {evidenceFor === candidate.detection_id ? "Replay evidence" : "View evidence"}
+              </button>
+              {candidate.review_status === "awaiting_review" ? (
+                <>
+                  <button type="button" className="review-action reject" disabled={Boolean(busyCandidate)} onClick={() => decide(candidate, "rejected")}>Reject</button>
+                  <button type="button" className="review-action confirm" disabled={Boolean(busyCandidate)} onClick={() => decide(candidate, "confirmed")}>Confirm &amp; predict</button>
+                </>
+              ) : (
+                <span className={`decision ${candidate.review_status}`}>Final: {candidate.review_status}</span>
+              )}
+            </div>
+          </motion.article>
+        ))}
       </div>
       {predictionWindow && <div className="prediction-unlocked"><div><span>Future window published</span><strong>{new Date(predictionWindow).toUTCString()}</strong></div><a href="#/console/map">Open updated crime-prediction map →</a></div>}
       <p className="review-limitation">Aggregate risk only · human confirmation required.</p>
